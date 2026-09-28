@@ -54,7 +54,7 @@ func TestHandleDiagnosePassesInterface(t *testing.T) {
 
 	ctrl := &stubCtrl{}
 	mux := http.NewServeMux()
-	if err := Register(mux, st, ctrl); err != nil {
+	if err := Register(mux, st, ctrl, Options{}); err != nil {
 		t.Fatalf("挂路由失败: %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestHandleReboot(t *testing.T) {
 
 	ctrl := &stubCtrl{}
 	mux := http.NewServeMux()
-	if err := Register(mux, st, ctrl); err != nil {
+	if err := Register(mux, st, ctrl, Options{}); err != nil {
 		t.Fatalf("挂路由失败: %v", err)
 	}
 

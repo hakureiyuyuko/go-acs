@@ -17,6 +17,17 @@ import urllib.parse
 import urllib.request
 
 BASE = sys.argv[1].rstrip("/")
+# 面板启用了账号密码保护时（verify-s1.sh 里用 ACS_WEB_USER/PASS 打开），
+# 除了 CWMP 报文以外的请求都要带上这份凭据。CWMP 那套（post()）用 CPE 自己的认证，不受影响。
+PANEL_AUTH = os.environ.get("ACS_VERIFY_AUTH", "")
+
+
+def panel_req(url, data=None, method=None):
+    req = urllib.request.Request(url, data=data, method=method)
+    if PANEL_AUTH:
+        tok = base64.b64encode(PANEL_AUTH.encode()).decode()
+        req.add_header("Authorization", "Basic " + tok)
+    return req
 CWMP = BASE + "/acs"
 
 _n = {"pass": 0, "fail": 0}
@@ -55,14 +66,14 @@ def post(body, user=None, pw=None, ctype='text/xml; charset="utf-8"'):
 
 
 def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=20) as r:
+    with urllib.request.urlopen(panel_req(BASE + path), timeout=20) as r:
         return r.status, r.read().decode("utf-8", "replace")
 
 
 def get_code(path):
     """只取状态码（404 之类的不会抛异常）。"""
     try:
-        with urllib.request.urlopen(BASE + path, timeout=20) as r:
+        with urllib.request.urlopen(panel_req(BASE + path), timeout=20) as r:
             return r.status
     except urllib.error.HTTPError as e:
         return e.code
@@ -81,7 +92,7 @@ _NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
 def post_json(path, obj):
     """POST 一段 JSON，返回 (状态码, 响应体)。"""
     data = json.dumps(obj).encode()
-    req = urllib.request.Request(BASE + path, data=data, method="POST")
+    req = panel_req(BASE + path, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
@@ -93,7 +104,7 @@ def post_json(path, obj):
 def post_form(path, fields):
     """提交一个表单，返回 (状态码, Location)。不跟随重定向。"""
     data = urllib.parse.urlencode(fields).encode()
-    req = urllib.request.Request(BASE + path, data=data, method="POST")
+    req = panel_req(BASE + path, data=data, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
     try:
         with _NO_REDIRECT.open(req, timeout=20) as r:
@@ -280,19 +291,8 @@ def main():
     if d98:
         did = d98[0]["ID"]
 
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            """不让 urllib 自动跟随重定向，否则看不到 303。"""
-
-            def redirect_request(self, *a, **kw):
-                return None
-
-        opener = urllib.request.build_opener(NoRedirect)
-        req = urllib.request.Request(f"{BASE}/devices/{did}/refresh", data=b"", method="POST")
-        try:
-            with opener.open(req, timeout=20) as r:
-                st = r.status
-        except urllib.error.HTTPError as e:
-            st = e.code
+        # 用统一的 post_form（它不跟随重定向，并且会带上面板凭据，见 panel_req）
+        st, _ = post_form(f"/devices/{did}/refresh", {})
         check("POST /devices/{id}/refresh 返回 303 重定向", st == 303, st)
         full = api_device(did)
         check("刷新后有待办任务", full["pending_tasks"] >= 1, full["pending_tasks"])
@@ -1136,6 +1136,160 @@ def main():
         st, h = get(f"/devices/{did}")
         check("任务历史标题里写明了保留条数", f"最近 {limit} 条" in h, st)
         check("上报记录标题里也写明了保留条数", h.count(f"最近 {limit} 条") >= 2, h.count(f"最近 {limit} 条"))
+    print("== 35. 面板设置页（双端口 + 账号密码保护）==")
+    import sqlite3
+    user = PANEL_AUTH.split(":", 1)[0] if PANEL_AUTH else ""
+
+    def raw_get(path, auth=None):
+        """不带（或只带指定）凭据的面板请求，用来验证鉴权本身。"""
+        req = urllib.request.Request(BASE + path)
+        if auth:
+            tok = base64.b64encode(auth.encode()).decode()
+            req.add_header("Authorization", "Basic " + tok)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    if not PANEL_AUTH:
+        skip("面板鉴权用例", "本次验收没开面板账号密码保护（ACS_WEB_USER/PASS 未设置）")
+    else:
+        check("不带凭据访问面板 → 401", raw_get("/") == 401, raw_get("/"))
+        check("凭据错了 → 401", raw_get("/", "acsweb:wrong-pass") == 401, raw_get("/", "acsweb:wrong-pass"))
+        check("凭据对了 → 200", raw_get("/", PANEL_AUTH) == 200, raw_get("/", PANEL_AUTH))
+        check("接口（/api）也受保护", raw_get("/api/devices") == 401, raw_get("/api/devices"))
+        check("静态资源也受保护", raw_get("/static/style.css") == 401, raw_get("/static/style.css"))
+        # 面板鉴权不能挡住设备上报：CWMP 仍然是「能通就通」（CPE 认证是另一套）
+        st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "auth1", "<cwmp:GetRPCMethods/>"))
+        check("CWMP 端点不受面板鉴权影响", st == 200, st)
+
+        st, h = get("/settings")
+        check("设置页能打开", st == 200 and "设置" in h, st)
+        check("设置页显示当前生效的监听与账号",
+              "当前生效" in h and "已启用" in h and user in h, st)
+        check("设置页有 ACS 监听 / 面板监听 / 账号 / 新密码各一栏",
+              'name="acs_listen"' in h and 'name="web_listen"' in h
+              and 'name="web_user"' in h and 'name="web_pass"' in h, st)
+        check("设置页写明「重启后生效」", "重启 ACS" in h, st)
+
+        # 保存监听地址（面板留空 = 与 ACS 同端口）
+        st, loc = post_form("/settings", {
+            "acs_listen": ":19090", "web_listen": "",
+            "auth": "1", "web_user": user, "web_pass": "", "web_pass2": "",
+        })
+        check("保存设置返回 303", st == 303, st)
+        check("提示里说了改成了什么", ":19090" in urllib.parse.unquote(loc or ""),
+              urllib.parse.unquote(loc or ""))
+        con = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
+        saved = dict(con.execute("select k, v from settings"))
+        con.close()
+        check("监听地址已写进 settings 表", saved.get("listen") == ":19090", saved.get("listen"))
+        check("面板监听写成了空（= 与 ACS 同端口）", saved.get("web_listen", None) == "", saved.get("web_listen"))
+        st, h = get("/settings")
+        check("设置页提示监听地址改动要重启才生效", "才生效" in h, st)
+
+        # 非法输入要被拦下
+        st, loc = post_form("/settings", {"acs_listen": "abc", "web_listen": "",
+                                          "auth": "1", "web_user": user})
+        check("非法监听地址被拒", st == 303 and "err=1" in (loc or ""),
+              urllib.parse.unquote(loc or ""))
+        st, loc = post_form("/settings", {"acs_listen": ":7547", "web_listen": "",
+                                          "auth": "1", "web_user": user,
+                                          "web_pass": "newpass1", "web_pass2": "newpass2"})
+        check("两次密码不一致被拒", st == 303 and "err=1" in (loc or ""),
+              urllib.parse.unquote(loc or ""))
+
+        # 改密码：旧密码立刻失效（这条最关键 —— 设置页真的能改账号密码）
+        st, loc = post_form("/settings", {"acs_listen": ":7547", "web_listen": "",
+                                          "auth": "1", "web_user": user,
+                                          "web_pass": "verify-new-pass", "web_pass2": "verify-new-pass"})
+        check("改密码返回 303", st == 303 and "err=1" not in (loc or ""),
+              urllib.parse.unquote(loc or ""))
+        check("提示里说明了账号密码立即生效", "立即生效" in urllib.parse.unquote(loc or ""),
+              urllib.parse.unquote(loc or ""))
+        check("旧密码立刻失效 → 401", raw_get("/", PANEL_AUTH) == 401, raw_get("/", PANEL_AUTH))
+        check("新密码能进 → 200", raw_get("/", f"{user}:verify-new-pass") == 200,
+              raw_get("/", f"{user}:verify-new-pass"))
+        # 后面还要用面板（改密码之后凭据变了）
+        globals()["PANEL_AUTH"] = f"{user}:verify-new-pass"
+        # 库里的密码是散列，不是明文
+        con = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
+        stored = dict(con.execute("select k, v from settings"))
+        con.close()
+        check("密码只存散列（PBKDF2）",
+              str(stored.get("web_pass", "")).startswith("pbkdf2-sha256$")
+              and "verify-new-pass" not in str(stored.get("web_pass")), stored.get("web_pass", "")[:32])
+
+        # 关掉保护：清空账号即可
+        st, loc = post_form("/settings", {"acs_listen": ":7547", "web_listen": "",
+                                          "auth": "0", "web_user": user})
+        check("可以关掉面板保护", st == 303 and "err=1" not in (loc or ""),
+              urllib.parse.unquote(loc or ""))
+
+    print("== 36. 双端口：ACS 与面板分开监听 ==")
+    acs_bin = os.path.join(workdir, "acs")
+    if not os.path.exists(acs_bin):
+        skip("双端口用例", "没找到 $WORK/acs")
+    else:
+        env = dict(os.environ)
+        env.update({
+            "ACS_LISTEN": ":17561",
+            "ACS_WEB_LISTEN": ":17562",
+            "ACS_DB": os.path.join(workdir, "dual.db"),
+            "ACS_LOG_LEVEL": "info",
+        })
+        env.pop("ACS_WEB_USER", None)   # 这一节不测鉴权，面板保持免登录
+        env.pop("ACS_WEB_PASS", None)
+        proc = subprocess.Popen([acs_bin], env=env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            ready = False
+            for _ in range(50):
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:17562/", timeout=2) as r:
+                        if r.status == 200:
+                            ready = True
+                            break
+                except Exception:  # noqa: BLE001
+                    time.sleep(0.2)
+            check("双端口实例起来了（面板端口可访问）", ready, "")
+            if ready:
+                check("面板端口能打开面板",
+                      urllib.request.urlopen("http://127.0.0.1:17562/", timeout=5).status == 200, "")
+                # CWMP 端口收报文
+                req = urllib.request.Request(
+                    "http://127.0.0.1:17561/acs",
+                    data=envelope("urn:dslforum-org:cwmp-1-0", "dual2", "<cwmp:GetRPCMethods/>").encode(),
+                    method="POST")
+                req.add_header("Content-Type", 'text/xml; charset="utf-8"')
+                try:
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        cwmp_st = r.status
+                except urllib.error.HTTPError as ex:
+                    cwmp_st = ex.code
+                check("CWMP 端口能收设备报文", cwmp_st == 200, cwmp_st)
+                # 两边互不串门
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:17561/", timeout=5) as r:
+                        home_st = r.status
+                except urllib.error.HTTPError as ex:
+                    home_st = ex.code
+                check("CWMP 端口上不服务面板（拿不到首页）", home_st != 200, home_st)
+                try:
+                    req2 = urllib.request.Request("http://127.0.0.1:17562/acs", data=b"<x/>", method="POST")
+                    with urllib.request.urlopen(req2, timeout=5) as r:
+                        acs_st = r.status
+                except urllib.error.HTTPError as ex:
+                    acs_st = ex.code
+                check("面板端口上不服务 CWMP 端点", acs_st != 200, acs_st)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                proc.kill()
+
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")

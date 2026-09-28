@@ -88,44 +88,126 @@ func run(args []string) error {
 		MaxParamsPerRequest: cfg.MaxParamsPerRequest,
 	}, log)
 
+	// 面板上改过的设置（settings 表）优先于启动参数 —— 管理员在界面上改完重启就该按它跑。
+	acsAddr := settingOr(st, "listen", cfg.Listen)
+	webAddr := settingOr(st, "web_listen", cfg.WebListen)
+	authUser, authHash := "", ""
+	// 首次启动时用启动参数里的账号密码种一次（之后以面板设置为准，环境变量不再覆盖）
+	if _, ok, _ := st.GetSetting("web_seeded"); !ok {
+		if cfg.WebUser != "" {
+			authUser = cfg.WebUser
+			if cfg.WebPass != "" {
+				if h, err := web.HashPassword(cfg.WebPass); err == nil {
+					authHash = h
+				}
+			}
+			_ = st.SetSetting("web_user", authUser)
+			_ = st.SetSetting("web_pass", authHash)
+		}
+		_ = st.SetSetting("web_seeded", "1")
+	}
+	if u, ok, _ := st.GetSetting("web_user"); ok {
+		authUser = strings.TrimSpace(u)
+	}
+	if h, ok, _ := st.GetSetting("web_pass"); ok {
+		authHash = strings.TrimSpace(h)
+	}
+	if cfg.WebAuthOff {
+		// 救急：忘了面板密码又不想动库时，用环境变量强制关掉鉴权
+		authUser, authHash = "", ""
+	}
+	creds := web.NewCreds(authUser, authHash)
+	webOpts := web.Options{
+		Auth: creds,
+		Runtime: web.RuntimeSettings{
+			ACSListen: acsAddr,
+			WebListen: webAddr,
+			Path:      cfg.Path,
+		},
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	srv.StartJanitor(ctx)
 
-	mux := http.NewServeMux()
-	// 用 "/acs" 精确匹配（末尾不带 / 时只匹配该路径本身），这样别的路径不会被吞掉
-	mux.Handle(cfg.Path, srv)
-	// 真机/运维常见做法是把 ACS URL 配成 http://host:port/（根路径，不带 /acs）。
-	// 这里额外接受根路径上的 POST，免得因为少写一段路径就收不到上报。
-	if cfg.Path != "/" {
-		mux.Handle("POST /{$}", srv)
-	}
-	if err := web.Register(mux, st, srv); err != nil {
-		return err
+	// CWMP 那套路由（设备侧）：用 "/acs" 精确匹配（末尾不带 / 时只匹配该路径本身），
+	// 这样别的路径不会被吞掉。
+	// 真机/运维常见做法是把 ACS URL 配成 http://host:port/（根路径，不带 /acs），
+	// 所以额外接受根路径上的 POST，免得因为少写一段路径就收不到上报。
+	cwmpMux := func() *http.ServeMux {
+		m := http.NewServeMux()
+		m.Handle(cfg.Path, srv)
+		if cfg.Path != "/" {
+			m.Handle("POST /{$}", srv)
+		}
+		return m
 	}
 
-	httpSrv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           requestLogger(log, mux),
-		ReadHeaderTimeout: 15 * time.Second,
+	var acsSrv, panelSrv *http.Server
+	if webAddr == "" || webAddr == acsAddr {
+		// 默认：一个端口既接设备上报、又开面板（一套路由两用）
+		mux := cwmpMux()
+		if err := web.Register(mux, st, srv, webOpts); err != nil {
+			return err
+		}
+		acsSrv = &http.Server{
+			Addr:              acsAddr,
+			Handler:           requestLogger(log, mux),
+			ReadHeaderTimeout: 15 * time.Second,
+		}
+	} else {
+		panelMux := http.NewServeMux()
+		if err := web.Register(panelMux, st, srv, webOpts); err != nil {
+			return err
+		}
+		acsSrv = &http.Server{
+			Addr:              acsAddr,
+			Handler:           requestLogger(log, cwmpMux()),
+			ReadHeaderTimeout: 15 * time.Second,
+		}
+		panelSrv = &http.Server{
+			Addr:              webAddr,
+			Handler:           requestLogger(log, panelMux),
+			ReadHeaderTimeout: 15 * time.Second,
+		}
 	}
 
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
+		_ = acsSrv.Shutdown(shutdownCtx)
+		if panelSrv != nil {
+			_ = panelSrv.Shutdown(shutdownCtx)
+		}
 	}()
 
+	uiURL := "http://" + uiAddr(acsAddr) + "/"
+	if panelSrv != nil {
+		uiURL = "http://" + uiAddr(webAddr) + "/"
+	}
 	log.Info("ACS 已启动",
-		"listen", cfg.Listen,
+		"listen", acsAddr,
 		"cwmp_endpoint", cfg.Path,
-		"cwmp_url_alt", "http://"+uiAddr(cfg.Listen)+"/",
-		"ui", "http://"+uiAddr(cfg.Listen)+"/",
+		"cwmp_url_alt", "http://"+uiAddr(acsAddr)+"/",
+		"ui", uiURL,
+		"panel_listen", webAddr,
 		"db", cfg.DBPath,
-		"auth", cfg.User != "")
+		"cpe_auth", cfg.User != "",
+		"panel_auth", creds.Enabled())
 
-	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if panelSrv != nil {
+		log.Info("面板单独监听一个端口", "panel_listen", webAddr)
+		go func() {
+			if err := panelSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				// 面板端口起不来要让人看见（多半是端口被占或被面板设置写错了）
+				log.Error("面板监听失败", "addr", webAddr, "err", err)
+				stop()
+			}
+		}()
+	}
+
+	if err := acsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	log.Info("ACS 已退出")
@@ -216,4 +298,14 @@ func randomHex16() string {
 		return fmt.Sprintf("%x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// settingOr 读 settings 表里的值；没有或为空就用启动参数给的值。
+func settingOr(st *store.Store, key, fallback string) string {
+	if v, ok, err := st.GetSetting(key); err == nil && ok {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return fallback
 }

@@ -49,6 +49,7 @@ type Server struct {
 	store *store.Store
 	ctrl  Controller
 	tpl   *template.Template
+	opt   Options
 }
 
 // kv 是详情页里的一行「字段 - 值」。
@@ -58,7 +59,17 @@ type kv struct {
 }
 
 // Register 把界面路由挂到 mux 上。
-func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
+// Options 是 Register 的可选项。
+type Options struct {
+	// Auth 是面板凭据（nil = 不启用）。它是可在线更新的对象：
+	// 改账号密码立即生效，只有监听端口才需要重启。
+	Auth *Creds
+	// Runtime 是**当前进程实际在用**的监听/账号值：设置页拿它跟“保存后使用”的值对照。
+	Runtime RuntimeSettings
+}
+
+// Register 把面板路由挂到 mux 上。
+func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options) error {
 	tpl, err := template.New("").Funcs(template.FuncMap{
 		"fmtTime":        formatTime,
 		"fmtTimeShort":   formatTimeShort,
@@ -69,31 +80,47 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 		return fmt.Errorf("解析模板失败: %w", err)
 	}
 
-	s := &Server{store: st, ctrl: ctrl, tpl: tpl}
+	s := &Server{store: st, ctrl: ctrl, tpl: tpl, opt: opt}
+
+	// 面板这一套路由统一走鉴权（CWMP 那套在 main 里单独挂，不受影响）。
+	// Guard 每次请求都会读一遍当前凭据，所以设置页改完密码后立刻按新的校验。
+	guard := func(h http.HandlerFunc) http.HandlerFunc {
+		if opt.Auth == nil {
+			return h
+		}
+		g := opt.Auth.Guard(h)
+		return func(w http.ResponseWriter, r *http.Request) { g.ServeHTTP(w, r) }
+	}
 
 	sub, err := fs.Sub(assets, "static")
 	if err != nil {
 		return err
 	}
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(sub)))
+	fsHandler := http.StripPrefix("/static/", http.FileServerFS(sub))
+	if opt.Auth != nil {
+		fsHandler = opt.Auth.Guard(fsHandler)
+	}
+	mux.Handle("GET /static/", fsHandler)
 
-	mux.HandleFunc("GET /{$}", s.handleIndex)
-	mux.HandleFunc("GET /devices/{id}", s.handleDevice)
-	mux.HandleFunc("POST /devices/{id}/refresh", s.handleRefresh)
-	mux.HandleFunc("POST /devices/{id}/note", s.handleDeviceNote)
-	mux.HandleFunc("POST /devices/{id}/diagnose", s.handleDiagnose)
-	mux.HandleFunc("POST /devices/{id}/wake", s.handleWake)
-	mux.HandleFunc("POST /devices/{id}/reboot", s.handleReboot)
-	mux.HandleFunc("POST /devices/{id}/delete", s.handleDeviceDelete)
-	mux.HandleFunc("POST /devices/{id}/fetch", s.handleFetch)
-	mux.HandleFunc("POST /devices/{id}/wifi", s.handleWifi)
-	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", s.handleWifiEdit)
-	mux.HandleFunc("POST /devices/{id}/wifi/{inst}", s.handleWifiSave)
-	mux.HandleFunc("GET /api/devices", s.apiDevices)
-	mux.HandleFunc("GET /api/devices/{id}", s.apiDevice)
-	mux.HandleFunc("POST /api/devices/{id}/fetch", s.apiFetch)
-	mux.HandleFunc("POST /api/devices/{id}/names", s.apiFetchNames)
-	mux.HandleFunc("POST /api/devices/{id}/wifi", s.apiWifi)
+	mux.HandleFunc("GET /{$}", guard(s.handleIndex))
+	mux.HandleFunc("GET /settings", guard(s.handleSettings))
+	mux.HandleFunc("POST /settings", guard(s.handleSettingsSave))
+	mux.HandleFunc("GET /devices/{id}", guard(s.handleDevice))
+	mux.HandleFunc("POST /devices/{id}/refresh", guard(s.handleRefresh))
+	mux.HandleFunc("POST /devices/{id}/note", guard(s.handleDeviceNote))
+	mux.HandleFunc("POST /devices/{id}/diagnose", guard(s.handleDiagnose))
+	mux.HandleFunc("POST /devices/{id}/wake", guard(s.handleWake))
+	mux.HandleFunc("POST /devices/{id}/reboot", guard(s.handleReboot))
+	mux.HandleFunc("POST /devices/{id}/delete", guard(s.handleDeviceDelete))
+	mux.HandleFunc("POST /devices/{id}/fetch", guard(s.handleFetch))
+	mux.HandleFunc("POST /devices/{id}/wifi", guard(s.handleWifi))
+	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", guard(s.handleWifiEdit))
+	mux.HandleFunc("POST /devices/{id}/wifi/{inst}", guard(s.handleWifiSave))
+	mux.HandleFunc("GET /api/devices", guard(s.apiDevices))
+	mux.HandleFunc("GET /api/devices/{id}", guard(s.apiDevice))
+	mux.HandleFunc("POST /api/devices/{id}/fetch", guard(s.apiFetch))
+	mux.HandleFunc("POST /api/devices/{id}/names", guard(s.apiFetchNames))
+	mux.HandleFunc("POST /api/devices/{id}/wifi", guard(s.apiWifi))
 	return nil
 }
 

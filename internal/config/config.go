@@ -15,10 +15,22 @@ import (
 
 // Config 是全部运行参数。
 type Config struct {
-	Listen string // HTTP 监听地址
-	Path   string // CWMP 端点路径
-	ACSURL string // 写回 CPE 的 ACS URL（仅用于展示/下发配置，本服务不依赖它）
-	DBPath string
+	Listen string // CWMP（ACS）监听地址
+	// WebListen 是面板监听地址：
+	//   ""             = 与 Listen 同一个端口（一套路由两用，默认，保持轻量）
+	//   与 Listen 相同  = 同上
+	//   其它            = 另起一个监听只服务面板
+	// 面板上也能改（存在 settings 表里，重启生效），那会优先于这里。
+	WebListen string
+	// WebUser / WebPass: 面板账号密码保护的**初始**凭据。
+	// 只在库里还没有设置过时生效一次（种进 settings 表），之后以面板上改的为准。
+	WebUser string
+	WebPass string
+	// WebAuthOff: 强制关闭面板鉴权（救急用：忘了面板密码又不想动库）。
+	WebAuthOff bool
+	Path       string // CWMP 端点路径
+	ACSURL     string // 写回 CPE 的 ACS URL（仅用于展示/下发配置，本服务不依赖它）
+	DBPath     string
 
 	User     string // CPE 认证账号，为空则不校验
 	Password string
@@ -62,6 +74,7 @@ type Config struct {
 func Load(args []string) (*Config, error) {
 	c := &Config{
 		Listen:              ":7547",
+		WebListen:           "",
 		Path:                "/acs",
 		DBPath:              "acs.db",
 		Realm:               "acs",
@@ -85,7 +98,11 @@ func Load(args []string) (*Config, error) {
 	fromEnv(c)
 
 	fs := flag.NewFlagSet("acs", flag.ContinueOnError)
-	fs.StringVar(&c.Listen, "listen", c.Listen, "HTTP 监听地址")
+	fs.StringVar(&c.Listen, "listen", c.Listen, "CWMP（ACS）监听地址")
+	fs.StringVar(&c.WebListen, "web-listen", c.WebListen,
+		"面板监听地址（留空 = 与 ACS 同一个端口）")
+	fs.StringVar(&c.WebUser, "web-user", c.WebUser, "面板账号（启用面板鉴权时用；只在首次启动种一次）")
+	fs.StringVar(&c.WebPass, "web-pass", c.WebPass, "面板密码（同上）")
 	fs.StringVar(&c.Path, "path", c.Path, "CWMP 端点路径")
 	fs.StringVar(&c.DBPath, "db", c.DBPath, "SQLite 数据库文件")
 	fs.StringVar(&c.ACSURL, "acs-url", c.ACSURL, "ACS 自身 URL（写回 CPE 用）")
@@ -186,6 +203,18 @@ func fromEnv(c *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.MaxParamsPerRequest = n
 		}
+	}
+	if v := os.Getenv("ACS_WEB_LISTEN"); v != "" {
+		c.WebListen = v
+	}
+	if v := os.Getenv("ACS_WEB_USER"); v != "" {
+		c.WebUser = v
+	}
+	if v := os.Getenv("ACS_WEB_PASS"); v != "" {
+		c.WebPass = v
+	}
+	if v := os.Getenv("ACS_WEB_AUTH"); strings.EqualFold(v, "off") || v == "0" || strings.EqualFold(v, "false") {
+		c.WebAuthOff = true
 	}
 	if v := os.Getenv("ACS_TASK_HISTORY_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

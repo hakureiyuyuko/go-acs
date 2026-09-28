@@ -301,7 +301,7 @@ func TestDevicePageRendersCompletely(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	if err := Register(mux, st, &stubCtrl{}); err != nil {
+	if err := Register(mux, st, &stubCtrl{}, Options{}); err != nil {
 		t.Fatalf("挂路由失败: %v", err)
 	}
 	rec := httptest.NewRecorder()

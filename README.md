@@ -71,6 +71,9 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 | `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名（真机单次上限可能只有 256，见下文）|
 | `-task-history-limit` | `ACS_TASK_HISTORY_LIMIT` | `500` | **每台设备**保留多少条任务记录（`0` = 不限）。tasks 表只增不减，跑久了会把库撑大；只裁已结束的任务，排队/执行中的一条都不删 |
 | `-inform-history-limit` | `ACS_INFORM_HISTORY_LIMIT` | `500` | **每台设备**保留多少条上报记录（`0` = 不限）。上报记录增长最快（每 120 秒一条 Inform，一台设备一天 720 条）|
+| `-web-listen` | `ACS_WEB_LISTEN` | 空 | **面板**监听地址。留空（或与 ACS 相同）= 面板与 CWMP 共用一个端口；分开写就是两个端口 |
+| `-web-user` / `-web-pass` | `ACS_WEB_USER` / `ACS_WEB_PASS` | 空 | 面板账号密码的**初始**值：只在库里还没设置过时种一次，之后以设置页上改的为准 |
+|  | `ACS_WEB_AUTH` | 空 | 设成 `off` / `0` / `false` 时**强制关闭面板鉴权**（救急用：忘了面板密码又不想动库）|
 
 ## 界面
 
@@ -174,6 +177,16 @@ docs/               需求文档与笔记
 - **日间 / 夜间模式**：右上角一键切换，选择记在 localStorage；
   没选过时跟随系统的 `prefers-color-scheme`；主题在样式生效前就定好，刷新不闪
 - **JSON API**：`/api/devices`、`/api/devices/{id}`
+- **设置页**（右上角「设置」）：在线改 **ACS 监听地址**、**面板监听地址**（留空 = 与 ACS 同端口，
+  也可以分开两个端口），以及**面板账号密码**。「当前生效」与「保存后使用」两栏并排，
+  免得改完不知道为什么不生效：
+  - 账号密码**保存后立即生效**（不用重启）；
+  - 监听地址要**重启 ACS** 才生效 —— 端口没法在线安全切换（换了端口这条连接就断了，
+    而且 CWMP 端口一断，在线设备立刻报连不上 ACS）。
+- **面板账号密码保护**：HTTP Basic（浏览器弹登录框、脚本用 `curl -u 账号:密码`），
+  密码只存 **PBKDF2-HMAC-SHA256 散列**（随机盐 + 12 万次迭代）。默认**关闭**（开箱即用），
+  在设置页里打开。开了之后面板页面、`/api`、静态资源都要登录，**设备侧上报不受影响**（CPE 认证是另一套）。
+  忘了密码：用 `ACS_WEB_AUTH=off` 启动一次，或清掉库里 `settings` 表的 `web_*` 再重启。
 - **看板 WiFi 概览**：首页按设备分频段展示 2.4G/5G 的 SSID、射频开关、信道、标准、加密与**已连终端数**；
   设备列表里的「无线终端」列是**主机 + 子光猫**上的终端之和（跟详情页同一口径）。
   首次纳管 / `0 BOOTSTRAP` 时**自动采集**（先枚举子树圈出真实实例号，

@@ -251,3 +251,8 @@ button.linkbtn:hover { filter: none; text-decoration: underline solid; }
   border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line);
   padding: 1px 0; min-width: 38px; text-align: center;
 }
+
+/* 设置页的小标题（跟 h2 同风格但更轻一点） */
+main h3 { font-size: 13px; margin: 20px 0 10px; color: var(--dim); font-weight: 600; }
+a.ghost { text-decoration: none; display: inline-flex; align-items: center; }
+a.ghost:hover { text-decoration: none; }

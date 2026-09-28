@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置 · 轻量 TR-069 ACS</title>
+<link rel="stylesheet" href="/static/style.css">
+<script>
+  // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
+  (function () {
+    try {
+      var t = localStorage.getItem("theme");
+      if (t !== "light" && t !== "dark") {
+        t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches)
+          ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
+</head>
+<body>
+<header class="top">
+  <h1><a href="/">轻量 TR-069 ACS</a></h1>
+  <div class="spacer"></div>
+  <a class="ghost" href="/">设备列表</a>
+  <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
+</header>
+
+<main>
+  <h2>设置</h2>
+  {{if .Notice}}
+  <div class="notice {{if not .NoticeErr}}ok{{end}}">{{.Notice}}</div>
+  {{end}}
+
+  <h3>当前生效</h3>
+  <div class="kvs">
+    <div class="row"><div class="k">ACS 监听（CWMP）</div><div class="v mono">{{.Runtime.ACSListen}}</div></div>
+    <div class="row">
+      <div class="k">面板监听</div>
+      <div class="v mono">{{if .Runtime.WebListen}}{{.Runtime.WebListen}}{{else}}与 ACS 同一个端口{{end}}</div>
+    </div>
+    <div class="row">
+      <div class="k">面板账号密码保护</div>
+      <div class="v">
+        {{if .WebAuth}}<span class="badge on">已启用</span> <span class="mono">{{.WebUser}}</span>
+        {{else}}<span class="badge off">未启用</span>{{end}}
+      </div>
+    </div>
+  </div>
+  {{if .PendingPorts}}
+  <div class="notice" style="margin-top:10px">监听地址已保存，<b>重启 ACS 后</b>才生效（账号密码是立即生效的）。</div>
+  {{end}}
+
+  <form method="post" action="/settings" class="wform" style="margin-top:20px">
+    <h3>监听地址</h3>
+    <div class="wrow">
+      <div class="wlabel">ACS 监听（CWMP）</div>
+      <div class="winput">
+        <input type="text" name="acs_listen" value="{{.StoredListen}}" placeholder=":9090">
+        <div class="hint">设备上配置的 ACS 地址就用这个端口，例如 <span class="mono">http://本机IP{{.StoredListen}}{{.Runtime.Path}}</span></div>
+      </div>
+    </div>
+    <div class="wrow">
+      <div class="wlabel">面板监听</div>
+      <div class="winput">
+        <input type="text" name="web_listen" value="{{.StoredWebListen}}" placeholder="留空 = 与 ACS 同一个端口">
+        <div class="hint">留空时面板与 CWMP 共用一个端口；分开写就是两个端口。</div>
+      </div>
+    </div>
+
+    <h3>面板账号密码保护</h3>
+    <div class="wrow">
+      <div class="wlabel">启用</div>
+      <div class="winput">
+        <label class="chk">
+          <input type="checkbox" name="auth" value="1" {{if .WebAuth}}checked{{end}}>
+          <span>要求登录后才能打开面板</span>
+        </label>
+        <div class="hint">用 HTTP Basic 鉴权：浏览器会弹登录框，脚本可以用 <span class="mono">curl -u 账号:密码</span>。
+          建议只在内网使用，或放在 HTTPS 反向代理后面（Basic 凭据在明文 HTTP 上等于明文）。</div>
+      </div>
+    </div>
+    <div class="wrow">
+      <div class="wlabel">账号</div>
+      <div class="winput">
+        <input type="text" name="web_user" value="{{.WebUser}}" placeholder="例如 admin">
+        <div class="hint">2–32 位，只能用字母、数字与 . _ - @</div>
+      </div>
+    </div>
+    <div class="wrow">
+      <div class="wlabel">新密码</div>
+      <div class="winput">
+        <input type="password" name="web_pass" value="" placeholder="{{if .HasPassword}}留空表示不修改{{else}}至少 6 位{{end}}">
+      </div>
+    </div>
+    <div class="wrow">
+      <div class="wlabel">确认密码</div>
+      <div class="winput">
+        <input type="password" name="web_pass2" value="" placeholder="再输一遍">
+      </div>
+    </div>
+
+    <div class="wrow">
+      <div class="wlabel"></div>
+      <div class="winput"><button type="submit">保存</button></div>
+    </div>
+  </form>
+
+  <div class="hint" style="margin-top:14px">
+    账号密码保存后<b>立即生效</b>；监听地址需要<b>重启 ACS</b> 才生效
+    （端口没法在线安全切换 —— 换了端口这条连接就断了，而且 CWMP 端口一断，
+    在线设备会立刻报连不上 ACS）。
+    忘记了面板密码：清掉数据库 <span class="mono">settings</span> 表里的
+    <span class="mono">web_pass</span> / <span class="mono">web_user</span> 再重启，就回到不启用状态。
+  </div>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

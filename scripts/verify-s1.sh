@@ -38,16 +38,20 @@ echo "== 起 ACS（端口 $PORT，库 $DB）=="
 # ACS_TASK_HISTORY_LIMIT 调小一点（默认 500）：让「任务历史裁剪」在验收里真的被触发
 ACS_CONNREQ_USER=acs ACS_CONNREQ_PASS=verify-connreq-pass \
   ACS_TASK_HISTORY_LIMIT=20 ACS_INFORM_HISTORY_LIMIT=20 \
+  ACS_WEB_USER=acsweb ACS_WEB_PASS=verify-panel-pass \
   ACS_LISTEN=":$PORT" ACS_DB="$DB" ACS_LOG_LEVEL=info \
   "$WORK/acs" >"$LOG" 2>&1 &
 ACSPID=$!
 
-# 等服务起来（最多 10 秒）
+# 等服务起来（最多 10 秒）。注意用 CWMP 端点探活：面板那侧启用了账号密码保护，
+# 不带凭据访问 / 会得到 401（curl -f 会当成失败）。
 for i in $(seq 1 50); do
-  if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then break; fi
+  if curl -fsS -o /dev/null -X POST -H 'Content-Type: text/xml' --data '<x/>' \
+       "http://127.0.0.1:$PORT/acs" 2>/dev/null; then break; fi
   sleep 0.2
 done
-if ! curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then
+if ! curl -fsS -o /dev/null -X POST -H 'Content-Type: text/xml' --data '<x/>' \
+     "http://127.0.0.1:$PORT/acs" 2>/dev/null; then
   echo "ACS 没能起来，日志："
   cat "$LOG"
   exit 1
@@ -55,7 +59,8 @@ fi
 echo "  已就绪"
 
 echo
-python3 "$ROOT/scripts/verify_s1.py" "http://127.0.0.1:$PORT" "$WORK"
+ACS_VERIFY_AUTH="acsweb:verify-panel-pass" \
+  python3 "$ROOT/scripts/verify_s1.py" "http://127.0.0.1:$PORT" "$WORK"
 RC=$?
 
 echo
