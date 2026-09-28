@@ -244,21 +244,27 @@ func (n FttrNode) ModeText() string {
 	return strings.TrimSpace(n.Mode)
 }
 
-// ModeHint 是「组网」列的悬停提示：把设备自报的相关原始字段列出来，
-// 免得我们归一化后的字样被当成设备事实。
+// ModeHint 是「组网」列的悬停提示：把设备自报的信息用能读的话说一遍
+// （原始字段名对使用者没有意义，但“设备就是这么报的”要能看到）。
 func (n FttrNode) ModeHint() string {
-	parts := make([]string, 0, 5)
-	add := func(k, v string) {
+	parts := make([]string, 0, 4)
+	add := func(prefix, v string) {
 		if v = strings.TrimSpace(v); v != "" {
-			parts = append(parts, k+"="+v)
+			parts = append(parts, prefix+v)
 		}
 	}
-	add("WorkingMode", n.Mode)
-	add("SupportedWorkingMode", n.ModesSupported)
-	add("InternetAccessMode", n.InternetAccess)
-	add("SignalIntensity", n.Signal)
-	add("SyncStatus", n.Sync)
-	return strings.Join(parts, " · ")
+	add("", n.Mode)
+	if v := strings.TrimSpace(n.ModesSupported); v != "" && v != strings.TrimSpace(n.Mode) {
+		add("支持 ", v)
+	}
+	add("上行 ", n.InternetAccess)
+	if v := strings.TrimSpace(n.Signal); v != "" && v != "0" {
+		add("信号 ", v)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "设备上报：" + strings.Join(parts, " · ")
 }
 
 // OpticalPower 是「光功率」列要显示的文字（空 = 这格不显示值）。

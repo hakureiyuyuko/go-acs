@@ -350,7 +350,7 @@ var wifiFieldDefs = []wifiFieldDef{
 	// 所以优先写 PreSharedKey 那个，拿不到才退回。
 	{key: "key", label: "无线密码", kind: "password",
 		leaf: []string{"presharedkey.1.keypassphrase", "keypassphrase"},
-		hint: "为空表示不修改。很多 CPE 不回明文密码（能改不能读），所以这里显示为空是正常的。"},
+		hint: "为空表示不修改。设备一般不返回明文密码，这里为空是正常的。"},
 }
 
 // WifiForm 根据设备实报的参数拼出编辑表单。

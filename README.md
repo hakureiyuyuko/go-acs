@@ -72,7 +72,8 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 
 ## 界面
 
-- 设备详情页的**参数 / 任务历史 / Inform 记录**三个区块默认折叠，点击展开
+- 设备详情页的**参数 / 任务历史 / 上报记录**三个区块默认折叠，点击展开；
+  界面文案只写使用者要看的信息（实现理由在文档里，产品界面上不出现——见实现笔记）
   （原生 `<details>`，不需要 JS，键盘与读屏也可用）
 - 三个表以及概览页的设备列表**默认 20 条/页**，可切换 20 / 50 / 100 / 全部；
   浏览器端分页，和「参数名过滤」是配合关系（过滤后重新分页）；
@@ -124,7 +125,7 @@ docs/               需求文档与笔记
   （设备还配着本 ACS 时下次上报就回来了，确认框里写明了这一点）
 - **ACS→CPE 下发**：`GetParameterValues` / `GetParameterNames` / `SetParameterValues` / `Reboot` / `GetRPCMethods`
 - **CPE→ACS 接收**：`Inform` / `Fault` / 各类 `*Response` / `TransferComplete`（先记录）
-- **Web 界面**：设备列表 + 设备详情（基本信息 / 参数表带过滤 / 任务历史 / Inform 记录）+ 一键「重新获取设备信息」
+- **Web 界面**：设备列表 + 设备详情（基本信息 / 参数表带过滤 / 任务历史 / 上报记录）+ 一键「重新获取设备信息」
 - **修改无线设置**：看板或详情页点 SSID（或频段）进入编辑表单，提交后下发 `SetParameterValues`。
   字段是否出现、写向哪个参数、下拉候选值（信道/功率来自设备的 `PossibleChannels`、
   `TransmitPowerSupported`）**全部从设备实报参数推导**，不写死；只下发真正改动过的字段；

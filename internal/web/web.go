@@ -60,9 +60,10 @@ type kv struct {
 // Register 把界面路由挂到 mux 上。
 func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	tpl, err := template.New("").Funcs(template.FuncMap{
-		"fmtTime":      formatTime,
-		"fmtTimeShort": formatTimeShort,
-		"uptime":       formatUptime,
+		"fmtTime":        formatTime,
+		"fmtTimeShort":   formatTimeShort,
+		"uptime":         formatUptime,
+		"dataModelLabel": dataModelLabel,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return fmt.Errorf("解析模板失败: %w", err)
@@ -818,7 +819,7 @@ func basicInfo(d *store.Device, params []store.Param) []kv {
 		{"外网 IP", d.ExternalIP},
 		{"上报周期", intervalText(d.PeriodicInterval)},
 		{"ConnectionRequestURL", d.ConnRequestURL},
-		{"数据模型根", d.DataModelRoot},
+		{"数据模型", dataModelLabel(d.DataModelRoot)},
 		{"最近事件", d.LastEvents},
 		{"最后上报", formatTime(d.LastInformAt)},
 		{"最后启动", formatTime(d.LastBootAt)},
@@ -873,6 +874,18 @@ func formatTimeShort(t time.Time) string {
 
 // formatUptime 把 TR-069 的秒数格式化成人看的。
 // 直接接受字符串，因为 CPE 上报的 UpTime 就是字符串。
+// dataModelLabel 把设备的数据模型根写成使用者看得懂的名字。
+// 认不出来就原样显示 —— 不硬猜（有的设备根路径是厂商私有的）。
+func dataModelLabel(root string) string {
+	switch {
+	case strings.HasPrefix(root, "InternetGatewayDevice."):
+		return "TR-098"
+	case strings.HasPrefix(root, "Device."):
+		return "TR-181"
+	}
+	return root
+}
+
 func formatUptime(v string) string {
 	v = strings.TrimSpace(v)
 	if v == "" {

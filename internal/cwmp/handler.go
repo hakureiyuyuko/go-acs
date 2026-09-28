@@ -1110,7 +1110,7 @@ func (s *Server) onGetParameterValuesResponse(w http.ResponseWriter, sess *Sessi
 		s.handleDiagResult(sess, p.DiagTask, params)
 	}
 
-	s.finishTask(sess, fmt.Sprintf("收到 %d 个参数", len(params)))
+	s.finishTask(sess, fmt.Sprintf("已采集 %d 个参数", len(params)))
 	s.log.Info("取回参数", "device_id", sess.DeviceID, "count", len(params))
 	s.dispatchNextTask(w, sess)
 }
@@ -1150,7 +1150,7 @@ func (s *Server) checkReadBack(sess *Session, p gpvPayload, got []ParamValue) {
 	if len(unverifiable) > 0 {
 		s.noteUnverifiable(p.VerifyTask, unverifiable)
 	}
-	msg := "设备接受了写入（Status=0）但读回未生效：" + strings.Join(problems, "；")
+	msg := "设备接受了写入，但读回未生效：" + strings.Join(problems, "；")
 	s.log.Warn("写入未生效（已在下一轮会话复核）",
 		"device_id", sess.DeviceID, "set_task", p.VerifyTask, "problems", problems)
 	if err := s.store.FailTask(p.VerifyTask, msg); err != nil {
@@ -1164,7 +1164,7 @@ func (s *Server) noteUnverifiable(taskID int64, names []string) {
 	if len(names) == 0 {
 		return
 	}
-	msg := fmt.Sprintf("设置成功（Status=0）；%d 个参数设备不回读、无法核对：%s",
+	msg := fmt.Sprintf("设置成功；%d 个参数设备未回读，无法核对：%s",
 		len(names), strings.Join(names, "，"))
 	if err := s.store.CompleteTask(taskID, msg); err != nil {
 		s.log.Warn("更新任务结果失败", "task_id", taskID, "err", err)
@@ -1265,7 +1265,7 @@ func (s *Server) onGetParameterNamesResponse(w http.ResponseWriter, sess *Sessio
 		}
 	}
 
-	s.finishTask(sess, fmt.Sprintf("收到 %d 个参数名", len(infos)))
+	s.finishTask(sess, fmt.Sprintf("已枚举 %d 个参数", len(infos)))
 	s.dispatchNextTask(w, sess)
 }
 
@@ -1377,7 +1377,7 @@ func (s *Server) handleDiagResult(sess *Session, diagTaskID int64, got []ParamVa
 		s.log.Info("诊断完成", "device_id", sess.DeviceID, "task_id", diagTaskID, "result", summary)
 
 	case strings.HasPrefix(state, "Error"):
-		msg := "设备报告诊断失败：" + state
+		msg := "诊断失败（设备状态 " + state + "）"
 		s.log.Warn("诊断失败", "device_id", sess.DeviceID, "task_id", diagTaskID, "state", state)
 		if err := s.store.FailTask(diagTaskID, msg); err != nil {
 			s.log.Warn("标记诊断失败出错", "task_id", diagTaskID, "err", err)
@@ -1386,7 +1386,7 @@ func (s *Server) handleDiagResult(sess *Session, diagTaskID int64, got []ParamVa
 	default:
 		// 还在跑：保持 running，让状态接着蹦
 		s.log.Info("诊断进行中", "device_id", sess.DeviceID, "task_id", diagTaskID, "state", state)
-		if err := s.store.SetTaskResult(diagTaskID, "诊断进行中（设备状态 "+state+"）…"); err != nil {
+		if err := s.store.SetTaskResult(diagTaskID, "诊断进行中…"); err != nil {
 			s.log.Warn("更新诊断任务状态失败", "task_id", diagTaskID, "err", err)
 		}
 	}
@@ -1468,7 +1468,7 @@ func (s *Server) handleSetParameterValuesResponse(w http.ResponseWriter, sess *S
 	}
 
 	if status != "" && status != "0" {
-		msg := "CPE 报告设置失败，Status=" + status
+		msg := "设备拒绝写入（错误码 " + status + "）"
 		s.log.Warn("设置参数失败", "device_id", sess.DeviceID, "task_id", taskID, "status", status)
 		s.failTask(sess, msg)
 		s.dispatchNextTask(w, sess)
@@ -1500,7 +1500,7 @@ func (s *Server) handleSetParameterValuesResponse(w http.ResponseWriter, sess *S
 	// 界面却还显示 Disabled —— 因为 Status 是几十分钟前采集的。）
 	s.refreshWiFiAfterWrite(sess, vals)
 
-	s.finishTask(sess, "设置成功（Status="+statusOrZero(status)+"）")
+	s.finishTask(sess, "设置成功")
 	s.dispatchNextTask(w, sess)
 }
 
@@ -1530,13 +1530,6 @@ func containsWiFiParam(vals []ParamValue) bool {
 		}
 	}
 	return false
-}
-
-func statusOrZero(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return "0"
-	}
-	return s
 }
 
 // enqueueReadBack 把刚设置过的那批参数读回来，并带上“期望值”以供比对。

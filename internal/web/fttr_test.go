@@ -199,7 +199,7 @@ func TestFttrOverviewOpticalAndMode(t *testing.T) {
 		t.Errorf("WorkingMode / SupportedWorkingMode 串了：%+v", n[4])
 	}
 	// 悬停提示里要能看到原始字段
-	if h := n[4].ModeHint(); !strings.Contains(h, "WorkingMode=repeater") || !strings.Contains(h, "SignalIntensity=0") {
+	if h := n[4].ModeHint(); !strings.HasPrefix(h, "设备上报：") || !strings.Contains(h, "repeater") {
 		t.Errorf("组网悬停提示不完整：%q", h)
 	}
 

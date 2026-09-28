@@ -307,6 +307,29 @@ def main():
         check("详情页展示了基本信息", "基本信息" in html and "SimVendor" in html)
         check("详情页展示了参数表", "DeviceInfo.SoftwareVersion" in html)
 
+    print("== 11b. 界面上不留内部说明性质的文案 ==")
+    if d98:
+        st, dhtml2 = get(f"/devices/{d98[0]['ID']}")
+        banned = [
+            "数据来自标准的",      # WAN 区块那段实现说明
+            "探测到才显示",
+            "不替设备下结论",      # 「组网」列的口径说明
+            "负担很小",            # 无线采集的负担说明
+            "做法：先",            # 读取参数子树的实现说明
+            "让设备自己发 ICMP",
+            "CWMP 端点",
+            "Inform 记录",
+        ]
+        hit = [b for b in banned if b in dhtml2]
+        check("详情页没有内部说明性质的文案", not hit, hit)
+        check("参数路径仍然可在悬停里看到（排障要用）",
+              'title="InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID"' in
+              get(f"/devices/{d98[0]['ID']}/wifi/1")[1], "")
+    if d98:
+        st, ihtml = get("/")
+        hit2 = [b for b in ("数据来自标准的", "实例号由枚举得到", "CWMP 端点", "主机 + 子光猫") if b in ihtml]
+        check("概览页也没有内部说明性质的文案", not hit2, hit2)
+
     print("== 12. 看板上的 WiFi 概览 ==")
     st, html = get("/")
     check("看板 200", st == 200, st)
@@ -541,11 +564,11 @@ def main():
     print("== 19. 折叠区块与表格分页 ==")
     if did:
         st, dhtml = get(f"/devices/{did}")
-        check("三个区块都是可折叠的（参数/任务历史/Inform 记录）",
+        check("三个区块都是可折叠的（参数/任务历史/上报记录）",
               dhtml.count('<details class="fold">') == 3,
               dhtml.count('<details class="fold">'))
         check("默认都是收起的", '<details class="fold" open' not in dhtml)
-        for label in ("参数（", "任务历史", "Inform 记录"):
+        for label in ("参数（", "任务历史", "上报记录"):
             check(f"折叠标题里有「{label}」", f"<summary>{label}" in dhtml)
         check("三个表都带 data-pager=20",
               dhtml.count('data-pager="20"') == 3, dhtml.count('data-pager="20"'))
@@ -897,8 +920,8 @@ def main():
         check("判不出组网模式时原样显示设备自报值", "repeater" in sec, st)
         # 无线 / 有线组网的两台：**设备回了光功率也不显示**（它们没有光口）
         check("无线 / 有线组网不显示光功率", "-20.0" not in sec and "-21.0" not in sec, sec[-300:])
-        check("组网列带原始字段的悬停提示",
-              "WorkingMode=wifi" in sec and "SignalIntensity=-45" in sec, st)
+        check("组网列的悬停提示用能读的话说明设备上报了什么",
+              "设备上报：wifi" in sec and "信号 -45" in sec, st)
 
     # 对照：子设备没上报光功率时，整列不渲染（探测不到就不显示）
     vf = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-FTTR"]
@@ -927,9 +950,9 @@ def main():
 
         # 2) 终端数 = 主机 + 子机（真机上主机自己的 WLAN 一台都没有，终端全在子光猫上）
         check("2.4G 终端数是主机 + 子机的合计（2+3=5）",
-              "主机 2 台 + 子光猫 3 台" in wifi_sec and ">5</button>" in wifi_sec, wifi_sec[-400:])
+              "主机 2 台 · 子设备 3 台" in wifi_sec and ">5</button>" in wifi_sec, wifi_sec[-400:])
         check("5G 终端数是主机 + 子机的合计（1+1=2）",
-              "主机 1 台 + 子光猫 1 台" in wifi_sec and ">2</button>" in wifi_sec, wifi_sec[-400:])
+              "主机 1 台 · 子设备 1 台" in wifi_sec and ">2</button>" in wifi_sec, wifi_sec[-400:])
 
         # 3) 子设备表：每台子机自己的终端数
         check("子设备表里有「终端」列", "<th>终端</th>" in fttr_sec, st)

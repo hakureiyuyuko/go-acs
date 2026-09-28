@@ -25,7 +25,6 @@
 <header class="top">
   <h1>轻量 TR-069 ACS</h1>
   <div class="spacer"></div>
-  <span class="hint">CWMP 端点 <span class="mono">/acs</span></span>
   <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
 </header>
 
@@ -64,7 +63,7 @@
         <td class="note" title="{{$d.Note}}">{{if $d.Note}}{{$d.Note}}{{else}}<span class="hint">-</span>{{end}}</td>
         <td class="mono">{{$d.SerialNumber}}</td>
         <td class="mono">{{if $d.SoftwareVersion}}{{$d.SoftwareVersion}}{{else}}-{{end}}</td>
-        <td class="mono">{{if $d.DataModelRoot}}{{$d.DataModelRoot}}{{else}}<span class="hint">未知</span>{{end}}</td>
+        <td class="mono">{{if $d.DataModelRoot}}{{dataModelLabel $d.DataModelRoot}}{{else}}<span class="hint">未知</span>{{end}}</td>
         <td class="mono">{{fmtTime $d.LastInformAt}}</td>
         <td class="mono">{{$d.ParamCount}}</td>
         <td class="mono">{{index $.ClientCounts $d.ID}}</td>
@@ -90,8 +89,7 @@
 
   <h2>WiFi 概览</h2>
   <div class="hint" style="margin:-4px 0 10px">
-    频段按设备自报的值显示；实例号由枚举得到（同一型号不同频段的实例号不连续，例如 2.4G=1、5G=5）。
-    列表里的「无线终端」是 <b>主机 + 子光猫</b> 上的已连终端数之和（跟详情页口径一致）。<b>点 SSID 或频段可以修改该频段的无线设置。</b>
+    <b>点 SSID 或频段可以修改该频段的无线设置。</b>
     {{if .Query}}（当前只显示匹配「{{.Query}}」的设备）{{end}}
   </div>
   {{if .WiFi}}
