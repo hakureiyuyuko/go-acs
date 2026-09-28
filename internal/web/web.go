@@ -198,12 +198,14 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "读取参数失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tasks, err := s.store.ListTasks(id, 30)
+	tasks, err := s.store.ListTasks(id, 100)
 	if err != nil {
 		http.Error(w, "读取任务失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	informs, err := s.store.ListInforms(id, 20)
+	// Inform 记录很多（设备每 120 秒一条，一天就 720 条），
+	// 一次多取一些给前端分页用
+	informs, err := s.store.ListInforms(id, 100)
 	if err != nil {
 		http.Error(w, "读取上报记录失败: "+err.Error(), http.StatusInternalServerError)
 		return

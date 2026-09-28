@@ -70,6 +70,14 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 | `-max-body` | `ACS_MAX_BODY` | `4MiB` | 单请求体上限 |
 | `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名（真机单次上限可能只有 256，见下文）|
 
+## 界面
+
+- 设备详情页的**参数 / 任务历史 / Inform 记录**三个区块默认折叠，点击展开
+  （原生 `<details>`，不需要 JS，键盘与读屏也可用）
+- 三个表以及概览页的设备列表**默认 20 条/页**，可切换 20 / 50 / 100 / 全部；
+  浏览器端分页，和「参数名过滤」是配合关系（过滤后重新分页）；
+  行数本来不到一页时自动不显示分页条
+
 ## 数据库迁移
 
 库里记着 `PRAGMA user_version`，`internal/store/store.go` 里有一个 `migrations` 列表。

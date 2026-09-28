@@ -32,7 +32,7 @@
     <span class="hint">{{if .Query}}匹配 {{len .Devices}} / {{.Total}} 台{{else}}共 {{.Total}} 台{{end}}</span>
   </form>
   {{if .Devices}}
-  <table>
+  <table id="devices-table" data-pager="20">
     <thead>
       <tr>
         <th>状态</th><th>名称</th><th>备注</th><th>序列号</th>

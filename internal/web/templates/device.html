@@ -112,10 +112,9 @@
     <summary>参数（{{len .Params}}）</summary>
     <div style="margin:10px 0; display:flex; align-items:center; gap:12px">
       <input id="param-filter" class="filter" type="text" placeholder="按参数名过滤，如 DeviceInfo 或 SSID">
-      <span id="param-count" class="hint"></span>
     </div>
     {{if .Params}}
-    <table id="param-table">
+    <table id="param-table" data-pager="20">
       <thead>
         <tr><th style="width:44%">参数名</th><th>值</th><th style="width:90px">类型</th><th style="width:70px">可写</th><th style="width:92px">更新</th></tr>
       </thead>
@@ -136,9 +135,10 @@
     {{end}}
   </details>
 
-  <h2>任务历史</h2>
-  {{if .Tasks}}
-  <table>
+  <details class="fold">
+    <summary>任务历史</summary>
+    {{if .Tasks}}
+    <table id="task-table" data-pager="20">
     <thead><tr><th>#</th><th>类型</th><th>状态</th><th>结果</th><th>创建</th><th>完成</th></tr></thead>
     <tbody>
       {{range .Tasks}}
@@ -156,10 +156,12 @@
   {{else}}
   <div class="empty">暂无任务</div>
   {{end}}
+  </details>
 
-  <h2>Inform 记录</h2>
-  {{if .Informs}}
-  <table>
+  <details class="fold">
+    <summary>Inform 记录</summary>
+    {{if .Informs}}
+    <table id="inform-table" data-pager="20">
     <thead><tr><th>时间</th><th>事件</th><th>参数数</th><th>重试</th><th>来源 IP</th></tr></thead>
     <tbody>
       {{range .Informs}}
@@ -176,6 +178,7 @@
   {{else}}
   <div class="empty">暂无记录</div>
   {{end}}
+  </details>
 </main>
 
 <script src="/static/app.js"></script>

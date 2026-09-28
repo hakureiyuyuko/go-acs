@@ -6,6 +6,9 @@
 """
 import base64
 import json
+import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -25,6 +28,11 @@ def check(desc, cond, extra=""):
     else:
         _n["fail"] += 1
         print("  [失败] " + desc + (("  -> " + str(extra)) if extra else ""))
+
+
+def skip(desc, why):
+    """环境不具备的条件（如没装 Chrome）不计入通过/失败。"""
+    print("  [跳过] " + desc + "（" + why + "）")
 
 
 def post(body, user=None, pw=None, ctype='text/xml; charset="utf-8"'):
@@ -79,6 +87,24 @@ def post_form(path, fields):
             return r.status, r.headers.get("Location", "")
     except urllib.error.HTTPError as e:
         return e.code, e.headers.get("Location", "")
+
+
+def run_chrome_dom(chrome, url):
+    """用 headless 浏览器跑完 JS 后把 DOM dump 出来（验证前端行为）。
+
+    只用来验证「分页真的只显示 20 行」这类必须真跑 JS 才能确认的事。
+    """
+    try:
+        out = subprocess.run(
+            [chrome, "--headless=new", "--no-sandbox", "--disable-gpu",
+             "--virtual-time-budget=4000", "--dump-dom", url],
+            capture_output=True, timeout=60,
+        )
+        if out.returncode != 0 or not out.stdout:
+            return None
+        return out.stdout.decode("utf-8", "replace")
+    except Exception:
+        return None
 
 
 def wait_tasks_done(device_id, kinds=("SetParameterValues",), timeout=150):
@@ -472,7 +498,49 @@ def main():
         st, html = get("/?q=" + urllib.parse.quote("会议室"))
         check("清掉备注后按备注搜不到了", marker not in html)
 
-    print("== 19. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 19. 折叠区块与表格分页 ==")
+    if did:
+        st, dhtml = get(f"/devices/{did}")
+        check("三个区块都是可折叠的（参数/任务历史/Inform 记录）",
+              dhtml.count('<details class="fold">') == 3,
+              dhtml.count('<details class="fold">'))
+        check("默认都是收起的", '<details class="fold" open' not in dhtml)
+        for label in ("参数（", "任务历史", "Inform 记录"):
+            check(f"折叠标题里有「{label}」", f"<summary>{label}" in dhtml)
+        check("三个表都带 data-pager=20",
+              dhtml.count('data-pager="20"') == 3, dhtml.count('data-pager="20"'))
+
+        # 分页是浏览器端 JS，必须真跑一遍 DOM 才能验证 —— 用 headless 浏览器
+        chrome = None
+        for c in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+            if shutil.which(c):
+                chrome = c
+                break
+        if not chrome:
+            skip("分页真的只显示 20 行", "本机没有 headless 浏览器")
+        else:
+            dom = run_chrome_dom(chrome, f"{BASE}/devices/{did}")
+            if dom is None:
+                skip("分页真的只显示 20 行", "headless 浏览器执行失败")
+            else:
+                m = re.search(r'<table id="param-table"[^>]*>(.*?)</table>', dom, re.S)
+                if not m:
+                    check("能拿到参数表", False)
+                else:
+                    rows = re.findall(r'<tr[^>]*>', m.group(1))
+                    hidden = sum(1 for r in rows if "display: none" in r)
+                    # 减 1 是表头那一行
+                    visible = len(rows) - hidden - 1
+                    check("参数表一页正好 20 行", visible == 20, f"可见 {visible}")
+                    check("其余行被隐藏了", hidden > 0, hidden)
+                    check("分页条显示了页码", "条 · 第 1 /" in dom)
+                m = re.search(r'<table id="task-table"[^>]*>(.*?)</table>', dom, re.S)
+                if m:
+                    rows = re.findall(r'<tr[^>]*>', m.group(1))
+                    vis = sum(1 for r in rows if "display: none" not in r) - 1
+                    check("任务历史一页不超过 20 行", 0 <= vis <= 20, vis)
+
+    print("== 20. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 

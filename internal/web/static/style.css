@@ -69,6 +69,19 @@ details.fold > summary::after {
   margin-left: 4px;
 }
 details.fold[open] > summary::after { content: ""; }
+
+/* 表格分页条 */
+.pager {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 8px; font-size: 12.5px; color: var(--dim);
+}
+.pager-info { color: var(--dim); }
+.pager select {
+  margin-left: auto;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
+  border-radius: 7px; padding: 4px 8px; font-family: inherit; font-size: 12.5px;
+}
+.pager button:disabled { opacity: .35; cursor: not-allowed; }
 .kvs { display: grid; grid-template-columns: repeat(auto-fill, minmax(430px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .kvs .row { background: var(--panel); padding: 9px 14px; display: flex; gap: 16px; }
 .kvs .k { color: var(--dim); flex: 0 0 160px; max-width: 160px; overflow-wrap: anywhere; }
