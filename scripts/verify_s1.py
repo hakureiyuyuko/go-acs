@@ -559,6 +559,7 @@ def main():
         st, html = get("/")
         check("概览页显示了备注", note in html)
         check("概览页有搜索框", 'name="q"' in html)
+        check("概览页有在线/离线筛选条", 'class="chip' in html and "筛选" in html)
 
         # 按备注搜
         st, html = get("/?q=" + urllib.parse.quote("会议室"))
@@ -1415,6 +1416,28 @@ def main():
                 check("断电设备最终被判离线", bool(final) and not final["Online"],
                       final and final.get("Online"))
                 check("判离线前界面上出现过「探测中」", seen_probing, "")
+
+                # 离线设备的操作按钮应该全部灰掉（删除除外 —— 那是本地操作），
+                # 列表页的筛选条也要能按状态过滤
+                aid = (final or {}).get("ID") or (d or {}).get("ID")
+                if aid:
+                    with urllib.request.urlopen("%s/devices/%d" % (base2, aid), timeout=5) as r:
+                        dhtml = r.read().decode("utf-8", "replace")
+                    check("离线设备详情页：需要设备配合的按钮都禁用了",
+                          dhtml.count("disabled") >= 3, "disabled 出现 %d 次" % dhtml.count("disabled"))
+                    delform = re.search(r'action="/devices/%d/delete"(.*?)</form>' % aid, dhtml, re.S)
+                    check("离线设备详情页：删除设备仍可用（只是删本地记录）",
+                          bool(delform) and "disabled" not in delform.group(1),
+                          (delform.group(0)[:90] if delform else "没找到删除按钮"))
+                    with urllib.request.urlopen(base2 + "/?state=offline", timeout=5) as r:
+                        off_html = r.read().decode("utf-8", "replace")
+                    with urllib.request.urlopen(base2 + "/?state=online", timeout=5) as r:
+                        on_html = r.read().decode("utf-8", "replace")
+                    link = '/devices/%d"' % aid
+                    check("按「离线」筛选能筛到它", link in off_html, "")
+                    check("按「在线」筛选筛不到它", link not in on_html, "")
+                    check("筛选后列表只留该状态（离线页里没有在线徽标）",
+                          "badge on" not in off_html.split("WiFi 概览")[0], "")
 
                 log = read_log(log_path)
                 probed = log.count("离线探测无响应")

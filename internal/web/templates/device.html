@@ -43,17 +43,20 @@
     <div class="card">
       <div class="l">操作</div>
       <form method="post" action="/devices/{{.Device.ID}}/refresh" style="margin-top:6px">
-        <button type="submit">重新获取设备信息</button>
+        <button type="submit" {{if not .Device.Online}}disabled
+                title="设备离线：它下次上报时才会收到指令，等它回来再点"{{end}}>重新获取设备信息</button>
       </form>
       <form method="post" action="/devices/{{.Device.ID}}/wake" style="margin-top:8px">
         <button type="submit" class="ghost"
-                title="让设备立刻回连一次，不用等下次上报">
+                {{if not .Device.Online}}disabled title="设备离线：唤醒命令发不出去（离线判定本来就会自动探测）"
+                {{else}}title="让设备立刻回连一次，不用等下次上报"{{end}}>
           立即唤醒设备
         </button>
       </form>
       <form method="post" action="/devices/{{.Device.ID}}/reboot" style="margin-top:8px"
             data-confirm="确定要重启「{{.Device.DisplayName}}」吗？设备会立刻断开重启，重启期间无法上网（通常几分钟），重连后 TR-069 会自动接回来。">
-        <button type="submit" class="danger">重启设备</button>
+        <button type="submit" class="danger" {{if not .Device.Online}}disabled
+                title="设备离线：重启命令发不出去"{{end}}>重启设备</button>
       </form>
       <form method="post" action="/devices/{{.Device.ID}}/delete" style="margin-top:8px"
             data-confirm="确定要从本 ACS 删除「{{.Device.DisplayName}}」吗？只会删掉这里的记录（参数、任务、上报历史），不会动设备本身；如果设备还配着本 ACS 地址，下次上报会重新纳管。">
@@ -62,7 +65,8 @@
     </div>
   </div>
   <div class="hint" style="margin:-8px 0 4px">
-    任务在设备下次上报时下发；设备离线时会一直排队等待。
+    {{if .Device.Online}}任务在设备下次上报时下发（离线时会排队等待）。
+    {{else}}设备当前离线，需要它配合的操作都不可用；它恢复上报后按钮会自动恢复。删除设备只是删本地记录，随时可用。{{end}}
   </div>
 
   {{if .Notice}}
@@ -181,7 +185,9 @@
       {{range .DiagIfaces}}<option value="{{.K}}">{{.V}}</option>{{end}}
     </datalist>
     {{end}}
-    <button type="submit">诊断</button>
+    <button type="submit" {{if not .Device.Online}}disabled
+            title="设备离线：诊断要设备自己发包，等它回来再点"{{end}}>诊断</button>
+    {{if not .Device.Online}}<span class="hint">设备离线，等它恢复上报后再诊断</span>{{end}}
   </form>
   {{if .Diag}}
   <div class="diagbox">

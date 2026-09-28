@@ -71,7 +71,7 @@ th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--lin
 th { color: var(--dim); font-weight: 500; font-size: 12px; background: var(--panel2); position: sticky; top: 0; }
 tbody tr:hover { background: var(--hover); }
 td.mono, .mono { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12.5px; }
-.badge { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 12px; border: 1px solid var(--line); }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 12px; border: 1px solid var(--line); white-space: nowrap; }
 .badge.on { color: var(--ok); border-color: var(--ok-line); background: var(--ok-bg); }
 .badge.off { color: var(--dim); }
 .badge.probing { color: var(--warn); border-color: var(--warn-line); background: var(--warn-bg); }
@@ -145,6 +145,20 @@ button.ghost:hover { background: var(--ghost-hover); }
 /* 破坏性操作（重启等）：红底白字 + 二次确认（确认框文字在 form 的 data-confirm 上） */
 button.danger { background: var(--bad); color: #fff; }
 button.danger:hover { filter: brightness(1.12); }
+/* 设备离线时，需要设备配合的按钮一律禁用（灰掉 + 鼠标变成禁止） */
+button:disabled, button:disabled:hover {
+  opacity: .4; cursor: not-allowed; filter: none;
+}
+/* 首页的在线 / 离线筛选 */
+.filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 20px; font-size: 13px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+}
+.chip:hover { text-decoration: none; background: var(--hover); }
+.chip.active { color: var(--fg); border-color: var(--accent); background: var(--ghost-hover); }
+.chip .n { font-variant-numeric: tabular-nums; opacity: .8; }
 .wifi-on { color: var(--ok); }
 .wifi-off { color: var(--dim); }
 input.filter {

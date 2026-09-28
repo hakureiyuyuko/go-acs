@@ -164,25 +164,38 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	// 搜索：服务端过滤（结果可以分享 URL，也不依赖 JS）。
 	// 搜序列号 / 备注 / 名称 / 产品类 / OUI / SSID。
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	// 在线状态筛选：all / online（含探测中）/ offline / probing。
+	// 跟搜索一样走服务端过滤，URL 可以直接分享。
+	state := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("state")))
+	switch state {
+	case "online", "offline", "probing":
+	default:
+		state = "all"
+	}
 	devices := make([]*store.Device, 0, len(all))
 	wifiByDevice := map[int64][]WifiBand{}
 	// 「无线终端」列跟详情页用同一套口径：主机 + 子光猫上的已连终端之和
 	// （条目数之外残留的行不算，见 BuildClientTree）。
 	clientCounts := map[int64]int{}
 	for _, d := range all {
+		// 先算无线概况：按 SSID 搜索要用到它，表格里的「无线终端」也跟详情页同一口径
+		// （主机 + 子光猫上的已连终端之和，条目数之外残留的行不算，见 BuildClientTree）。
 		bands := WifiOverview(wifiParams[d.ID])
-		if len(bands) > 0 {
-			wifiByDevice[d.ID] = bands
-		}
 		tree := BuildClientTree(wifiParams[d.ID], nil)
 		n := 0
 		for _, g := range tree.Groups() {
 			n += len(g.Clients)
 		}
-		clientCounts[d.ID] = n
-		if deviceMatches(d, bands, q) {
-			devices = append(devices, d)
+		// 筛掉的不进任何一份数据 —— 否则「按离线筛选」时下面的 WiFi 概览
+		// 还会把在线设备的频段列出来
+		if !deviceMatchesState(d, state) || !deviceMatches(d, bands, q) {
+			continue
 		}
+		if len(bands) > 0 {
+			wifiByDevice[d.ID] = bands
+		}
+		clientCounts[d.ID] = n
+		devices = append(devices, d)
 	}
 
 	data := map[string]any{
@@ -191,7 +204,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"WiFi":         wifiByDevice,
 		"ClientCounts": clientCounts,
 		"Query":        q,
+		"State":        state,
 		"Total":        len(all),
+		// 筛选条上的数字（在线含探测中，探测中是它的子集）
+		"OnlineCount":  stats.Online,
+		"OfflineCount": stats.Devices - stats.Online,
+		"ProbingCount": stats.Probing,
 		"Path":         r.URL.Path,
 		// 删除设备等操作会带着提示回到首页
 		"Notice":    strings.TrimSpace(r.URL.Query().Get("msg")),
@@ -204,6 +222,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 //
 // 搜的是「人能一眼看到的那些」：序列号、备注、名称/型号/厂商、产品类、OUI，
 // 以及它广播的 SSID（按 SSID 找设备很常用）。
+// deviceMatchesState 按在线状态筛设备。state 取值见 handleIndex。
+func deviceMatchesState(d *store.Device, state string) bool {
+	switch state {
+	case "online":
+		return d.Online
+	case "offline":
+		return !d.Online
+	case "probing":
+		return d.Probing()
+	default:
+		return true
+	}
+}
+
 func deviceMatches(d *store.Device, bands []WifiBand, q string) bool {
 	if q == "" {
 		return true

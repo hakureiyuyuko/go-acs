@@ -1220,7 +1220,7 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
 | 项目 | 结果 |
 | --- | --- |
 | `go test ./...` | 全部通过（`internal/cwmp` 41 + 离线判定 18 个用例、`internal/store` 12 个用例、`internal/web` 33 个用例）|
-| `scripts/verify-s1.sh` | **通过 303 / 失败 0**（新增第 37 节：离线判定的两个场景）|
+| `scripts/verify-s1.sh` | **通过 309 / 失败 0**（第 37 节：离线判定的两个场景 + 界面三态/筛选/禁用按钮）|
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
 | 真机（华为 HN8145X6N + V271-20） | **两台不同型号均自动纳管成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |
