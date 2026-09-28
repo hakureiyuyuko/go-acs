@@ -53,6 +53,7 @@ func run(args []string) error {
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		LogRawSOAP:          cfg.LogRawSOAP,
 		OfflineAfter:        cfg.OfflineAfter,
+		MaxParamsPerRequest: cfg.MaxParamsPerRequest,
 	}, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

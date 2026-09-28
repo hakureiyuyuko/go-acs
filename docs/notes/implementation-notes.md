@@ -197,6 +197,84 @@ VoiceService:1.0[1](Endpoint:1, SIPEndpoint:1)
    也就是说下一步做 Connection Request（主动唤醒）时，**可以用这台真机做真实验收**，
    不像很多部署那样被 NAT 挡住。
 
+### 实战：读真机的 WiFi 信息（顺带挖出一个真 bug）
+
+用界面上的「读取参数子树」或 `POST /api/devices/1/fetch` 对
+`InternetGatewayDevice.LANDevice.1.WLANConfiguration.` 做一次读取。
+
+#### 做法：枚举 + 取值，在同一个会话里完成
+
+不能直接下发子树路径给 `GetParameterValues`（见前面「两个真问题」的第 2 条），所以走两条命令：
+
+```
+Inform                          → 200 InformResponse
+空 POST                         → 200 GetParameterNames(<子树>)
+GetParameterNamesResponse (437)  → 200 GetParameterValues(<前 200 个名>)
+…Response (200)                  → 200 GetParameterValues(<后 176 个名>)
+…Response (176)                  → 204 结束
+```
+
+关键点：**收到 GetParameterNamesResponse 的那个 HTTP 响应里就直接带上第一条 GPV 请求**，
+所以整个枚举 + 取值只花一次会话（实测 15:10:52.401 → 15:10:53.449，**约 1 秒**），
+不用再等设备下一次轮询（否则要等 120 秒）。
+
+#### 挖出来的真 bug：CPE 单次只回 256 个参数，超出**静默丢弃**
+
+第一次读的时候我们向设备请求了 376 个参数名，它**只回了 256 个（正好 2^8）**，
+不报错、不告知。上一轮请求 300 个，也是回 256。
+
+当时我们的代码会把「设备回了一批」直接当作任务成功 —— 结果是**默默少采集了 120 个参数**，
+而且没有任何错误信号。这比协议报错危险得多。
+
+→ 修法：新增 `MaxParamsPerRequest`（默认 200，`-max-params-per-request` / `ACS_MAX_PARAMS_PER_REQUEST` 可调），
+入队 GPV 时自动分批（`enqueueGPVDivided`）。分批不会变慢，因为各批还是同一个会话里依次下发。
+修完后同一批 376 个参数拆成 **200 + 176** 两批，全部取回，比对结果：**376/376，一条不丢**。
+
+另外加了一道防御 `warnIfPartialResponse`：任何时候发现「回的比请求的少」就记 WARN，
+以后遇到上限更低的设备能立刻看出来。
+
+> 这个坑单靠自研模拟器永远发现不了 —— 我们的模拟器会老老实实把 376 个全返回。
+> 又一次说明：**必须拿真机（和真实报文）验收**。
+
+#### 读出来的 WiFi 信息
+
+| | 2.4GHz | 5GHz |
+| --- | --- | --- |
+| 实例号 | `WLANConfiguration.**1**` | `WLANConfiguration.**5**` |
+| SSID | `WirelessNet` | `WirelessNet-5G` |
+| 频段（`X_HW_RFBand`）| 2.4GHz | 5GHz |
+| 无线标准 | 11ax | 11ax |
+| 信道 | 6（自动）| 0 |
+| 认证 / 加密 | WPA/WPA2-PSK / TKIPandAES | 同左 |
+| 射频开关 | 开 | **关**（`RadioEnabled=0`，`Status=Disabled`）|
+| BSSID | `02:A0:BE:48:50:A0` | `02:A0:BE:48:50:A4` |
+| 已连设备数 | 1 | 0 |
+
+值得记的两个细节：
+
+- **实例号是 1 和 5，不是 1 和 2**。2.4G 用 1、5G 用 5 是光猫厂商的常见习惯，
+  所以获取 WiFi 必须先枚举（`GetParameterNames`），不能写死 `WLANConfiguration.1` 和 `.2`。
+- **WPA 密码读不到**：`KeyPassphrase`、`PreSharedKey.1.*`、`WEPKey.*.WEPKey` 全部返回**空串**，
+  但 `Writable=true` —— 也就是**能改不能读**。这是厂商故意的（TR-069 常在未鉴权的 LAN 口上开着，
+  回明文 PSK 等于把 WiFi 密码送出去）。做界面时不要把它当成“没读到”，要标明“设备不允许读取”。
+
+#### 连在 2.4G 上的客户端
+
+`AssociatedDevice.1` 下 29 个参数，华为还附了私有的信号质量字段：
+
+| 字段 | 值 |
+| --- | --- |
+| `X_HW_AssociatedDevicedescriptions` | `Android-Phone` |
+| `AssociatedDeviceMACAddress` | `02:76:B9:B7:C3:4A`（随机化 MAC）|
+| `AssociatedDeviceIPAddress` | `192.168.30.3` |
+| `X_HW_WorkingMode` | `11ax` |
+| `X_HW_RSSI` / `X_HW_SNR` / `X_HW_SingalQuality` | `-26` / `60` / `68` |
+| `X_HW_TxRate` / `X_HW_RxRate` | `243` / `286` |
+| `X_HW_Uptime` | `1428` 秒 |
+
+注意客户端 IP 是 `192.168.30.3`（光猫的 LAN 侧），而光猫自己对我们呈现的是 `192.168.10.22`
+（它作为 CPE 的 WAN/管理 IP）—— 两张网是由它 NAT 隔开的。
+
 ### 抓到的真机报文已固化成回归样本
 
 放在 `internal/cwmp/testdata/`（不是手写的，是这次联调实际抓下来的原始字节）：

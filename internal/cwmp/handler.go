@@ -39,6 +39,19 @@ type gpvPayload struct {
 type gpnPayload struct {
 	Path      string `json:"path"`
 	NextLevel bool   `json:"next_level"`
+
+	// ThenFetch：拿到参数名之后，自动再下发一条 GetParameterValues 把值取回来。
+	//
+	// 这是「先枚举再取值」的常规做法（因为不能保证 CPE 支持子树路径的 GetParameterValues，
+	// 见 basicInfoNames 的注释），而且两步是在**同一个会话**里连着做的：
+	// 我们在收到 GetParameterNamesResponse 的那个 HTTP 响应里就直接带上 GPV 请求，
+	// 不用等设备下一次轮询。
+	ThenFetch bool `json:"then_fetch,omitempty"`
+
+	// Exclude：参数名里包含任一子串就跳过（例如不要抓 AssociatedDevice 这张大表）。
+	Exclude []string `json:"exclude,omitempty"`
+	// Max：取值名单的最大条数（0 = 不限制）。
+	Max int `json:"max,omitempty"`
 }
 
 type spvPayload struct {
@@ -71,7 +84,18 @@ type Config struct {
 	MaxBodyBytes        int64
 	LogRawSOAP          bool
 	OfflineAfter        time.Duration // 超过多久没上报就算离线
+
+	// MaxParamsPerRequest 是单次 GetParameterValues 最多带上多少个参数名。
+	//
+	// 为什么必须分批：真机实测（华为 HN8145X6N）一次最多只回 256 个参数，
+	// 请求 376 个也只回 256 个，**超出的部分静默丢弃、不报错**。
+	// 分批之后每条任务都会在**同一个会话**里依次下发，不会额外多等一次设备轮询。
+	MaxParamsPerRequest int
 }
+
+// defaultMaxParamsPerRequest 是本 ACS 单次 GPV 默认可带的参数名个数。
+// 取 200：既留在真机上验证过的 256 上限之内，又不会把请求切得太碎。
+const defaultMaxParamsPerRequest = 200
 
 // Server 是 ACS 的 CWMP 端点。
 type Server struct {
@@ -131,6 +155,12 @@ func (s *Server) RequestRefresh(deviceID int64) error {
 	return err
 }
 
+// FetchSubtree 给外部（Web/REST）用：枚举某个参数子树下的所有参数并把值取回来。
+func (s *Server) FetchSubtree(deviceID int64, path string, exclude []string, max int) error {
+	_, err := s.EnqueueFetchSubtree(deviceID, path, exclude, max)
+	return err
+}
+
 // EnqueueFetchDeviceInfo 入队一条「取设备基本信息」的任务。
 func (s *Server) EnqueueFetchDeviceInfo(deviceID int64) (int64, error) {
 	d, err := s.store.GetDevice(deviceID)
@@ -169,6 +199,95 @@ var basicInfoSuffixes = []string{
 	"ManagementServer.ConnectionRequestURL",
 	"ManagementServer.PeriodicInformInterval",
 	"ManagementServer.ParameterKey",
+}
+
+// EnqueueFetchSubtree 入队一条「枚举某个子树下的所有参数，再把值取回来」的任务。
+//
+// 为什么不直接下发子树路径给 GetParameterValues：有的实现不支持部分路径
+// （genieacs-sim 会直接崩），所以走「GetParameterNames 枚举 + GetParameterValues 取值」
+// 这条处处都认的路。
+func (s *Server) EnqueueFetchSubtree(deviceID int64, path string, exclude []string, max int) (int64, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return 0, fmt.Errorf("参数路径不能为空")
+	}
+	payload, _ := json.Marshal(gpnPayload{
+		Path:      path,
+		NextLevel: false,
+		ThenFetch: true,
+		Exclude:   exclude,
+		Max:       max,
+	})
+	id, err := s.store.EnqueueTask(&store.Task{
+		DeviceID: deviceID,
+		Kind:     TaskGetParameterNames,
+		Payload:  string(payload),
+	})
+	if err == nil {
+		s.log.Info("已入队：枚举参数子树", "device_id", deviceID, "path", path, "max", max)
+	}
+	return id, err
+}
+
+// enqueueGPVDivided 把一批参数名**分批**入队成若干条 GetParameterValues 任务。
+//
+// 必须分批的原因见 Config.MaxParamsPerRequest 的注释（真机单次 256 上限、超出静默丢弃）。
+// 分批不会变慢：这些任务会被 dispatchNextTask 在**同一个会话**里依次下发。
+// 返回入队的批次数。
+func (s *Server) enqueueGPVDivided(deviceID int64, names []string) (int, error) {
+	if len(names) == 0 {
+		return 0, nil
+	}
+	max := s.cfg.MaxParamsPerRequest
+	if max <= 0 {
+		max = defaultMaxParamsPerRequest
+	}
+	batches := 0
+	for start := 0; start < len(names); start += max {
+		end := start + max
+		if end > len(names) {
+			end = len(names)
+		}
+		payload, _ := json.Marshal(gpvPayload{Names: names[start:end]})
+		if _, err := s.store.EnqueueTask(&store.Task{
+			DeviceID: deviceID,
+			Kind:     TaskGetParameterValues,
+			Payload:  string(payload),
+		}); err != nil {
+			return batches, err
+		}
+		batches++
+	}
+	return batches, nil
+}
+
+// filterLeafNames 从枚举结果里挑出可以取值的叶子参数名。
+//   - 对象节点（以 "." 结尾）跳过，因为它们不是叶子；
+//   - 名字包含 exclude 里任一子串的跳过；
+//   - 超过 max 就截断。
+func filterLeafNames(infos []ParamInfo, exclude []string, max int) []string {
+	out := make([]string, 0, len(infos))
+	for _, in := range infos {
+		n := strings.TrimSpace(in.Name)
+		if n == "" || strings.HasSuffix(n, ".") {
+			continue
+		}
+		skip := false
+		for _, e := range exclude {
+			if e != "" && strings.Contains(n, e) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		out = append(out, n)
+		if max > 0 && len(out) >= max {
+			break
+		}
+	}
+	return out
 }
 
 // basicInfoNames 给出要下发的完整参数名列表。
@@ -396,6 +515,7 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 // onGetParameterValuesResponse 处理我们下发的 GetParameterValues 的回执。
 func (s *Server) onGetParameterValuesResponse(w http.ResponseWriter, sess *Session, env *Envelope, m *Node) {
 	params := ParseParamValues(m.Child("ParameterList"))
+	s.warnIfPartialResponse(sess, len(params))
 	if len(params) > 0 && sess.DeviceID != 0 {
 		if err := s.store.UpsertParams(sess.DeviceID, toStoreParams(params), "getvalues"); err != nil {
 			s.log.Warn("写入参数失败", "device_id", sess.DeviceID, "err", err)
@@ -415,25 +535,83 @@ func (s *Server) onGetParameterValuesResponse(w http.ResponseWriter, sess *Sessi
 	s.dispatchNextTask(w, sess)
 }
 
+// warnIfPartialResponse 对照任务载荷里的参数名个数，检查 CPE 是不是只回了一部分。
+//
+// 真机实测：华为 HN8145X6N 单次最多只回 256 个，多出来的静默丢弃。我们靠分批
+// （Config.MaxParamsPerRequest）避免踩到上限；这里留个告警，是为了在遇到别的、
+// 上限更低的设备时能立刻看出来，而不是默默少采集一堆参数。
+func (s *Server) warnIfPartialResponse(sess *Session, got int) {
+	if sess.pendingTask == 0 {
+		return
+	}
+	t, err := s.store.GetTask(sess.pendingTask)
+	if err != nil || t == nil || t.Kind != TaskGetParameterValues {
+		return
+	}
+	var p gpvPayload
+	if err := json.Unmarshal([]byte(t.Payload), &p); err != nil {
+		return
+	}
+	if len(p.Names) > got {
+		s.log.Warn("CPE 只回了一部分参数，可能触到了它的单次上限（本 ACS 会分批，若仍出现请调小每批数量）",
+			"device_id", sess.DeviceID, "requested", len(p.Names), "returned", got)
+	}
+}
+
 // onGetParameterNamesResponse 处理 GetParameterNames 的回执。
+// 如果这条任务要求「枚举完顺便把值取回来」，就在这里接着入队一条 GPV ——
+// 它会被下面的 dispatchNextTask 在**同一个会话**里马上发出去。
 func (s *Server) onGetParameterNamesResponse(w http.ResponseWriter, sess *Session, env *Envelope, m *Node) {
 	infos := ParseParameterInfoStructs(m.Child("ParameterList"))
 	if len(infos) > 0 && sess.DeviceID != 0 {
 		params := make([]store.Param, 0, len(infos))
 		for _, in := range infos {
 			params = append(params, store.Param{
-				Name:      in.Name,
-				Writable:  in.Writable,
-				ValueType: "",
-				Source:    "getnames",
+				Name:     in.Name,
+				Writable: in.Writable,
+				Source:   "getnames",
 			})
 		}
 		if err := s.store.UpsertParams(sess.DeviceID, params, "getnames"); err != nil {
 			s.log.Warn("写入参数名失败", "device_id", sess.DeviceID, "err", err)
 		}
 	}
+
+	s.chainFetchAfterNames(sess, infos)
+
 	s.finishTask(sess, fmt.Sprintf("收到 %d 个参数名", len(infos)))
+	s.log.Info("枚举参数名", "device_id", sess.DeviceID, "count", len(infos))
 	s.dispatchNextTask(w, sess)
+}
+
+// chainFetchAfterNames 根据 GetParameterNames 任务的载荷，决定要不要接着取值。
+func (s *Server) chainFetchAfterNames(sess *Session, infos []ParamInfo) {
+	if sess.pendingTask == 0 || sess.DeviceID == 0 {
+		return
+	}
+	t, err := s.store.GetTask(sess.pendingTask)
+	if err != nil || t == nil {
+		return
+	}
+	var p gpnPayload
+	if err := json.Unmarshal([]byte(t.Payload), &p); err != nil || !p.ThenFetch {
+		return
+	}
+
+	names := filterLeafNames(infos, p.Exclude, p.Max)
+	if len(names) == 0 {
+		s.log.Warn("枚举到 0 个可取值参数，跳过取值",
+			"device_id", sess.DeviceID, "path", p.Path, "exclude", p.Exclude)
+		return
+	}
+	batches, err := s.enqueueGPVDivided(sess.DeviceID, names)
+	if err != nil {
+		s.log.Warn("入队取值任务失败", "device_id", sess.DeviceID, "err", err)
+		return
+	}
+	s.log.Info("枚举完成，同一会话内接着取值",
+		"device_id", sess.DeviceID, "path", p.Path,
+		"params", len(names), "batches", batches)
 }
 
 // onSimpleResponse 处理我们不特别关心的响应（如 SetParameterValuesResponse）。

@@ -41,6 +41,21 @@
     {{end}}
   </div>
 
+  <h2>读取参数子树</h2>
+  <form method="post" action="/devices/{{.Device.ID}}/fetch"
+        style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+    <input class="filter" style="width:520px" type="text" name="path"
+           value="{{.DefaultPath}}" placeholder="如 InternetGatewayDevice.LANDevice.1.WLANConfiguration.">
+    <input class="filter" style="width:250px" type="text" name="exclude"
+           value="AssociatedDevice" placeholder="排除（逗号分隔，可留空）">
+    <input class="filter" style="width:110px" type="text" name="max" value="200" placeholder="上限">
+    <button type="submit">入队读取</button>
+  </form>
+  <div class="hint" style="margin-top:6px">
+    做法：先 <span class="mono">GetParameterNames</span> 枚举子树下的参数名，再在<b>同一个会话</b>里用
+    <span class="mono">GetParameterValues</span> 取值（省掉一次设备轮询）。设备离线时会排队等下一次 Inform。
+  </div>
+
   <h2>参数（{{len .Params}}）</h2>
   <div style="margin-bottom:10px; display:flex; align-items:center; gap:12px">
     <input id="param-filter" class="filter" type="text" placeholder="按参数名过滤，如 DeviceInfo 或 SSID">

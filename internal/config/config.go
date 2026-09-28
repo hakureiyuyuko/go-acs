@@ -30,6 +30,10 @@ type Config struct {
 	LogRawSOAP     bool
 	AutoFetchInfo  bool
 
+	// MaxParamsPerRequest: 单次 GetParameterValues 最多带多少个参数名。
+	// 真机实测（华为 HN8145X6N）单次最多只回 256 个，超出静默丢弃，所以必须分批。
+	MaxParamsPerRequest int
+
 	LogLevel string
 	LogJSON  bool
 
@@ -39,16 +43,17 @@ type Config struct {
 // Load 按「默认值 -> 环境变量 -> 命令行参数」的顺序装配配置。
 func Load(args []string) (*Config, error) {
 	c := &Config{
-		Listen:         ":7547",
-		Path:           "/acs",
-		DBPath:         "acs.db",
-		Realm:          "acs",
-		SessionTimeout: 60 * time.Second,
-		OfflineAfter:   10 * time.Minute,
-		MaxBodyBytes:   4 << 20,
-		AutoFetchInfo:  true,
-		LogLevel:       "info",
-		RetentionDays:  30,
+		Listen:              ":7547",
+		Path:                "/acs",
+		DBPath:              "acs.db",
+		Realm:               "acs",
+		SessionTimeout:      60 * time.Second,
+		OfflineAfter:        10 * time.Minute,
+		MaxBodyBytes:        4 << 20,
+		MaxParamsPerRequest: 200,
+		AutoFetchInfo:       true,
+		LogLevel:            "info",
+		RetentionDays:       30,
 	}
 
 	// 环境变量
@@ -66,6 +71,8 @@ func Load(args []string) (*Config, error) {
 	fs.Int64Var(&c.MaxBodyBytes, "max-body", c.MaxBodyBytes, "单请求体上限（字节）")
 	fs.BoolVar(&c.LogRawSOAP, "log-soap", c.LogRawSOAP, "是否记录原始 SOAP 报文")
 	fs.BoolVar(&c.AutoFetchInfo, "auto-fetch-info", c.AutoFetchInfo, "Inform 后自动取设备基本信息")
+	fs.IntVar(&c.MaxParamsPerRequest, "max-params-per-request", c.MaxParamsPerRequest,
+		"单次 GetParameterValues 最多带多少个参数名（真机单次上限可能只有 256）")
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "日志级别 debug/info/warn/error")
 	fs.BoolVar(&c.LogJSON, "log-json", c.LogJSON, "日志用 JSON 格式")
 	if err := fs.Parse(args); err != nil {
@@ -124,6 +131,11 @@ func fromEnv(c *Config) {
 	if v := os.Getenv("ACS_OFFLINE_AFTER"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.OfflineAfter = d
+		}
+	}
+	if v := os.Getenv("ACS_MAX_PARAMS_PER_REQUEST"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.MaxParamsPerRequest = n
 		}
 	}
 	if v := os.Getenv("ACS_MAX_BODY"); v != "" {

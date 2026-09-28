@@ -68,6 +68,7 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 | `-session-timeout` | `ACS_SESSION_TIMEOUT` | `60s` | 会话空闲超时 |
 | `-offline-after` | `ACS_OFFLINE_AFTER` | `10m` | 多久没上报算离线 |
 | `-max-body` | `ACS_MAX_BODY` | `4MiB` | 单请求体上限 |
+| `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名（真机单次上限可能只有 256，见下文）|
 | `-auto-fetch-info` | `ACS_AUTO_FETCH_INFO` | `true` | Inform 后自动取设备基本信息 |
 | `-log-level` / `-log-json` | `ACS_LOG_LEVEL` / `ACS_LOG_JSON` | `info` / 否 | 日志 |
 | `-log-soap` | `ACS_LOG_SOAP` | 否 | 打印原始 SOAP 报文（排障用） |
@@ -100,6 +101,9 @@ docs/               需求文档与笔记
 - **CPE→ACS 接收**：`Inform` / `Fault` / 各类 `*Response` / `TransferComplete`（先记录）
 - **Web 界面**：设备列表 + 设备详情（基本信息 / 参数表带过滤 / 任务历史 / Inform 记录）+ 一键「重新获取设备信息」
 - **JSON API**：`/api/devices`、`/api/devices/{id}`
+- **读取任意参数子树**：界面上的「读取参数子树」表单，或
+  `POST /api/devices/{id}/fetch` `{"path":"...","exclude":["..."],"max":200}` ——
+  先 `GetParameterNames` 枚举再 `GetParameterValues` 取值，两步在**同一个会话**里完成
 - **CPE 模拟器**：TR-098 / TR-181 两种数据模型，支持 Connection Request 触发
 
 ## 未实现（后续）
@@ -129,7 +133,7 @@ TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生�
 对应 `internal/cwmp/realdevice_test.go` 里的 4 个用例 —— 以后重构解析逻辑时，
 真机的那些怪癖（大写前缀、自闭合空元素、根节点名大小写写错）会被测到。
 
-## 实现过程中踩到/修掉的三个真问题
+## 实现过程中踩到/修掉的四个真问题
 
 1. **CWMP 命名空间回填写成了版本号**（单测抓到）
    `ParseEnvelope` 一度把 `env.CWMPNS` 设成 `"1.0"` 而不是完整的 `urn:dslforum-org:cwmp-1-0`，
@@ -149,6 +153,15 @@ TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生�
    结果就是回 404、设备永远上不来，而日志里又什么都不会显示。
    现在 `POST /{$}` 也接；并且新增的请求日志中间件会把这类「打进来了但没被处理」的 404/405
    在 **WARN** 级别记下来 —— 以后接新设备时一眼就能看出是路径配错了。
+
+4. **CPE 单次只回 256 个参数，超出静默丢弃**（真机联调 + 读 WiFi 时抓到）
+   我们请求 376 个参数名，华为这台只回了 **256 个（正好 2^8）**，不报错、不告知。
+   旧代码会把「回了一批」当成任务成功 → **默默少采集 120 个参数，没有任何错误信号**。
+   这比协议报错危险得多。
+   → 新增 `MaxParamsPerRequest`（默认 200）自动分批（`enqueueGPVDivided`）；分批不会变慢，
+   因为各批还是同一个会话里依次下发。修完后 376 个参数拆成 200+176 两批，**一条不丢**。
+   另加 `warnIfPartialResponse` 防御：发现「回的比请求的少」就记 WARN。
+   > 这个坑自研模拟器永远发现不了（它会老老实实全返回）—— 又一次说明必须拿真机验收。
 
 ## 相关笔记
 
