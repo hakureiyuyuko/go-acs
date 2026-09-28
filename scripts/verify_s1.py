@@ -812,6 +812,58 @@ def main():
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 
+    print("== 28. 重启设备（红色按钮 + 二次确认 + 不重复下发）==")
+    if did:
+        # 先把之前排队的任务排干净（重启会被“已有在排队”挡住）
+        wait_tasks_done(did, kinds=("Diagnostics",))
+
+        st, h = get(f"/devices/{did}")
+        check("详情页有重启按钮", "重启设备" in h, st)
+        check("重启按钮是红色的（class=danger）", 'class="danger"' in h, st)
+        check("重启表单带二次确认（data-confirm）", "data-confirm=" in h, st)
+        check("确认文案里说明了重启期间会断网", "无法上网" in h or "断开重启" in h, st)
+        st, js = get("/static/app.js")
+        check("前端有二次确认的实现（data-confirm → window.confirm）",
+              "data-confirm" in js and "confirm(" in js, st)
+
+        st, loc = post_form(f"/devices/{did}/reboot", {})
+        check("重启返回 303", st == 303, st)
+        check("界面提示重启已入队", "重启" in urllib.parse.unquote(loc or ""), urllib.parse.unquote(loc or ""))
+
+        full = api_device(did)
+        rb = [t for t in full["tasks"] if t["Kind"] == "Reboot"]
+        check("重启任务已入队", len(rb) == 1, [t["Kind"] for t in full["tasks"]][:5])
+        check("重启任务带 CommandKey", bool(rb and rb[0].get("CommandKey")), rb[0] if rb else None)
+
+        # 还没下发出去（排队中）：不允许再点一次
+        st, loc = post_form(f"/devices/{did}/reboot", {})
+        check("排队中不允许重复重启", st == 303 and "err=1" in (loc or ""), urllib.parse.unquote(loc or ""))
+
+        # 设备回一次会话：应该收到 <cwmp:Reboot> 并回 RebootResponse
+        ok, out = run_sim(workdir, *sim, "-once", "-event", "2 PERIODIC")
+        check("重启会话成功", ok, out[-160:])
+        check("模拟器确实收到了 Reboot 指令", "收到 Reboot" in out, out[-200:])
+        full = wait_tasks_done(did, kinds=("Reboot",))
+        rb = [t for t in full["tasks"] if t["Kind"] == "Reboot"]
+        check("重启任务已完成（设备回了 RebootResponse）",
+              bool(rb) and rb[0]["Status"] == "done", rb[0]["Status"] if rb else None)
+        check("任务结果写明了设备已接受重启",
+              bool(rb) and "重启" in (rb[0]["Result"] or ""), (rb[0]["Result"] if rb else "")[:80])
+        st, h = get(f"/devices/{did}")
+        check("任务历史里能看到这次重启", st == 200 and "Reboot" in h, st)
+
+        # 重启完成后（任务结束）应能再次重启
+        st, loc = post_form(f"/devices/{did}/reboot", {})
+        check("上一次结束后可以再次重启", st == 303 and "err=1" not in (loc or ""),
+              urllib.parse.unquote(loc or ""))
+        # 清掉这条，免得影响后面的用例
+        run_sim(workdir, *sim, "-once", "-event", "2 PERIODIC")
+        wait_tasks_done(did, kinds=("Reboot",))
+
+        # 不存在的设备：不能建出孤儿任务
+        st, loc = post_form("/devices/99999/reboot", {})
+        check("不存在的设备重启返回提示而不是崩", st == 303 and "err=1" in (loc or ""), loc)
+
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")

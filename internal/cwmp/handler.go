@@ -403,8 +403,39 @@ func (s *Server) Diagnose(deviceID int64, host string, count int, iface string) 
 	return err
 }
 
-// fttrProbeCandidates 是「装子设备 / 子光猫」的对象前缀（小写用于比较）。
+// Reboot 给外部（Web/REST）用。
+func (s *Server) Reboot(deviceID int64) error {
+	_, err := s.EnqueueReboot(deviceID)
+	return err
+}
+
+// EnqueueReboot 入队一次重启。
 //
+// 这是**破坏性操作**（设备会立刻断网重启，业务中断几分钟），所以：
+//   - 同一台设备不允许堆多个重启（有排队/进行中的就直接拒绝）；
+//   - 界面上是红色按钮 + 二次确认（见 device.html），后端这里再兜一道。
+//
+// 设备回 RebootResponse 就算「已接受」，之后它会自己断线重启；
+// 重连时会带 1 BOOT 事件回来（那时 devices.LastBootAt 会刷新）。
+func (s *Server) EnqueueReboot(deviceID int64) (int64, error) {
+	if _, err := s.store.GetDevice(deviceID); err != nil {
+		return 0, err
+	}
+	if open, err := s.store.FindOpenTask(deviceID, TaskReboot); err == nil && open != nil {
+		return 0, fmt.Errorf("已经有一次重启在排队或进行中（任务 #%d），不重复下发", open.ID)
+	}
+	id, err := s.store.EnqueueTask(&store.Task{
+		DeviceID:   deviceID,
+		Kind:       TaskReboot,
+		CommandKey: newRPCID(),
+	})
+	if err != nil {
+		return 0, err
+	}
+	s.log.Warn("已入队：重启设备（破坏性操作）", "device_id", deviceID, "task_id", id)
+	return id, nil
+}
+
 // 这件事没有统一标准，所以列候选、探测到哪个用哪个；一个都没探测到就把整个区块藏起来：
 //   - 华为 FTTR：InternetGatewayDevice.X_HW_APDevice.（实测过，就是子光猫表）
 //   - 标准 TR-181 Multi-AP（Wi-Fi Data Elements）：Device.WiFi.DataElements.Network.
@@ -838,6 +869,9 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request, sess *Session,
 		s.onGetParameterNamesResponse(w, sess, env, m)
 	case "SetParameterValuesResponse":
 		s.onSimpleResponse(w, sess, m, "设置参数成功")
+	case "RebootResponse":
+		// 设备只是“接受”了重启；随后它会自己断线重启，重连时带 1 BOOT。
+		s.onSimpleResponse(w, sess, m, "设备已接受重启指令，正在重启…")
 	case "GetRPCMethods":
 		s.writeEnvelope(w, sess, env.ID, GetRPCMethodsResponseBody(supportedRPCs))
 	case "TransferComplete", "AutonomousTransferComplete", "RequestDownload", "Kicked":

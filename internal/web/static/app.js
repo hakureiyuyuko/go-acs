@@ -3,12 +3,28 @@
 //   1. 表格分页：带 data-pager="20" 的表格默认 20 条/页
 //   2. 参数名过滤：过滤之后重新分页（两者是配合关系，不是各干各的）
 //   3. 概览页搜索框：防抖自动提交（服务端过滤）
+//   4. 破坏性操作（重启设备等）的二次确认
 document.addEventListener("DOMContentLoaded", function () {
   var pagers = setupPagers(document);
   wireParamFilter(pagers);
   wireSearchBox();
   wireThemeToggle();
+  wireConfirms();
 });
+
+// ---------- 破坏性操作的二次确认 ----------
+//
+// 要确认的文字写在 form 的 data-confirm 属性上，不是拼在 JS 里：
+// 属性由模板负责转义（设备名里带引号也不会把脚本搞坏），这里只负责弹框。
+function wireConfirms() {
+  document.querySelectorAll("form[data-confirm]").forEach(function (form) {
+    form.addEventListener("submit", function (e) {
+      if (!window.confirm(form.getAttribute("data-confirm"))) {
+        e.preventDefault();
+      }
+    });
+  });
+}
 
 // ---------- 日间 / 夜间模式 ----------
 //

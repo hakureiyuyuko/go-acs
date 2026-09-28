@@ -188,6 +188,7 @@ CWMP 是一条**长轮询式的、CPE 单向发起的** SOAP over HTTP 通道，
 | `Download` | FileType / URL / Username / Password / FileSize / DelaySeconds / SuccessURL / FailureURL / CommandKey | P1 |
 | `Upload` | CPE 上传到 ACS 端 URL（需文件接收端点） | P2 |
 | `Reboot` | CommandKey 关联；需策略控制（避免误重启） | P1 |
+| 〃 | **已实现**：详情页红按钮 + 二次确认；同一设备不重复下发；设备回 RebootResponse 即完成 | ✅ |
 | `FactoryReset` | 高危，默认关闭，需显式白名单 | P2 |
 | `ScheduleInform` | DelaySeconds / CommandKey | P2 |
 

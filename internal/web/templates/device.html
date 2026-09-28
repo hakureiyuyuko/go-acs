@@ -50,6 +50,11 @@
           立即唤醒设备
         </button>
       </form>
+      <form method="post" action="/devices/{{.Device.ID}}/reboot" style="margin-top:8px"
+            data-confirm="确定要重启「{{.Device.DisplayName}}」吗？设备会立刻断开重启，重启期间无法上网（通常几分钟），重连后 TR-069 会自动接回来。">
+        <button type="submit" class="danger"
+                title="下发标准的 Reboot 指令，让设备自己重启（破坏性操作）">重启设备</button>
+      </form>
     </div>
   </div>
   <div class="hint" style="margin:-8px 0 4px">

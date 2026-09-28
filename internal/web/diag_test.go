@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,11 +12,16 @@ import (
 	"acs/internal/store"
 )
 
+// errFake 代替“控制接口返回的拒绝原因”。
+var errFake = errors.New("已经有一次重启在排队")
+
 // stubCtrl 只记录收到的参数，不真下发任务。
 type stubCtrl struct {
 	diagHost  string
 	diagCount int
 	diagIface string
+	reboots   int64 // 收到的重启次数（设备 ID）
+	rebootErr error // 非 nil 时 Reboot 返回这个错
 }
 
 func (c *stubCtrl) RequestRefresh(int64) error { return nil }
@@ -28,6 +34,13 @@ func (c *stubCtrl) WakeDevice(int64) (string, error)         { return "已唤醒
 func (c *stubCtrl) SetParameters(int64, []store.Param) error { return nil }
 func (c *stubCtrl) Diagnose(_ int64, host string, count int, iface string) error {
 	c.diagHost, c.diagCount, c.diagIface = host, count, iface
+	return nil
+}
+func (c *stubCtrl) Reboot(id int64) error {
+	if c.rebootErr != nil {
+		return c.rebootErr
+	}
+	c.reboots = id
 	return nil
 }
 
@@ -67,6 +80,38 @@ func TestHandleDiagnosePassesInterface(t *testing.T) {
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusSeeOther || ctrl.diagIface != "" {
 		t.Fatalf("不填承载接口时应为空：%d %q", w.Code, ctrl.diagIface)
+	}
+}
+
+// 重启按钮：POST 到 /devices/{id}/reboot 要真的调到控制接口，失败时把原因回到界面上。
+func TestHandleReboot(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "acs.db"))
+	if err != nil {
+		t.Fatalf("打开库失败: %v", err)
+	}
+	defer st.Close()
+
+	ctrl := &stubCtrl{}
+	mux := http.NewServeMux()
+	if err := Register(mux, st, ctrl); err != nil {
+		t.Fatalf("挂路由失败: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/devices/9/reboot", nil))
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("应该是 303，得到 %d：%s", w.Code, w.Body.String())
+	}
+	if ctrl.reboots != 9 {
+		t.Fatalf("重启没传到控制接口：%d", ctrl.reboots)
+	}
+
+	// 被拒（例如已经有一次在排队）时：带 err=1 回到详情页，而不是 500
+	ctrl.rebootErr = errFake
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/devices/9/reboot", nil))
+	if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "err=1") {
+		t.Fatalf("拒绝时应带错误提示回跳：%d %s", w.Code, w.Header().Get("Location"))
 	}
 }
 

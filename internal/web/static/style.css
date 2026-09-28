@@ -137,6 +137,9 @@ button.ghost {
   border: 1px solid var(--ghost-line); padding: 4px 10px; font-size: 12.5px;
 }
 button.ghost:hover { background: var(--ghost-hover); }
+/* 破坏性操作（重启等）：红底白字 + 二次确认（确认框文字在 form 的 data-confirm 上） */
+button.danger { background: var(--bad); color: #fff; }
+button.danger:hover { filter: brightness(1.12); }
 .wifi-on { color: var(--ok); }
 .wifi-off { color: var(--dim); }
 input.filter {

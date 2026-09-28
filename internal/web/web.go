@@ -37,6 +37,8 @@ type Controller interface {
 	WakeDevice(deviceID int64) (string, error)
 	// Diagnose 下发一次 ping 诊断。iface 是可选承载接口（留空 = 设备自选）。
 	Diagnose(deviceID int64, host string, count int, iface string) error
+	// Reboot 下发一次重启（破坏性操作，界面上是红按钮 + 二次确认）。
+	Reboot(deviceID int64) error
 	// SetParameters 下发 SetParameterValues（改 WiFi 名字/密码/开关等）。
 	SetParameters(deviceID int64, params []store.Param) error
 }
@@ -80,6 +82,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	mux.HandleFunc("POST /devices/{id}/note", s.handleDeviceNote)
 	mux.HandleFunc("POST /devices/{id}/diagnose", s.handleDiagnose)
 	mux.HandleFunc("POST /devices/{id}/wake", s.handleWake)
+	mux.HandleFunc("POST /devices/{id}/reboot", s.handleReboot)
 	mux.HandleFunc("POST /devices/{id}/fetch", s.handleFetch)
 	mux.HandleFunc("POST /devices/{id}/wifi", s.handleWifi)
 	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", s.handleWifiEdit)
@@ -218,6 +221,36 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 	msg := "诊断已入队，会在设备下次上报时下发"
 	if wakeMsg, werr := s.ctrl.WakeDevice(id); werr == nil {
 		msg = "诊断已入队。" + wakeMsg
+	} else {
+		msg += "（主动唤醒没成功：" + werr.Error() + "）"
+	}
+	http.Redirect(w, r, back+"?msg="+url.QueryEscape(msg), http.StatusSeeOther)
+}
+
+// handleReboot 下发重启。
+//
+// 界面上这个按钮是红色的、且带二次确认（form 上的 data-confirm，见 app.js）；
+// 后端这里不依赖确认框，只负责“不重复下发”和把结果说清楚。
+func (s *Server) handleReboot(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	back := "/devices/" + strconv.FormatInt(id, 10)
+	if s.ctrl == nil {
+		http.Redirect(w, r, back+"?msg="+url.QueryEscape("未接入控制接口")+"&err=1", http.StatusSeeOther)
+		return
+	}
+	if err := s.ctrl.Reboot(id); err != nil {
+		http.Redirect(w, r, back+"?msg="+url.QueryEscape(err.Error())+"&err=1", http.StatusSeeOther)
+		return
+	}
+	// 跟诊断一样：顺手主动唤醒一次。设备在周期上报的话等最多 120 秒，
+	// 唤醒一下就能立刻下发。（唤醒失败不影响正事，只当提示）
+	msg := "重启指令已入队，会在设备下次上报时下发"
+	if wakeMsg, werr := s.ctrl.WakeDevice(id); werr == nil {
+		msg = "重启指令已入队。" + wakeMsg + "；设备会断开重连，几分钟后回来"
 	} else {
 		msg += "（主动唤醒没成功：" + werr.Error() + "）"
 	}
