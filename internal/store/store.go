@@ -6,6 +6,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -95,6 +96,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_device_status ON tasks(device_id, status, i
 var migrations = []string{
 	// 1：设备备注（概览页要展示、要能搜索）
 	`ALTER TABLE devices ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
+	// 2：通用键值配置。
+	// 目前用来存自动生成的 ConnectionRequest 密码 —— 不能每次重启都换，
+	// 否则会把设备上的凭据写来写去。
+	`CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL)`,
 }
 
 // migrate 把库升到当前版本。幂等：已升过的直接跳过。
@@ -115,6 +120,38 @@ func (s *Store) migrate() error {
 		}
 	}
 	return nil
+}
+
+// GetSetting 读一个键值配置。
+func (s *Store) GetSetting(k string) (string, bool, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT v FROM settings WHERE k = ?`, k).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return v, true, nil
+}
+
+// SetSetting 写一个键值配置。
+func (s *Store) SetSetting(k, v string) error {
+	_, err := s.db.Exec(`INSERT INTO settings (k, v) VALUES (?, ?)
+		ON CONFLICT (k) DO UPDATE SET v = excluded.v`, k, v)
+	return err
+}
+
+// GetOrCreateSetting 取出配置；没有就生成一个存下来（用于必须跨重启保持的密钥）。
+func (s *Store) GetOrCreateSetting(k string, generate func() string) (string, bool, error) {
+	if v, ok, err := s.GetSetting(k); err != nil || ok {
+		return v, false, err
+	}
+	v := generate()
+	if err := s.SetSetting(k, v); err != nil {
+		return "", false, err
+	}
+	return v, true, nil
 }
 
 // Open 打开（必要时创建）数据库并建表。

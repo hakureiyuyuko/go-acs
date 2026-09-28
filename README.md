@@ -89,6 +89,9 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 | `-auto-fetch-info` | `ACS_AUTO_FETCH_INFO` | `true` | Inform 后自动取设备基本信息 |
 | `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | 首次纳管/BOOTSTRAP 时自动采集无线概况（看板用）|
 | `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | 首次纳管时探测设备能力（如有没有 FTTR 子设备）|
+| `-connection-request` | `ACS_CONNREQ` | `true` | 允许主动唤醒设备（发 Connection Request）|
+| `-connreq-user` | `ACS_CONNREQ_USER` | `acs` | 主动唤醒的用户名（会写进设备的 ConnectionRequestUsername）|
+| `-connreq-pass` | `ACS_CONNREQ_PASS` | 自动生成并存库 | 主动唤醒的密码（会写进设备的 ConnectionRequestPassword）|
 | `-log-level` / `-log-json` | `ACS_LOG_LEVEL` / `ACS_LOG_JSON` | `info` / 否 | 日志 |
 | `-log-soap` | `ACS_LOG_SOAP` | 否 | 打印原始 SOAP 报文（排障用） |
 
@@ -128,6 +131,12 @@ docs/               需求文档与笔记
 - **设备备注**：设备详情页可写备注（不会下发给设备、也不会被 Inform 冲掉），概览页展示并参与搜索
 - **概览页搜索**：按 序列号 / 备注 / 名称 / 产品类 / OUI / SSID 搜索（服务端过滤，
   结果 URL 可分享；输入后自动搜索，不依赖 JS 也能用搜索按钮）
+- **WAN 连接**：详情页展示每一条 WAN 连接（名称、状态、IP/掩码、网关、MAC、寻址、NAT、业务模式、VLAN、
+  上行时长）—— 没这类参数就整块不显示
+- **主时唤醒（Connection Request）**：给设备发一个 HTTP GET 让它**立刻**回连开一次会话，
+  排队的任务不用再等周期上报（真机实测：从点「诊断」到任务下发 **77 毫秒**，
+  到诊断出结果 4.2 秒；原来是等最多 120 秒）。详情页有「立即唤醒设备」按钮，
+  点「诊断」时也会自动试一次
 - **FTTR 子设备**：详情页展示子光猫 / 子 AP（型号、序列号、MAC、在线、版本、信道、信号、时长）。
   **先探测能力，没有就整块不显示** —— 不给用户看空区块（详见下文「探测」一节）
 - **网络诊断（Ping）**：详情页填 IP/域名与包数，下发标准的 `IPPingDiagnostics`，

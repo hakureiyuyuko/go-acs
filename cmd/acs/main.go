@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -40,6 +42,20 @@ func run(args []string) error {
 	defer st.Close()
 
 	// 上次进程被杀时留下的 running 任务，启动时退回待办（NFR-6）
+	// ConnectionRequest 的密码：没配置就生成一个**存进库**。
+	// 不能每次重启都换 —— 否则每次启动都要把新凭据重新写进设备，
+	// 中间那段时间主动唤醒必然 401。
+	if cfg.ConnReqPass == "" {
+		v, created, err := st.GetOrCreateSetting("connreq_pass", func() string { return randomHex16() })
+		if err != nil {
+			return fmt.Errorf("生成 ConnectionRequest 密码失败: %w", err)
+		}
+		cfg.ConnReqPass = v
+		if created {
+			log.Info("已自动生成 ConnectionRequest 密码并存入库（可用 -connreq-pass 覆盖）")
+		}
+	}
+
 	if n, err := st.ResetRunningTasks(); err == nil && n > 0 {
 		log.Info("上次中断的任务已退回待办", "count", n)
 	}
@@ -52,6 +68,10 @@ func run(args []string) error {
 		AutoFetchDeviceInfo: cfg.AutoFetchInfo,
 		AutoFetchWiFi:       cfg.AutoFetchWiFi,
 		ProbeCapabilities:   cfg.ProbeCapabilities,
+		ConnReqEnabled:      cfg.ConnReqEnabled,
+		ConnReqUser:         cfg.ConnReqUser,
+		ConnReqPass:         cfg.ConnReqPass,
+		ConnReqTimeout:      cfg.ConnReqTimeout,
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		LogRawSOAP:          cfg.LogRawSOAP,
 		OfflineAfter:        cfg.OfflineAfter,
@@ -176,4 +196,14 @@ func newLogger(cfg *config.Config) *slog.Logger {
 		h = slog.NewTextHandler(os.Stdout, opts)
 	}
 	return slog.New(h)
+}
+
+// randomHex16 生成 16 字节的随机十六进制串（ConnectionRequest 密码用）。
+func randomHex16() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// 拿不到随机数就退化成时间戳，至少不会空密码
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }

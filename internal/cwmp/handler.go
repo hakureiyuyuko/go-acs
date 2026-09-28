@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"acs/internal/store"
@@ -130,6 +131,17 @@ type Config struct {
 	LogRawSOAP          bool
 	OfflineAfter        time.Duration // 超过多久没上报就算离线
 
+	// 主时唤醒（Connection Request）：给设备发一个 HTTP GET，让它立刻回连开一次会话，
+	// 于是排队的任务不用等下一次周期上报。
+	//
+	// 难点在认证：真机的 ConnectionRequestURL 要 HTTP Digest，而
+	// ConnectionRequestUsername/Password 两个参数设备**不回读**（实测华为返回空串），
+	// 所以必须由我们自己 provision（它们是可写的）—— 不写就永远只能拿到 401。
+	ConnReqEnabled bool
+	ConnReqUser    string
+	ConnReqPass    string
+	ConnReqTimeout time.Duration
+
 	// MaxParamsPerRequest 是单次 GetParameterValues 最多带上多少个参数名。
 	//
 	// 为什么必须分批：真机实测（华为 HN8145X6N）一次最多只回 256 个参数，
@@ -148,6 +160,10 @@ type Server struct {
 	cfg   Config
 	log   *slog.Logger
 	sess  *sessionManager
+
+	// ConnectionRequest 凭据是否已下发过（这两个参数设备不回读，只能自己记）
+	connReqMu   sync.Mutex
+	connReqDone map[int64]bool
 }
 
 // NewServer 构造 CWMP 服务端。
@@ -260,6 +276,9 @@ var basicInfoSuffixes = []string{
 	"DeviceInfo.ProvisioningCode",
 	"DeviceInfo.UpTime",
 	"ManagementServer.ConnectionRequestURL",
+	// 主时唤醒（Connection Request）要用它们；设备不一定回读明文，取不到就只试无认证的 GET
+	"ManagementServer.ConnectionRequestUsername",
+	"ManagementServer.ConnectionRequestPassword",
 	"ManagementServer.PeriodicInformInterval",
 	"ManagementServer.ParameterKey",
 }
@@ -464,6 +483,54 @@ func wifiSubtreePath(root string) string {
 		return "Device.WiFi."
 	}
 	return root + "LANDevice.1.WLANConfiguration."
+}
+
+// wanSummarySuffixes 是 WAN 连接概况要取的字段。
+//
+// 与 WiFi 同样的做法：先枚举子树拿到真实实例号，再按后缀白名单只取十几个字段，
+// 不把整棵 WAN 子树（真机上有 458 个参数）拉回来。
+var wanSummarySuffixes = []string{
+	".Name",
+	".Enable",
+	".ConnectionStatus",
+	".ConnectionType",
+	".PossibleConnectionTypes",
+	".ExternalIPAddress",
+	".SubnetMask",
+	".DefaultGateway",
+	".MACAddress",
+	".AddressingType",
+	".NATEnabled",
+	".Uptime",
+	".LastConnectionError",
+	".DNSEnabled",
+	".DNSServers",
+	".MaxMTUSize",
+	// 厂商私有（真机上就是这两个在说“这条是 INTERNET / TR069”、VLAN 是多少）
+	".X_HW_VLAN",
+	".X_HW_SERVICELIST",
+}
+
+// wanSubtreePath 返回 WAN 连接对象的路径。
+func wanSubtreePath(root string) string {
+	if strings.HasPrefix(root, "Device.") {
+		return "Device.PPP.Interface."
+	}
+	return "InternetGatewayDevice.WANDevice."
+}
+
+// EnqueueFetchWAN 入队一条「采集 WAN 连接概况」的任务。
+func (s *Server) EnqueueFetchWAN(deviceID int64) (int64, error) {
+	d, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return s.enqueueSubtree(deviceID, gpnPayload{
+		Path:      wanSubtreePath(d.DataModelRoot),
+		ThenFetch: true,
+		Include:   wanSummarySuffixes,
+		SkipStore: true,
+	})
 }
 
 // EnqueueFetchWiFi 入队一条「采集无线概况」的任务。
@@ -825,12 +892,22 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		}
 	}
 
+	// 主动唤醒的前提：设备上的 ConnectionRequest 账号密码得是我们知道的那套。
+	// 设备不回读这两个参数（实测），所以得我们自己 provision。
+	if s.cfg.ConnReqEnabled {
+		s.EnsureConnReqCredentials(deviceID)
+	}
+
 	// 无线概况（看板上的 2.4G/5G 那一栏）：首次纳管 / BOOTSTRAP 时采一次。
 	// 只取十几个摘要字段（SSID/开关/信道/标准/加密/终端数），不会把
 	// 四百多个 WLAN 参数全拉回来，所以对设备负担很小。
 	if s.cfg.AutoFetchWiFi && (created || inf.HasEvent("0 BOOTSTRAP")) {
 		if _, err := s.EnqueueFetchWiFi(deviceID); err != nil {
 			s.log.Warn("入队采集无线概况失败", "device_id", deviceID, "err", err)
+		}
+		// WAN 连接概况（详情页的「WAN 连接」区块），同样只取十几个摘要字段
+		if _, err := s.EnqueueFetchWAN(deviceID); err != nil {
+			s.log.Warn("入队采集 WAN 概况失败", "device_id", deviceID, "err", err)
 		}
 	}
 

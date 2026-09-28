@@ -12,6 +12,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/xml"
 	"flag"
 	"fmt"
@@ -67,9 +69,21 @@ type simulator struct {
 	// pendingDiag 记录“已经开始跑、等着下次会话报结果”的诊断
 	pendingDiag string
 
+	// rootPrefix 当前数据模型根（用于查 ManagementServer 下的参数）
+	rootPrefix string
+	// crNonce 是 Connection Request 监听用的 Digest nonce（进程内固定即可）
+	crNonce string
+
 	// fttr 子设备（FTTR 从光猫/子 AP）的数量。
 	// 默认 0 —— 这样能同时验证「探测不到就不显示区块」那条。
 	fttr int
+
+	// noWAN 为真时不建 WAN 连接对象（验证“没这类参数就不显示 WAN 区块”）
+	noWAN bool
+
+	// crUser/crPass 非空时，Connection Request 监听强制要求这套凭据
+	// （不依赖设备参数，测试里可以确定性地验证 Digest 实现）
+	crUser, crPass string
 }
 
 func main() {
@@ -80,6 +94,8 @@ func main() {
 	var ignoreSet string
 	var writeOnly string
 	var diagDelay bool
+	var noWAN bool
+	var crUser, crPass string
 	flag.StringVar(&s.acsURL, "acs", "http://127.0.0.1:7547/acs", "ACS 的 CWMP 地址")
 	flag.StringVar(&s.user, "user", "", "CPE→ACS 认证账号")
 	flag.StringVar(&s.pass, "pass", "", "CPE→ACS 认证密码")
@@ -98,8 +114,13 @@ func main() {
 	flag.StringVar(&writeOnly, "write-only", "", "模拟“能改不能读”的参数名子串（逗号分隔，写接受但读回为空）")
 	flag.BoolVar(&diagDelay, "diag-delay", false, "ping 诊断改为异步：下次会话才出结果并带事件 8 DIAGNOSTICS COMPLETE")
 	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
+	flag.BoolVar(&noWAN, "no-wan", false, "不模拟 WAN 连接对象（用于验证“没有就不显示”）")
+	flag.StringVar(&crUser, "cr-user", "", "Connection Request 监听要求的用户名（留空则用设备参数里的）")
+	flag.StringVar(&crPass, "cr-pass", "", "Connection Request 监听要求的密码")
 	flag.Parse()
 	s.diagDelay = diagDelay
+	s.noWAN = noWAN
+	s.crUser, s.crPass = crUser, crPass
 
 	for _, part := range strings.Split(ignoreSet, ",") {
 		if p := strings.TrimSpace(part); p != "" {
@@ -119,6 +140,8 @@ func main() {
 		specVersion = "2.0"
 	}
 
+	s.rootPrefix = rootPrefix
+	s.crNonce = fmt.Sprintf("%016x", time.Now().UnixNano())
 	s.buildParams(rootPrefix, specVersion)
 
 	// 起一个本地 HTTP 服务当 ConnectionRequestURL，并把它写进参数表
@@ -197,8 +220,20 @@ func (s *simulator) buildParams(root, specVersion string) {
 	set(ms+"ConnectionRequestUsername", "cpe-cr", "string")
 	set(ms+"ParameterKey", "", "string")
 
-	set(wan+"ExternalIPAddress", "203.0.113.7", "string")
-	set(wan+"ConnectionStatus", "Connected", "string")
+	if !s.noWAN {
+		set(wan+"ExternalIPAddress", "203.0.113.7", "string")
+		set(wan+"ConnectionStatus", "Connected", "string")
+		set(wan+"Name", "1_INTERNET_R_VID_", "string")
+		set(wan+"SubnetMask", "255.255.255.0", "string")
+		set(wan+"DefaultGateway", "203.0.113.1", "string")
+		set(wan+"MACAddress", "00:11:22:33:44:AA", "string")
+		set(wan+"AddressingType", "DHCP", "string")
+		set(wan+"NATEnabled", "1", "boolean")
+		set(wan+"ConnectionType", "IP_Routed", "string")
+		set(wan+"Uptime", "12345", "unsignedInt")
+		set(wan+"X_HW_VLAN", "41", "unsignedInt")
+		set(wan+"X_HW_SERVICELIST", "INTERNET", "string")
+	}
 
 	// 无线参数。
 	// 特意把实例号做成 **1 和 5**（不是 1 和 2）—— 真机（华为 HN8145X6N）就是这么编号的，
@@ -297,7 +332,26 @@ func (s *simulator) startConnectionRequestServer(port int) (string, error) {
 	}
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("收到 Connection Request：%s %s", r.Method, r.URL.String())
+		// 模仿真机：只要设备上配了 ConnectionRequest 账号密码，就要求 HTTP Digest。
+		// 注意这里是**独立实现**一遍校验（不调 ACS 那边的代码），
+		// 这样才真的能验证客户端的 Digest 算得对不对。
+		user, pass := s.crUser, s.crPass
+		if user == "" {
+			user = s.params[s.rootPrefix+"ManagementServer.ConnectionRequestUsername"]
+			pass = s.params[s.rootPrefix+"ManagementServer.ConnectionRequestPassword"]
+		}
+		if user != "" {
+			if !checkDigest(r.Header.Get("Authorization"), r.Method, r.URL.RequestURI(), user, pass, s.crNonce) {
+				w.Header().Set("WWW-Authenticate",
+					`Digest realm="SimHomeGateway",nonce="`+s.crNonce+`",qop="auth",algorithm="MD5"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				log.Printf("Connection Request 认证失败，已回 401 挑战")
+				return
+			}
+			log.Printf("Connection Request 认证通过（Digest，用户 %s）", user)
+		} else {
+			log.Printf("收到 Connection Request（设备没配账号，不要求认证）")
+		}
 		w.WriteHeader(http.StatusOK)
 		select {
 		case s.crCh <- struct{}{}:
@@ -762,4 +816,73 @@ func truncate(b []byte) string {
 		return s[:300] + "..."
 	}
 	return s
+}
+
+// ---------- Connection Request 的 Digest 校验（独立实现） ----------
+
+// checkDigest 按 RFC 2617 校验一个 Digest 头。
+// 这里刻意不复用 ACS 那边的代码：两套独立实现才能互相验证。
+func checkDigest(header, method, uri, user, pass, nonce string) bool {
+	if !strings.HasPrefix(strings.ToLower(header), "digest ") {
+		return false
+	}
+	ps := parseDigestParams(header[len("Digest "):])
+	if ps["username"] != user || ps["nonce"] != nonce {
+		return false
+	}
+	gotURI := ps["uri"]
+	if gotURI == "" {
+		gotURI = uri
+	}
+	ha1 := md5hexSim(user + ":" + ps["realm"] + ":" + pass)
+	ha2 := md5hexSim(method + ":" + gotURI)
+	var want string
+	if ps["qop"] == "auth" {
+		want = md5hexSim(ha1 + ":" + nonce + ":" + ps["nc"] + ":" + ps["cnonce"] + ":auth:" + ha2)
+	} else {
+		want = md5hexSim(ha1 + ":" + nonce + ":" + ha2)
+	}
+	return want == ps["response"]
+}
+
+// parseDigestParams 解析 `k=v, k="v"` 形式（引号内的逗号不切）。
+func parseDigestParams(s string) map[string]string {
+	out := map[string]string{}
+	var cur strings.Builder
+	inQuote := false
+	flush := func() {
+		part := strings.TrimSpace(cur.String())
+		cur.Reset()
+		if part == "" {
+			return
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			return
+		}
+		k := strings.ToLower(strings.TrimSpace(kv[0]))
+		v := strings.TrimSpace(kv[1])
+		if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+			v = v[1 : len(v)-1]
+		}
+		out[k] = v
+	}
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+			cur.WriteRune(r)
+		case r == ',' && !inQuote:
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return out
+}
+
+func md5hexSim(s string) string {
+	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

@@ -138,8 +138,12 @@ func TestParseRealHuaweiGetParameterValuesResponse(t *testing.T) {
 	}
 
 	params := ParseParamValues(env.Method.Child("ParameterList"))
-	if len(params) != len(basicInfoSuffixes) {
-		t.Errorf("参数个数 = %d，期望 %d", len(params), len(basicInfoSuffixes))
+	// 注意：这里断言的是**抓包本身**的参数个数（当时请求了 14 个），
+	// 不能写成 len(basicInfoSuffixes) —— 那样以后往请求清单里加字段就会把这个
+	// 历史抓包的回归测试弄挂，而抓包是死的、不该跟着变。
+	const capturedCount = 14
+	if len(params) != capturedCount {
+		t.Errorf("参数个数 = %d，期望 %d（历史抓包固定就是这个数）", len(params), capturedCount)
 	}
 
 	byName := map[string]ParamValue{}
@@ -177,8 +181,8 @@ func TestOurOwnRequestHasNoSubtreePaths(t *testing.T) {
 	for _, k := range names.Kids {
 		got = append(got, k.Trimmed())
 	}
-	if len(got) != len(basicInfoSuffixes) {
-		t.Errorf("参数个数 = %d，期望 %d", len(got), len(basicInfoSuffixes))
+	if len(got) != 14 {
+		t.Errorf("参数个数 = %d，期望 14（历史抓包固定就是这个数）", len(got))
 	}
 	for _, n := range got {
 		if strings.HasSuffix(n, ".") {

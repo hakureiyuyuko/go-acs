@@ -391,6 +391,79 @@ POST /api/devices/2/names {"path":"InternetGatewayDevice.","next_level":true}
 3. `X_HW_SmartTopo.` 对象存在（7 个参数：RSSI 阈值、丢包率阈值、测量时长等），
    但**全是空的** —— 对象有不代表有数据，界面要能优雅地空着。
 
+### 主时唤醒（Connection Request）：不用再等周期上报
+
+需求原话是「ping 之类的信息能不能通过 ConnectionRequestURL 立刻拿结果，而不是等下一次上报」。
+能 —— 这就是 TR-069 Annex A 的 Connection Request。
+
+#### 真机实测（最有说服力的一段）
+
+```
+16:19:10.261  已入队：ping 诊断
+16:19:10.272  主动唤醒成功
+16:19:10.331  收到 Inform  events="6 CONNECTION REQUEST"   ← 59 毫秒后设备就回连了
+16:19:10.338  下发任务 task_id=52 kind=Diagnostics         ← 立刻下发
+16:19:14.471  诊断完成
+```
+
+**从点「诊断」到任务下发 77 毫秒，到出结果 4.2 秒。** 原来是等下一次周期上报，
+真机上最多 120 秒。
+
+#### 路上碰到的真问题：设备不回读 ConnectionRequest 账号密码
+
+直接 GET 设备的 ConnectionRequestURL，得到的是一一 401 + Digest 挑战：
+
+```
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Digest realm="HuaweiHomeGateway",nonce="…",qop="auth",algorithm="MD5"
+```
+
+要认证，但**设备就是不回读** `ConnectionRequestUsername` / `ConnectionRequestPassword`
+（实测两个都是空串）。查了一下，这两个参数**可写** —— 所以答案就是：
+**ACS 自己 provision 它们**。这也是标准做法（凭据本来就是 ACS 配的）。
+
+实现上的两个坑：
+
+1. **不能只在 BOOTSTRAP 时 provision**。已纳管的设备大多只发 `2 PERIODIC`，
+   那样永远写不进去。改成每轮 Inform 都检查，但用**进程内标记**拦住重复下发：
+   这两个参数设备不回读，我们无从从库里确认它已经生效，只能自己记。
+2. **密码必须跳重启稳定**。不然每次重启 ACS 都会换一个密码，
+   然后要把新凭据重新写进每台设备，中间那段时间唤醒必然 401。
+   所以新增了一张 `settings` 表（迁移 #2），自动生成的密码存进去。
+
+#### Digest 实现是用标准测试向量验证的
+
+Digest 算错了**不会报错，只会一直 401** —— 这是最难 debug 的一类 bug。
+所以直接拿 **RFC 2617 第 3.5 节的例子**当测试向量，把 HA1/HA2/response 三步都对一遍。
+另加用例：引号内含逗号的挑战、无 qop 的老式挑战、Basic。
+
+> 模拟器那边**独立实现**了一遍 Digest 校验（不调 ACS 的代码）。
+> 两边各写一遍才能互相验证 —— 只用自己的实现在自己身上试，算错了一起错。
+
+#### 不依赖厂商：非标准化的部分
+
+- 认证方式：Digest 与 Basic 都支持（设备用 `WWW-Authenticate` 告诉我们要哪个）。
+- 只接受 http/https：ConnectionRequestURL 是设备给的，不能让它把我们指向别的协议。
+- 唤醒失败不影响正事：任务仍然会在下一次周期上报时下发，只是慢一点。
+
+### WAN 连接信息
+
+跟 WiFi 同一套做法：枚举子树拿到真实实例号，再按后缀白名单只取十几个字段
+（真机整棵 WAN 子树有 458 个参数，摘要只取 19 个）。
+
+读出来的东西（真机）：
+
+| 连接 | 状态 | IP / 掩码 | 网关 | MAC | 寻址 | 业务 | VLAN |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1_INTERNET_R_VID_ | Connected | 192.168.10.21 / 255.255.252.0 | 192.168.10.1 | 02:A0:BE:48:50:9B | DHCP | INTERNET | 0 |
+| 2_TR069_R_VID_ | Connected | 192.168.10.22 / 255.255.252.0 | 192.168.10.1 | 02:A0:BE:48:50:9C | DHCP | TR069 | 0 |
+
+两个如实展示、不装作有的地方：
+
+- **上行时长**：标准参数是 `WANIPConnection.Uptime`，但**两台真机都返回空**，
+  所以这列显示 `-`（商用 ACS 截图里那个「1天15小时…」在你这台设备上取不到）。
+- **VLAN**：标准模型里没有这个概念，只有厂商私有的 `X_HW_VLAN`，探测到才显示。
+
 ### FTTR 子设备：先探测能力，没有就整块不显示
 
 需求是「详情页加子设备区块，但先探测设备有没有这个能力，**没有的不显示**」。
@@ -745,7 +818,7 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
 | 项目 | 结果 |
 | --- | --- |
 | `go test ./...` | 全部通过（`internal/cwmp` 29 个用例、`internal/store` 7 个用例、`internal/web` 11 个用例）|
-| `scripts/verify-s1.sh` | **通过 142 / 失败 0** |
+| `scripts/verify-s1.sh` | **通过 156 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
 | 真机（华为 HN8145X6N + V271-20） | **两台不同型号均自动纳管成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |

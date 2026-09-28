@@ -32,6 +32,17 @@ type Config struct {
 	AutoFetchWiFi     bool
 	ProbeCapabilities bool
 
+	// 主动唤醒（Connection Request）：给设备发一个 HTTP GET，让它立刻回连开一次会话，
+	// 于是排队的任务不用等下一次周期上报。
+	//
+	// 认证上有个必须知道的坑：真机的 ConnectionRequestURL 要 HTTP Digest，
+	// 而 ConnectionRequestUsername / Password 两个参数设备**不回读**（实测华为返回空串），
+	// 所以只能由我们自己 provision（它们是可写的）。
+	ConnReqEnabled bool
+	ConnReqUser    string
+	ConnReqPass    string
+	ConnReqTimeout time.Duration
+
 	// MaxParamsPerRequest: 单次 GetParameterValues 最多带多少个参数名。
 	// 真机实测（华为 HN8145X6N）单次最多只回 256 个，超出静默丢弃，所以必须分批。
 	MaxParamsPerRequest int
@@ -56,6 +67,9 @@ func Load(args []string) (*Config, error) {
 		AutoFetchInfo:       true,
 		AutoFetchWiFi:       true,
 		ProbeCapabilities:   true,
+		ConnReqEnabled:      true,
+		ConnReqUser:         "acs",
+		ConnReqTimeout:      10 * time.Second,
 		LogLevel:            "info",
 		RetentionDays:       30,
 	}
@@ -77,6 +91,9 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&c.AutoFetchInfo, "auto-fetch-info", c.AutoFetchInfo, "Inform 后自动取设备基本信息")
 	fs.BoolVar(&c.AutoFetchWiFi, "auto-fetch-wifi", c.AutoFetchWiFi, "首次纳管/BOOTSTRAP 时自动采集无线概况（看板用）")
 	fs.BoolVar(&c.ProbeCapabilities, "probe-capabilities", c.ProbeCapabilities, "首次纳管时探测设备能力（如有没有 FTTR 子设备）")
+	fs.BoolVar(&c.ConnReqEnabled, "connection-request", c.ConnReqEnabled, "允许主动唤醒设备（发 Connection Request）")
+	fs.StringVar(&c.ConnReqUser, "connreq-user", c.ConnReqUser, "主动唤醒的用户名（会写进设备的 ConnectionRequestUsername）")
+	fs.StringVar(&c.ConnReqPass, "connreq-pass", c.ConnReqPass, "主动唤醒的密码（会写进设备的 ConnectionRequestPassword；留空则由 main 生成并存在库里）")
 	fs.IntVar(&c.MaxParamsPerRequest, "max-params-per-request", c.MaxParamsPerRequest,
 		"单次 GetParameterValues 最多带多少个参数名（真机单次上限可能只有 256）")
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "日志级别 debug/info/warn/error")
@@ -134,6 +151,15 @@ func fromEnv(c *Config) {
 	}
 	if v := os.Getenv("ACS_PROBE_CAPABILITIES"); v != "" {
 		c.ProbeCapabilities = parseBool(v)
+	}
+	if v := os.Getenv("ACS_CONNREQ"); v != "" {
+		c.ConnReqEnabled = parseBool(v)
+	}
+	if v := os.Getenv("ACS_CONNREQ_USER"); v != "" {
+		c.ConnReqUser = v
+	}
+	if v := os.Getenv("ACS_CONNREQ_PASS"); v != "" {
+		c.ConnReqPass = v
 	}
 	if v := os.Getenv("ACS_SESSION_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

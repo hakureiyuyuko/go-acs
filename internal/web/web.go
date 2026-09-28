@@ -33,6 +33,8 @@ type Controller interface {
 	FetchWiFi(deviceID int64) error
 	// FetchNames 只枚举参数名不取值（浏览参数树）。
 	FetchNames(deviceID int64, path string, nextLevel bool) error
+	// WakeDevice 主动唤醒设备（发 Connection Request），返回给用户看的一句话。
+	WakeDevice(deviceID int64) (string, error)
 	// Diagnose 下发一次 ping 诊断。
 	Diagnose(deviceID int64, host string, count int) error
 	// SetParameters 下发 SetParameterValues（改 WiFi 名字/密码/开关等）。
@@ -77,6 +79,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	mux.HandleFunc("POST /devices/{id}/refresh", s.handleRefresh)
 	mux.HandleFunc("POST /devices/{id}/note", s.handleDeviceNote)
 	mux.HandleFunc("POST /devices/{id}/diagnose", s.handleDiagnose)
+	mux.HandleFunc("POST /devices/{id}/wake", s.handleWake)
 	mux.HandleFunc("POST /devices/{id}/fetch", s.handleFetch)
 	mux.HandleFunc("POST /devices/{id}/wifi", s.handleWifi)
 	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", s.handleWifiEdit)
@@ -165,6 +168,26 @@ func deviceMatches(d *store.Device, bands []WifiBand, q string) bool {
 // diagTaskKind 是 ping 诊断的任务类型，必须与 cwmp.TaskDiagnostics 一致。
 const diagTaskKind = "Diagnostics"
 
+// handleWake 主动唤醒设备（发 Connection Request），让排队的任务立刻下发。
+func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	back := "/devices/" + strconv.FormatInt(id, 10)
+	if s.ctrl == nil {
+		http.Redirect(w, r, back+"?msg="+url.QueryEscape("未接入控制接口")+"&err=1", http.StatusSeeOther)
+		return
+	}
+	msg, err := s.ctrl.WakeDevice(id)
+	if err != nil {
+		http.Redirect(w, r, back+"?msg="+url.QueryEscape(err.Error())+"&err=1", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, back+"?msg="+url.QueryEscape(msg), http.StatusSeeOther)
+}
+
 // handleDiagnose 下发一次 ping 诊断。
 func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -187,7 +210,15 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, back+"?msg="+url.QueryEscape(err.Error())+"&err=1", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, back+"?msg="+url.QueryEscape("诊断已入队，会在设备下次上报时下发（设备跑完 ping 后会再回报一次结果）"), http.StatusSeeOther)
+	// 顺手主动唤醒一次：商用 ACS 就是这么做到“点完几秒出结果”的。
+	// 唤醒失败也不影响正事（任务仍然会在下一次周期上报时下发），所以只把它当提示。
+	msg := "诊断已入队，会在设备下次上报时下发"
+	if wakeMsg, werr := s.ctrl.WakeDevice(id); werr == nil {
+		msg = "诊断已入队。" + wakeMsg
+	} else {
+		msg += "（主动唤醒没成功：" + werr.Error() + "）"
+	}
+	http.Redirect(w, r, back+"?msg="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 // handleDeviceNote 保存设备备注。
@@ -269,24 +300,29 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 
 	// FTTR 子设备：**探测不到就整块不显示**（不是显示一个空区块）
 	fttr, hasFttr := FttrOverview(params)
+	// WAN 连接：同样，没这类参数就不渲染
+	wan, hasWan := WanOverview(params)
 
 	data := map[string]any{
-		"Device":      d,
-		"Fttr":        fttr,
-		"HasFttr":     hasFttr,
-		"FttrOnline":  fttrOnlineCount(fttr),
-		"Diag":        diag,
-		"DiagHost":    diagHost,
-		"DiagRunning": diag != nil && (diag.Status == store.TaskRunning || diag.Status == store.TaskPending),
-		"Notice":      strings.TrimSpace(r.URL.Query().Get("msg")),
-		"NoticeErr":   r.URL.Query().Get("err") == "1",
-		"Basic":       basicInfo(d, params),
-		"Params":      params,
-		"Tasks":       tasks,
-		"Informs":     informs,
-		"Pending":     pending,
-		"WiFi":        WifiOverview(wifiParams[id]),
-		"Path":        "/devices/" + strconv.FormatInt(id, 10),
+		"Device":       d,
+		"Fttr":         fttr,
+		"HasFttr":      hasFttr,
+		"FttrOnline":   fttrOnlineCount(fttr),
+		"Wan":          wan,
+		"HasWan":       hasWan,
+		"WanConnected": wanConnCount(wan),
+		"Diag":         diag,
+		"DiagHost":     diagHost,
+		"DiagRunning":  diag != nil && (diag.Status == store.TaskRunning || diag.Status == store.TaskPending),
+		"Notice":       strings.TrimSpace(r.URL.Query().Get("msg")),
+		"NoticeErr":    r.URL.Query().Get("err") == "1",
+		"Basic":        basicInfo(d, params),
+		"Params":       params,
+		"Tasks":        tasks,
+		"Informs":      informs,
+		"Pending":      pending,
+		"WiFi":         WifiOverview(wifiParams[id]),
+		"Path":         "/devices/" + strconv.FormatInt(id, 10),
 		// 表单默认值：按设备的数据模型根猜一个 WiFi 路径（只是默认值，用户可改）
 		"DefaultPath": defaultFetchPath(d),
 	}

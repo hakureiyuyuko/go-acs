@@ -368,7 +368,9 @@ def main():
         check("重定向里标明了入队条数=1", "queued=1" in (loc or ""), loc)
 
         full = api_device(did)
-        spv = [t for t in full["tasks"] if t["Kind"] == "SetParameterValues"]
+        # 排除 ACS 自己 provision ConnectionRequest 凭据那条
+        spv = [t for t in full["tasks"]
+               if t["Kind"] == "SetParameterValues" and "ConnectionRequest" not in t["Payload"]]
         check("已入队 SetParameterValues", len(spv) == 1, [(t["Kind"], t["Status"]) for t in full["tasks"][:3]])
         if spv:
             try:
@@ -672,7 +674,85 @@ def main():
               insts[:2] == ["1", "4"], insts)
         check("显示了子设备采集时间", "采集" in sec)
 
-    print("== 25. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 25. WAN 连接（有就显示、没有就不显示）==")
+    if did:
+        st, h = get(f"/devices/{did}")
+        check("显示了「WAN 连接」区块", "WAN 连接" in h)
+        check("显示了连接的 IP 与掩码", "203.0.113.7" in h and "255.255.255.0" in h)
+        check("显示了网关", "203.0.113.1" in h)
+        check("显示了寻址方式与 NAT", "DHCP" in h and "NAT" in h)
+        check("显示了厂商私有的业务模式与 VLAN", "INTERNET" in h and ">41<" in h)
+        check("连接名能看到", "1_INTERNET_R_VID_" in h)
+
+    # 没有 WAN 对象的设备：整块不显示
+    ok, out = run_sim(workdir, "-serial", "VERIFY-NOWAN", "-oui", "001122", "-no-wan",
+                      "-once", "-event", "0 BOOTSTRAP")
+    check("无 WAN 设备注册会话成功", ok, out[-160:])
+    nw = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-NOWAN"]
+    if nw:
+        st, h = get(f"/devices/{nw[0]['ID']}")
+        check("没有 WAN 对象的设备不显示该区块", "WAN 连接" not in h)
+
+    print("== 26. 主动唤醒（Connection Request + Digest）==")
+    if did:
+        # 把设备侧的 ConnectionRequest 账号密码 provision 进去（ACS 启动后首次 Inform 会做）
+        full = api_device(did)
+        prov = [t for t in full["tasks"]
+                if t["Kind"] == "SetParameterValues" and "ConnectionRequestUsername" in t["Payload"]]
+        check("已把 ConnectionRequest 凭据 provision 进设备", len(prov) >= 1, len(prov))
+        check("凭据下发成功", any(t["Status"] == "done" for t in prov),
+              [(t["ID"], t["Status"], t["Result"][:40]) for t in prov])
+
+        # 模拟器带 Connection Request 监听跑起来（它会用我们 provision 的凭据要 Digest）
+        # 先确定 CR 端口
+        import socket as _sock
+        ls = _sock.socket()
+        ls.bind(("127.0.0.1", 0))
+        crport = ls.getsockname()[1]
+        ls.close()
+        proc = subprocess.Popen(
+            [workdir + "/cpesim", "-acs", CWMP, "-serial", "VERIFY098", "-oui", "001122",
+             "-interval", "25s", "-cr-port", str(crport),
+             "-cr-user", "acs", "-cr-pass", "verify-connreq-pass"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            # 等它把**带这个端口**的 ConnectionRequestURL 报上来。
+            # 注意不能只等“URL 非空”—— 之前几轮的模拟器进程留下过别的端口，
+            # 那样唤醒会打到没人监听的地址上（这里踩过一次）。
+            got_url = False
+            for _ in range(40):
+                time.sleep(1)
+                d2 = api_device(did)["device"]
+                if f":{crport}/" in (d2.get("ConnRequestURL") or ""):
+                    got_url = True
+                    break
+            check("拿到带本次监听端口的 ConnectionRequestURL", got_url,
+                  api_device(did)["device"].get("ConnRequestURL"))
+
+            st, loc = post_form(f"/devices/{did}/wake", {})
+            check("唤醒请求返回 303", st == 303, st)
+            check("唤醒成功（不是失败提示）", "err=1" not in (loc or ""),
+                  urllib.parse.unquote(loc or ""))
+
+            # 设备应当立刻回连开一次会话（Inform 事件 6），
+            # 我们把上次事件记在设备上，所以可以从 API 看到
+            seen = False
+            for _ in range(15):
+                time.sleep(1)
+                ev = api_device(did)["device"].get("LastEvents", "")
+                if "6 CONNECTION REQUEST" in ev:
+                    seen = True
+                    break
+            check("设备收到唤醒后立刻回连（Inform 事件 6）", seen,
+                  api_device(did)["device"].get("LastEvents"))
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+
+    print("== 27. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 

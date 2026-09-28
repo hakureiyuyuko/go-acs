@@ -44,6 +44,12 @@
       <form method="post" action="/devices/{{.Device.ID}}/refresh" style="margin-top:6px">
         <button type="submit">重新获取设备信息</button>
       </form>
+      <form method="post" action="/devices/{{.Device.ID}}/wake" style="margin-top:8px">
+        <button type="submit" class="ghost"
+                title="给设备发 Connection Request，让它立刻回连开一次会话 —— 排队的任务就不用等下一次周期上报">
+          立即唤醒设备
+        </button>
+      </form>
     </div>
   </div>
   <div class="hint" style="margin:-8px 0 4px">
@@ -63,6 +69,41 @@
   <div class="hint" style="margin-top:-4px">
     备注只存在本地，不会下发给设备；概览页会显示它，也参与搜索。
   </div>
+
+  {{if .HasWan}}
+  <h2>WAN 连接</h2>
+  <div class="hint" style="margin-bottom:10px">
+    共 {{len .Wan}} 条连接，已连接 {{.WanConnected}} 条。
+    数据来自标准的 WANIPConnection / WANPPPConnection 对象；
+    业务模式与 VLAN 在真机上是厂商私有参数（X_HW_*），探测到才显示。
+  </div>
+  <table>
+    <thead>
+      <tr><th>连接</th><th>状态</th><th>IP / 掩码</th><th>网关</th><th>MAC</th>
+          <th>寻址 / NAT</th><th>业务</th><th>VLAN</th><th>时长</th><th>采集</th></tr>
+    </thead>
+    <tbody>
+      {{range .Wan}}
+      <tr>
+        <td><span class="mono">{{.WanLabel}}</span> <span class="hint">{{.WanKind}}</span></td>
+        <td>
+          {{if .Status}}
+            <span class="badge {{if eq .Status "Connected"}}on{{else}}off{{end}}">{{.Status}}</span>
+          {{else}}<span class="hint">-</span>{{end}}
+        </td>
+        <td class="mono">{{if .IP}}{{.IP}}{{if .Mask}} / {{.Mask}}{{end}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Gateway}}{{.Gateway}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .MAC}}{{.MAC}}{{else}}-{{end}}</td>
+        <td>{{if .Addressing}}{{.Addressing}}{{else}}-{{end}}{{if .NAT}} <span class="hint">{{.NAT}}</span>{{end}}</td>
+        <td>{{if .Service}}{{.Service}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .VLAN}}{{.VLAN}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Uptime}}{{.Uptime}}{{else}}-{{end}}</td>
+        <td class="mono hint">{{fmtTimeShort .Updated}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
 
   <h2>基本信息</h2>
   <div class="kvs">

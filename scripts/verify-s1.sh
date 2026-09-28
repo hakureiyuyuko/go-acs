@@ -34,7 +34,9 @@ go build -o "$WORK/cpesim" ./test/cpesim || exit 1
 echo "  到 $WORK"
 
 echo "== 起 ACS（端口 $PORT，库 $DB）=="
-ACS_LISTEN=":$PORT" ACS_DB="$DB" ACS_LOG_LEVEL=info \
+# 固定 ConnectionRequest 凭据：让「主动唤醒」的 Digest 那条能被确定性地测到
+ACS_CONNREQ_USER=acs ACS_CONNREQ_PASS=verify-connreq-pass \
+  ACS_LISTEN=":$PORT" ACS_DB="$DB" ACS_LOG_LEVEL=info \
   "$WORK/acs" >"$LOG" 2>&1 &
 ACSPID=$!
 
