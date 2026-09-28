@@ -360,3 +360,13 @@ TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生�
 
 - `docs/requirements.md` —— 需求与设计（含协议时序、数据模型、里程碑）
 - `docs/notes/implementation-notes.md` —— 实现笔记与实测记录
+
+## 许可证
+
+以 **GNU Affero General Public License v3.0（AGPL-3.0）** 发布，全文见 [`LICENSE`](LICENSE)。
+
+Copyright (C) 2026 hakureiyuyuko
+
+可以自由使用、修改、分发（含商用）；但如果把**修改后**的版本作为网络服务提供给别人使用，
+必须把对应的源码也以同样的许可开放 —— 这是 AGPL 与 GPL 的关键区别，对「把 ACS 部署成云端服务」
+这种用法尤其要注意。
