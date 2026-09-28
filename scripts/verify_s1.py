@@ -1166,12 +1166,14 @@ def main():
 
         st, h = get("/settings")
         check("设置页能打开", st == 200 and "设置" in h, st)
-        check("设置页显示当前生效的监听与账号",
-              "当前生效" in h and "已启用" in h and user in h, st)
+        check("设置页显示当前监听与访问控制状态",
+              "ACS 监听" in h and "面板监听" in h and "已启用" in h and user in h, st)
         check("设置页有 ACS 监听 / 面板监听 / 账号 / 新密码各一栏",
               'name="acs_listen"' in h and 'name="web_listen"' in h
               and 'name="web_user"' in h and 'name="web_pass"' in h, st)
-        check("设置页写明「重启后生效」", "重启 ACS" in h, st)
+        check("设置页只有标签/字段/按钮，没有说明性文档",
+              "HTTP Basic" not in h and "反向代理" not in h and "忘记" not in h
+              and "重启服务后生效" not in h, st)
 
         # 保存监听地址（面板留空 = 与 ACS 同端口）
         st, loc = post_form("/settings", {
@@ -1179,7 +1181,8 @@ def main():
             "auth": "1", "web_user": user, "web_pass": "", "web_pass2": "",
         })
         check("保存设置返回 303", st == 303, st)
-        check("提示里说了改成了什么", ":19090" in urllib.parse.unquote(loc or ""),
+        check("保存后的提示只说改了哪一类、什么时候生效",
+              "已保存" in urllib.parse.unquote(loc or "") and "重启服务后生效" in urllib.parse.unquote(loc or ""),
               urllib.parse.unquote(loc or ""))
         con = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
         saved = dict(con.execute("select k, v from settings"))
@@ -1187,7 +1190,7 @@ def main():
         check("监听地址已写进 settings 表", saved.get("listen") == ":19090", saved.get("listen"))
         check("面板监听写成了空（= 与 ACS 同端口）", saved.get("web_listen", None) == "", saved.get("web_listen"))
         st, h = get("/settings")
-        check("设置页提示监听地址改动要重启才生效", "才生效" in h, st)
+        check("设置页提示监听地址改动需重启后生效", "重启服务后生效" in h, st)
 
         # 非法输入要被拦下
         st, loc = post_form("/settings", {"acs_listen": "abc", "web_listen": "",
@@ -1206,7 +1209,7 @@ def main():
                                           "web_pass": "verify-new-pass", "web_pass2": "verify-new-pass"})
         check("改密码返回 303", st == 303 and "err=1" not in (loc or ""),
               urllib.parse.unquote(loc or ""))
-        check("提示里说明了账号密码立即生效", "立即生效" in urllib.parse.unquote(loc or ""),
+        check("提示里说明了账号密码已生效", "账号密码已生效" in urllib.parse.unquote(loc or ""),
               urllib.parse.unquote(loc or ""))
         check("旧密码立刻失效 → 401", raw_get("/", PANEL_AUTH) == 401, raw_get("/", PANEL_AUTH))
         check("新密码能进 → 200", raw_get("/", f"{user}:verify-new-pass") == 200,

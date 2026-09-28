@@ -109,6 +109,10 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authOn := r.FormValue("auth") == "1"
+	// 保存前的状态：用来决定提示怎么写（改了什么才说什么）
+	wasAuth := s.opt.Auth != nil && s.opt.Auth.Enabled()
+	prevListen, _, _ := s.store.GetSetting(settingListen)
+	prevWebListen, _, _ := s.store.GetSetting(settingWebListen)
 	user := strings.TrimSpace(r.FormValue("web_user"))
 	pass := r.FormValue("web_pass")
 	pass2 := r.FormValue("web_pass2")
@@ -173,6 +177,10 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		user = ""
 	}
 
+	credsChanged := user != s.runtimeUser() || pass != "" || (!authOn && wasAuth)
+	portsChanged := strings.TrimSpace(prevListen) != listen ||
+		strings.TrimSpace(prevWebListen) != webListen
+
 	// 账号密码**立即生效**（不用重启）：直接更新内存里那份凭据。
 	if s.opt.Auth != nil {
 		switch {
@@ -190,16 +198,22 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg := "已保存。"
-	if authOn {
-		msg += "账号密码已立即生效。"
-	} else {
-		msg += "面板账号密码保护已关闭（立即生效）。"
+	// 提示只说「改了哪一类、什么时候生效」——新地址就在上面输入框里，不重复念一遍
+	var parts []string
+	switch {
+	case authOn && credsChanged:
+		parts = append(parts, "账号密码已生效")
+	case !authOn && wasAuth:
+		parts = append(parts, "已关闭账号密码保护")
+	case !authOn:
+		parts = append(parts, "账号密码保护保持关闭")
 	}
-	if webListen == "" || webListen == listen {
-		msg += "监听地址（面板与 ACS 共用 " + listen + "）重启 ACS 后生效。"
-	} else {
-		msg += "监听地址（面板 " + webListen + "、ACS " + listen + "）重启 ACS 后生效。"
+	if portsChanged {
+		parts = append(parts, "监听地址重启服务后生效")
+	}
+	msg := "已保存。"
+	if len(parts) > 0 {
+		msg = "已保存。" + strings.Join(parts, "；") + "。"
 	}
 	http.Redirect(w, r, back+"?msg="+url.QueryEscape(msg), http.StatusSeeOther)
 }
@@ -227,4 +241,13 @@ func normalizeListen(v string) (string, error) {
 		}
 	}
 	return net.JoinHostPort(host, port), nil
+}
+
+// runtimeUser 返回当前在用的面板账号（没启用就是空串）。
+func (s *Server) runtimeUser() string {
+	if s.opt.Auth == nil {
+		return ""
+	}
+	u, _ := s.opt.Auth.Get()
+	return u
 }

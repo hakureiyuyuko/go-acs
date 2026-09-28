@@ -256,3 +256,11 @@ button.linkbtn:hover { filter: none; text-decoration: underline solid; }
 main h3 { font-size: 13px; margin: 20px 0 10px; color: var(--dim); font-weight: 600; }
 a.ghost { text-decoration: none; display: inline-flex; align-items: center; }
 a.ghost:hover { text-decoration: none; }
+
+/* 设置页顶部那三行状态：不要表头、只占需要的宽度 */
+table.kv { width: auto; min-width: 420px; }
+table.kv th {
+  width: 170px; background: transparent; position: static;
+  font-size: 12.5px; padding: 9px 12px 9px 14px;
+}
+table.kv tbody tr:hover { background: transparent; }

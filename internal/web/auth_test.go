@@ -149,10 +149,16 @@ func TestSettingsPage(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("设置页打不开：%d", code)
 	}
-	for _, want := range []string{"当前生效", ":9090", `name="acs_listen"`, `name="web_listen"`,
-		`name="web_user"`, `name="web_pass"`, "立即生效", "重启 ACS"} {
+	for _, want := range []string{"设置", "监听地址", "访问控制", ":9090",
+		`name="acs_listen"`, `name="web_listen"`, `name="web_user"`, `name="web_pass"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("设置页缺少 %q", want)
+		}
+	}
+	// 页面上不该出现说明性的文档（正式产品式的表单：只有标签、字段、按钮）
+	for _, dont := range []string{"HTTP Basic", "反向代理", "明文", "忘记", "settings 表", "curl"} {
+		if strings.Contains(body, dont) {
+			t.Errorf("设置页不该出现说明性文字 %q", dont)
 		}
 	}
 
@@ -213,8 +219,8 @@ func TestSettingsPage(t *testing.T) {
 		t.Errorf("新凭据应立刻可用，得到 %d", code)
 	}
 	// 设置页这时应该提示端口改动待重启
-	if _, body := get("ops:new-pass-9"); !strings.Contains(body, "才生效") {
-		t.Error("改过端口后设置页应提示重启才生效")
+	if _, body := get("ops:new-pass-9"); !strings.Contains(body, "重启服务后生效") {
+		t.Error("改过端口后设置页应提示重启服务后生效")
 	}
 
 	// 关掉保护
