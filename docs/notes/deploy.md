@@ -102,7 +102,9 @@ acs-X.Y.Z-linux-amd64/
 1. 改 `deploy/` 里的脚本 / 代码后，跑一遍完整验收（`go test ./...`、`scripts/verify-s1.sh`、
    `scripts/verify-interop.sh`）。
 2. 提交并推 `main`；把 README 与 `deploy/README.md` 里 `VERSION=1.0.x` 的示例改成新版本号。
-3. `scripts/build-release.sh vX.Y.Z` 产包，`git tag -a vX.Y.Z` 并推 tag。
+3. `scripts/build-release.sh vX.Y.Z` 产包（每次只把本次产出的包写进 `SHA256SUMS`，
+   同名旧包会先删掉，免得混进去），`git tag -a vX.Y.Z` 并推 tag（**先提交再打包**，
+   二进制里会带构建时的 VCS 信息）。
 4. 上传三个资产（两个 tar.gz + `SHA256SUMS`）到该 tag 的 release；release 说明放
    `docs/releases/vX.Y.Z.md`。
 5. 收尾验证：拿新包在一个临时目录里 `install.sh --no-service`，再把数据目录的 `VERSION`

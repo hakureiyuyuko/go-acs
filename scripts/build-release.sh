@@ -31,6 +31,12 @@ STAGE="$DIST/stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
+# 清掉本版本可能残留的旧包，免得它们混进 SHA256SUMS
+BUILT=""
+for arch in $ARCHES; do
+  rm -f "$DIST/acs-${VER}-linux-${arch}.tar.gz"
+done
+
 for arch in $ARCHES; do
   pkg="acs-${VER}-linux-${arch}"
   out="$STAGE/$pkg"
@@ -48,15 +54,17 @@ for arch in $ARCHES; do
   printf '%s\n' "$VER" > "$out/VERSION"
 
   tar czf "$DIST/$pkg.tar.gz" -C "$STAGE" "$pkg"
+  BUILT="$BUILT $pkg.tar.gz"
   rm -rf "$out"
   echo "   → dist/$pkg.tar.gz（$(du -h "$DIST/$pkg.tar.gz" | cut -f1)）"
 done
 
 rmdir "$STAGE" 2>/dev/null || true
 
-# 校验和（update.sh 会拿它验证）
-( cd "$DIST" && sha256sum acs-*.tar.gz > SHA256SUMS )
+# 校验和（update.sh 会拿它验证）；只列本次产出的包
+( cd "$DIST" && sha256sum $BUILT > SHA256SUMS )
 echo "== SHA256SUMS"
 cat "$DIST/SHA256SUMS"
-echo "== 内容示例（$(ls "$DIST" | grep -c 'tar.gz') 个包）"
-tar tzf "$(ls "$DIST"/acs-*.tar.gz | head -1)" | sed 's/^/   /'
+echo "== 内容示例"
+first_arch=$(echo $ARCHES | awk '{print $1}')
+tar tzf "$DIST/acs-${VER}-linux-${first_arch}.tar.gz" | sed 's/^/   /'
