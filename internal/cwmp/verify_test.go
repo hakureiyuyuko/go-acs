@@ -63,6 +63,30 @@ func TestVerifyReadBack(t *testing.T) {
 	})
 }
 
+// 写入无线参数后要能识别出来、并重采无线概况。
+// 真机上因此漏过：只回读了改动的那一个参数，界面上的状态/信道
+// 停在写入前，导致“5GHz 已经起来了却显示 Disabled”。
+func TestContainsWiFiParam(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"InternetGatewayDevice.LANDevice.1.WLANConfiguration.5.RadioEnabled", true},
+		{"Device.WiFi.Radio.1.Enable", true},
+		{"InternetGatewayDevice.DeviceInfo.SoftwareVersion", false},
+		{"Device.ManagementServer.URL", false},
+	}
+	for _, c := range cases {
+		got := containsWiFiParam([]ParamValue{{Name: c.name}})
+		if got != c.want {
+			t.Errorf("containsWiFiParam(%q) = %v，期望 %v", c.name, got, c.want)
+		}
+	}
+	if containsWiFiParam(nil) {
+		t.Error("空列表不该算无线参数")
+	}
+}
+
 func TestSameValue(t *testing.T) {
 	cases := []struct {
 		a, b string

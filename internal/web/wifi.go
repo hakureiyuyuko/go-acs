@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"acs/internal/store"
 )
@@ -21,6 +22,10 @@ type WifiBand struct {
 	Security string
 	Clients  string // 已连终端数
 	Status   string // Up / Disabled / ...
+	// Updated 是这个频段相关参数最后一次采集的时间。
+	// 界面上要显示它：真机上就因为看不到“这是多久前的值”而误判过
+	// （5GHz 射频已起来、能搜到信号，界面还显示 Disabled）。
+	Updated time.Time
 	// Note 是频段原始值的补充说明；当 Label 已经能表达清楚时为空
 	// （避免界面上出现「2.4G 2.4GHz」这种重复）。
 	Note   string
@@ -47,6 +52,12 @@ func WifiOverview(params []store.Param) []WifiBand {
 	}
 	byInst := map[int]*acc{}
 
+	touch := func(a *acc, p store.Param) {
+		if p.UpdatedAt.After(a.band.Updated) {
+			a.band.Updated = p.UpdatedAt
+		}
+	}
+
 	get := func(inst int) *acc {
 		if a, ok := byInst[inst]; ok {
 			return a
@@ -67,6 +78,7 @@ func WifiOverview(params []store.Param) []WifiBand {
 		}
 		field := strings.ToLower(m[2])
 		a := get(inst)
+		touch(a, p)
 		v := strings.TrimSpace(p.Value)
 
 		switch field {

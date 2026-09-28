@@ -871,6 +871,16 @@ func (s *Server) onSimpleResponse(w http.ResponseWriter, sess *Session, m *Node,
 // handleSetParameterValuesResponse 处理设置参数的回执。
 func (s *Server) handleSetParameterValuesResponse(w http.ResponseWriter, sess *Session, m *Node) {
 	status := strings.TrimSpace(m.ChildText("Status"))
+
+	// 取出这次写了什么（下面要用它决定要不要重采无线概况）
+	var vals []ParamValue
+	if t, ok := s.pendingTask(sess); ok && t.Kind == TaskSetParameterValues {
+		var spv spvPayload
+		if json.Unmarshal([]byte(t.Payload), &spv) == nil {
+			vals = spv.Values
+		}
+	}
+
 	if status != "" && status != "0" {
 		msg := "CPE 报告设置失败，Status=" + status
 		s.log.Warn("设置参数失败", "device_id", sess.DeviceID, "status", status)
@@ -883,8 +893,45 @@ func (s *Server) handleSetParameterValuesResponse(w http.ResponseWriter, sess *S
 	// 这一步是值得的 —— 有的 CPE 会默默接受写入但对某个参数不生效，
 	// 只有读回来才能看出来；而且顺带把界面上的值刷新成实际值。
 	s.enqueueReadBack(sess)
+
+	// 写的是无线参数的话，顺手把整份无线概况也重采一遍。
+	//
+	// 为什么必须做：写入后我们只回读了改动的那一个参数，而界面上的
+	// 状态/信道/终端数这些**相关联**的值就停在写入前了。
+	// （这里真机上错过一次：5GHz 射频已经起来了、能搜到信号，
+	// 界面却还显示 Disabled —— 因为 Status 是几十分钟前采集的。）
+	s.refreshWiFiAfterWrite(sess, vals)
+
 	s.finishTask(sess, "设置成功（Status="+statusOrZero(status)+"）")
 	s.dispatchNextTask(w, sess)
+}
+
+// refreshWiFiAfterWrite 写入无线参数后，排一轮「重采无线概况」。
+// 延后到下一轮会话：无线参数可能异步生效，等下一轮拿到的才是生效后的值。
+func (s *Server) refreshWiFiAfterWrite(sess *Session, vals []ParamValue) {
+	if sess.DeviceID == 0 || !containsWiFiParam(vals) {
+		return
+	}
+	id, err := s.EnqueueFetchWiFi(sess.DeviceID)
+	if err != nil {
+		s.log.Warn("入队重采无线概况失败", "device_id", sess.DeviceID, "err", err)
+		return
+	}
+	sess.deferTask(id)
+	s.log.Info("写入的是无线参数，已排下一轮会话重采无线概况",
+		"device_id", sess.DeviceID, "task_id", id)
+}
+
+// containsWiFiParam 判断这批参数里有没有无线相关的（TR-098 的 WLANConfiguration. /
+// TR-181 的 WiFi. 都算）。
+func containsWiFiParam(vals []ParamValue) bool {
+	for _, v := range vals {
+		l := strings.ToLower(v.Name)
+		if strings.Contains(l, "wlanconfiguration.") || strings.Contains(l, "wifi.") {
+			return true
+		}
+	}
+	return false
 }
 
 func statusOrZero(s string) string {
@@ -1039,6 +1086,7 @@ func (s *Server) handleCPEReady(w http.ResponseWriter, sess *Session) {
 // dispatchNextTask 取一条待办任务发下去；没有就 204 结束会话。
 func (s *Server) dispatchNextTask(w http.ResponseWriter, sess *Session) {
 	t, err := s.store.ClaimNextTask(sess.DeviceID, sess.deferredIDs())
+	s.log.Debug("取任务", "device_id", sess.DeviceID, "session", sess.ID, "deferred", sess.deferredIDs(), "got", taskID(t))
 	if err != nil {
 		s.log.Error("取待办任务失败", "device_id", sess.DeviceID, "err", err)
 		s.writeEnvelope(w, sess, newRPCID(), FaultBody(FaultInternalError, "取任务失败"))
@@ -1168,6 +1216,13 @@ func (s *Server) endSession(w http.ResponseWriter, sess *Session) {
 // ---------- 小工具 ----------
 
 func newRPCID() string { return newSessionID() }
+
+func taskID(t *store.Task) int64 {
+	if t == nil {
+		return 0
+	}
+	return t.ID
+}
 
 func pick(a, b string) string {
 	if strings.TrimSpace(a) != "" {

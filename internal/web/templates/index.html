@@ -72,7 +72,7 @@
     <thead>
       <tr>
         <th>设备</th><th>频段</th><th>SSID</th><th>射频</th>
-        <th>信道</th><th>标准</th><th>加密</th><th>终端</th>
+        <th>信道</th><th>标准</th><th>加密</th><th>终端</th><th>采集</th>
       </tr>
     </thead>
     <tbody>
@@ -97,6 +97,7 @@
           <td class="mono">{{if $b.Standard}}{{$b.Standard}}{{else}}-{{end}}</td>
           <td class="mono">{{if $b.Security}}{{$b.Security}}{{else}}-{{end}}</td>
           <td class="mono">{{if $b.Clients}}{{$b.Clients}}{{else}}-{{end}}</td>
+          <td class="mono hint">{{fmtTimeShort $b.Updated}}</td>
         </tr>
         {{end}}
       {{end}}

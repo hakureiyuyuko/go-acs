@@ -50,9 +50,10 @@ type kv struct {
 // Register 把界面路由挂到 mux 上。
 func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	tpl, err := template.New("").Funcs(template.FuncMap{
-		"fmtTime":   formatTime,
-		"uptime":    formatUptime,
-		"wifiCount": wifiCount,
+		"fmtTime":      formatTime,
+		"fmtTimeShort": formatTimeShort,
+		"uptime":       formatUptime,
+		"wifiCount":    wifiCount,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return fmt.Errorf("解析模板失败: %w", err)
@@ -552,6 +553,14 @@ func formatTime(t time.Time) string {
 		return "-"
 	}
 	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+// formatTimeShort 只给时分秒，用在表格里节省宽度。
+func formatTimeShort(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Local().Format("15:04:05")
 }
 
 // formatUptime 把 TR-069 的秒数格式化成人看的。

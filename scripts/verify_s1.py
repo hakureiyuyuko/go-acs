@@ -339,6 +339,29 @@ def main():
             check("没动过的参数没有被一起写入",
                   "TotalAssociations" not in payload and "BeaconType" not in payload)
 
+        # 写入无线参数后应自动重采一次无线概况，而且**延后一轮**：
+        # 真机上的无线参数是异步生效的，当场重采拿到的还是旧值。
+        # 真机上也漏过这一步：只回读了改动的那一个参数，界面上的状态/信道
+        # 停在写入前，导致「5GHz 已经能收到信号了却显示 Disabled」。
+        def wlan_gpn_tasks(full):
+            return [t for t in full["tasks"]
+                    if t["Kind"] == "GetParameterNames" and "WLAN" in t["Payload"]]
+
+        tasks_now = wlan_gpn_tasks(full)
+        check("写入无线参数后立刻排了一条「重采无线概况」任务",
+              len(tasks_now) >= 1, len(tasks_now))
+        blocked = [t for t in tasks_now if t["Status"] in ("pending", "running")]
+        check("这条重采任务是延后执行的（本次会话先不跑）",
+              len(blocked) >= 1, [(t["ID"], t["Status"]) for t in tasks_now])
+
+        ok, out = run_sim(workdir, "-serial", "VERIFY098", "-oui", "001122", "-once", "-event", "2 PERIODIC")
+        check("下一轮会话成功", ok, out[-160:])
+        full = wait_tasks_done(did, kinds=("SetParameterValues", "GetParameterNames", "GetParameterValues"))
+        tasks_now = wlan_gpn_tasks(full)
+        check("下一轮会话把延后的重采任务跑完了",
+              len(tasks_now) >= 1 and all(t["Status"] == "done" for t in tasks_now),
+              [(t["ID"], t["Status"]) for t in tasks_now])
+
     print("== 16. 写入被接受但没生效：同会话不急着判，下一轮会话才定性 ==")
     if did:
         # 模拟真机行为：CPE 回 Status=0 但值不变
