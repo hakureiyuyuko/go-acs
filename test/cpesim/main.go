@@ -48,6 +48,11 @@ type simulator struct {
 	types  map[string]string
 
 	crCh chan struct{}
+
+	// ignoreSet 里的子串命中某个 SetParameterValues 参数时，模拟器会返回
+	// Status=0（“我接受了”）但**不真的应用**这个值。
+	// 用来复现真机上的那个行为（写入被接受但静默失效），验证 ACS 的读回核对能抓出来。
+	ignoreSet []string
 }
 
 func main() {
@@ -55,6 +60,7 @@ func main() {
 
 	var root string
 	var crPort int
+	var ignoreSet string
 	flag.StringVar(&s.acsURL, "acs", "http://127.0.0.1:7547/acs", "ACS 的 CWMP 地址")
 	flag.StringVar(&s.user, "user", "", "CPE→ACS 认证账号")
 	flag.StringVar(&s.pass, "pass", "", "CPE→ACS 认证密码")
@@ -69,7 +75,14 @@ func main() {
 	flag.StringVar(&s.model, "model", "SimModel-X1", "型号名")
 	flag.StringVar(&root, "dm", "098", "数据模型：098(TR-098) 或 181(TR-181)")
 	flag.IntVar(&crPort, "cr-port", 0, "ConnectionRequest 监听端口（0 = 随机）")
+	flag.StringVar(&ignoreSet, "ignore-set", "", "模拟“接受写入但不生效”的参数名子串（逗号分隔）")
 	flag.Parse()
+
+	for _, part := range strings.Split(ignoreSet, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			s.ignoreSet = append(s.ignoreSet, p)
+		}
+	}
 
 	rootPrefix := "InternetGatewayDevice."
 	specVersion := "1.0"
@@ -186,6 +199,8 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(wlan+"1.X_HW_RFBand", "2.4GHz", "string")
 		// 下面这几个是「可编辑 / 给下拉框提供候选值」用的
 		set(wlan+"1.KeyPassphrase", "", "string")
+		// WPA/WPA2-PSK 真正的密码位；两都存在时 ACS 应该优先选这个（真机验证过）
+		set(wlan+"1.PreSharedKey.1.KeyPassphrase", "", "string")
 		set(wlan+"1.IEEE11iEncryptionModes", "AESEncryption", "string")
 		set(wlan+"1.IEEE11iAuthenticationMode", "PSKAuthentication", "string")
 		set(wlan+"1.TransmitPower", "100", "unsignedInt")
@@ -474,12 +489,26 @@ func (s *simulator) setParameterValues(m *cwmp.Node) string {
 	key := m.ChildText("ParameterKey")
 	vals := cwmp.ParseParamValues(m.Child("ParameterList"))
 	for _, v := range vals {
+		if s.shouldIgnore(v.Name) {
+			// 真机行为：回 Status=0 说“接受了”，但值不变
+			log.Printf("  设置 %s = %s （本次故意不生效，模拟真机静默失效）", v.Name, v.Value)
+			continue
+		}
 		log.Printf("  设置 %s = %s", v.Name, v.Value)
 		s.params[v.Name] = v.Value
 		s.types[v.Name] = v.Type
 	}
 	_ = key
 	return `<cwmp:SetParameterValuesResponse><Status>0</Status></cwmp:SetParameterValuesResponse>`
+}
+
+func (s *simulator) shouldIgnore(name string) bool {
+	for _, sub := range s.ignoreSet {
+		if strings.Contains(name, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *simulator) getRPCMethods() string {

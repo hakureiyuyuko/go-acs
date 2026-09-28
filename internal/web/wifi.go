@@ -30,10 +30,13 @@ type WifiBand struct {
 	Empty bool // 实例存在但没采到任何字段
 }
 
-// wifiInstanceRe 从参数名里抠出「容器名 + 实例号 + 字段名」。//
-// 同时兼容 TR-098 的 WLANConfiguration.{i}.<字段> 和 TR-181 的
-// WiFi.Radio.{i}.<字段> / WiFi.SSID.{i}.<字段> / WiFi.AccessPoint.{i}.<字段>。
-var wifiInstanceRe = regexp.MustCompile(`(?i)(?:WLANConfiguration|Radio|SSID|AccessPoint)\.(\d+)\.([A-Za-z0-9_]+)$`)
+// wifiInstanceRe 从参数名里抠出「容器名 + 实例号 + 剩余路径」。
+//
+// 注意结尾用 (.+)$ 而不是 ([A-Za-z0-9_]+)$ —— 实例号后面可能还有多级路径，
+// 比如 PreSharedKey.1.KeyPassphrase；只取最后一段会把这种参数整个漏掉。
+// 同时兼容 TR-098 的 WLANConfiguration.{i}.x 与 TR-181 的
+// WiFi.Radio.{i}.x / WiFi.SSID.{i}.x / WiFi.AccessPoint.{i}.x。
+var wifiInstanceRe = regexp.MustCompile(`(?i)(?:WLANConfiguration|Radio|SSID|AccessPoint)\.(\d+)\.(.+)$`)
 
 // WifiOverview 把一堆无线参数整理成「按实例分组」的概况。
 // params 只包含无线相关参数（由 store.WifiParams 取出）。
@@ -175,30 +178,44 @@ func bandNote(label, band string) string {
 	return band
 }
 
-// wifiLeafIndex 返回某个实例下「叶子名（小写）-> 参数」的索引。
+// wifiInstanceParams 取出某个实例下的所有叶子参数，并算出**相对实例的路径**。
 //
-// 用叶子名而不是完整路径做索引，是为了同时支持 TR-098 的
-// WLANConfiguration.{i}.SSID 和 TR-181 的 WiFi.SSID.{i}.SSID —— 两者叶子名都是 SSID。
-// 叶子名撞车时（如 KeyPassphrase 与 PreSharedKey.1.KeyPassphrase）优先取层级更少的那个，
-// 保证结果稳定。
-func wifiLeafIndex(inst int, params []store.Param) map[string]store.Param {
-	out := map[string]store.Param{}
+// 相对路径是必需的：同一个实例下有 KeyPassphrase 和 PreSharedKey.1.KeyPassphrase
+// 两个不同的参数，只看最后一段分不开。
+type wifiParam struct {
+	P   store.Param
+	Rel string // 小写，如 "presharedkey.1.keypassphrase"
+}
+
+func wifiInstanceParams(inst int, params []store.Param) []wifiParam {
+	var out []wifiParam
 	for _, p := range params {
-		m := wifiInstanceRe.FindStringSubmatch(p.Name)
-		if m == nil {
+		loc := wifiInstanceRe.FindStringSubmatchIndex(p.Name)
+		if loc == nil || len(loc) < 6 {
 			continue
 		}
-		n, err := strconv.Atoi(m[1])
+		n, err := strconv.Atoi(p.Name[loc[2]:loc[3]])
 		if err != nil || n != inst {
 			continue
 		}
-		key := strings.ToLower(m[2])
-		if old, ok := out[key]; ok && strings.Count(old.Name, ".") <= strings.Count(p.Name, ".") {
-			continue
-		}
-		out[key] = p
+		out = append(out, wifiParam{P: p, Rel: strings.ToLower(p.Name[loc[4]:loc[5]])})
 	}
 	return out
+}
+
+// matchCandidate 判断一个参数是否命中候选。
+//   - 单段候选（如 "ssid"）只比较最后一段；
+//   - 多段候选（如 "presharedkey.1.keypassphrase"）比较尾部，用来区分同名叶子。
+func matchCandidate(rel, candidate string) bool {
+	c := strings.ToLower(strings.TrimSpace(candidate))
+	if c == "" {
+		return false
+	}
+	if !strings.Contains(c, ".") {
+		leaf := rel[strings.LastIndex(rel, ".")+1:]
+		return leaf == c
+	}
+	return strings.HasSuffix(rel, c)
 }
 
 // WifiInstances 返回参数里出现过的所有无线实例号（升序）。
@@ -264,13 +281,13 @@ var standardOptions = []WifiOption{
 }
 
 // wifiFieldDefs 是表单字段的定义表。
-// leaf 是叶子名候选（按优先级），取第一个在设备参数里存在的。
+// leaf 是候选（按优先级），单段比较叶子名，多段比较尾部路径。
 type wifiFieldDef struct {
 	key     string
 	label   string
 	kind    string
 	leaf    []string
-	optFrom string // 候选值来自哪个叶子参数（逗号分隔的列表）
+	optFrom string // 候选值来自哪个参数（单段写叶子名）
 	optMap  []WifiOption
 	suffix  string
 	hint    string
@@ -287,24 +304,33 @@ var wifiFieldDefs = []wifiFieldDef{
 	{key: "cipher", label: "加密算法", kind: "select", leaf: []string{"ieee11iencryptionmodes", "x_hw_wpaand11iencryptionmodes", "wpaencryptionmodes"}, optMap: cipherOptions},
 	{key: "standard", label: "无线标准", kind: "select", leaf: []string{"standard", "x_hw_standard"}, optMap: standardOptions},
 	{key: "power", label: "发射功率", kind: "select", leaf: []string{"transmitpower"}, optFrom: "transmitpowersupported", suffix: "%"},
-	{key: "key", label: "无线密码", kind: "password", leaf: []string{"keypassphrase"},
+	// WPA/WPA2-PSK 的密码在 PreSharedKey.1.KeyPassphrase 下；
+	// WLANConfiguration.{i}.KeyPassphrase 是给 WEP 的。
+	// 真机实测：往后者写密码，设备回 9007 Invalid parameter value，
+	// 所以优先写 PreSharedKey 那个，拿不到才退回。
+	{key: "key", label: "无线密码", kind: "password",
+		leaf: []string{"presharedkey.1.keypassphrase", "keypassphrase"},
 		hint: "为空表示不修改。很多 CPE 不回明文密码（能改不能读），所以这里显示为空是正常的。"},
 }
 
 // WifiForm 根据设备实报的参数拼出编辑表单。
 func WifiForm(inst int, wifiParams []store.Param) []WifiFormField {
-	idx := wifiLeafIndex(inst, wifiParams)
+	instParams := wifiInstanceParams(inst, wifiParams)
 	out := make([]WifiFormField, 0, len(wifiFieldDefs))
 
-	for _, def := range wifiFieldDefs {
-		var found store.Param
-		var ok bool
-		for _, l := range def.leaf {
-			if p, hit := idx[l]; hit {
-				found, ok = p, true
-				break
+	find := func(leaf []string) (wifiParam, bool) {
+		for _, cand := range leaf {
+			for _, ip := range instParams {
+				if matchCandidate(ip.Rel, cand) {
+					return ip, true
+				}
 			}
 		}
+		return wifiParam{}, false
+	}
+
+	for _, def := range wifiFieldDefs {
+		found, ok := find(def.leaf)
 		if !ok {
 			continue // 设备没这个参数就不要出这个字段，不猜
 		}
@@ -313,17 +339,19 @@ func WifiForm(inst int, wifiParams []store.Param) []WifiFormField {
 			Key:      def.key,
 			Label:    def.label,
 			Kind:     def.kind,
-			Param:    found.Name,
-			Value:    found.Value,
-			Type:     found.ValueType,
+			Param:    found.P.Name,
+			Value:    found.P.Value,
+			Type:     found.P.ValueType,
 			Hint:     def.hint,
 			Suffix:   def.suffix,
-			ReadOnly: !found.Writable && hasWritableInfo(wifiParams),
+			ReadOnly: !found.P.Writable && hasWritableInfo(wifiParams),
 		}
 
 		switch {
 		case def.optFrom != "":
-			f.Options = optionsFromParam(idx[def.optFrom], def.suffix)
+			if src, hit := find([]string{def.optFrom}); hit {
+				f.Options = optionsFromParam(src.P, def.suffix)
+			}
 		case len(def.optMap) > 0:
 			f.Options = append([]WifiOption{}, def.optMap...)
 		}

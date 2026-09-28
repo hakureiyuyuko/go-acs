@@ -125,7 +125,7 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Error("同类型待办已存在时不该重复入队")
 	}
 
-	got, err := st.ClaimNextTask(id)
+	got, err := st.ClaimNextTask(id, nil)
 	if err != nil || got == nil {
 		t.Fatalf("取任务失败: %v %v", got, err)
 	}
@@ -133,7 +133,7 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Errorf("任务状态 = %+v", got)
 	}
 	// 取过一次之后不该再取到
-	again, err := st.ClaimNextTask(id)
+	again, err := st.ClaimNextTask(id, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestTaskLifecycle(t *testing.T) {
 	if _, err := st.EnqueueTask(&Task{DeviceID: id, Kind: "Reboot"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ClaimNextTask(id); err != nil {
+	if _, err := st.ClaimNextTask(id, nil); err != nil {
 		t.Fatal(err)
 	}
 	n, err := st.ResetRunningTasks()

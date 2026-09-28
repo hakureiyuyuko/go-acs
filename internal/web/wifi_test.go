@@ -220,6 +220,61 @@ func TestWifiFormMarksReadOnly(t *testing.T) {
 	}
 }
 
+// 真机背景：往 WLANConfiguration.{i}.KeyPassphrase 写密码，华为 HN8145X6N 回了
+// 9007 Invalid parameter value。WPA/WPA2-PSK 的密码在 PreSharedKey.1.KeyPassphrase 下，
+// 后者才是给 WEP 用的。所以密码字段必须优先选 PreSharedKey 那个。
+func TestWifiFormPrefersPreSharedKeyForPassword(t *testing.T) {
+	b := "InternetGatewayDevice.LANDevice.1.WLANConfiguration.5."
+	params := []store.Param{
+		{Name: b + "SSID", Value: "X", ValueType: "string", Writable: true},
+		{Name: b + "BeaconType", Value: "11i", ValueType: "string", Writable: true},
+		{Name: b + "KeyPassphrase", Value: "", ValueType: "string", Writable: true},
+		{Name: b + "PreSharedKey.1.KeyPassphrase", Value: "", ValueType: "string", Writable: true},
+	}
+	fields := WifiForm(5, params)
+	var key *WifiFormField
+	for i := range fields {
+		if fields[i].Key == "key" {
+			key = &fields[i]
+		}
+	}
+	if key == nil {
+		t.Fatal("密码字段没生成")
+	}
+	if key.Param != b+"PreSharedKey.1.KeyPassphrase" {
+		t.Errorf("密码应写到 PreSharedKey.1.KeyPassphrase，实际 %q", key.Param)
+	}
+
+	// 没有 PreSharedKey 表（例如纯 WEP 设备）时退回 KeyPassphrase
+	params2 := []store.Param{
+		{Name: b + "KeyPassphrase", Value: "", ValueType: "string", Writable: true},
+	}
+	fields2 := WifiForm(5, params2)
+	if len(fields2) != 1 || fields2[0].Param != b+"KeyPassphrase" {
+		t.Errorf("没 PreSharedKey 时应退回 KeyPassphrase，实际 %+v", fields2)
+	}
+}
+
+func TestMatchCandidate(t *testing.T) {
+	cases := []struct {
+		rel, cand string
+		want      bool
+	}{
+		{"ssid", "ssid", true},
+		{"ssid", "x_hw_ssid", false}, // 单段候选只比叶子，不做尾部匹配
+		{"ssid", "SP", false},
+		{"presharedkey.1.keypassphrase", "presharedkey.1.keypassphrase", true},
+		{"presharedkey.1.keypassphrase", "keypassphrase", true}, // 单段候选命中叶子
+		{"keypassphrase", "presharedkey.1.keypassphrase", false},
+		{"radioenabled", "radio", false},
+	}
+	for _, c := range cases {
+		if got := matchCandidate(c.rel, c.cand); got != c.want {
+			t.Errorf("matchCandidate(%q, %q) = %v，期望 %v", c.rel, c.cand, got, c.want)
+		}
+	}
+}
+
 func TestWifiOverviewEmpty(t *testing.T) {
 	if got := WifiOverview(nil); len(got) != 0 {
 		t.Errorf("没有无线参数时应返回空，实际 %+v", got)

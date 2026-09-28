@@ -141,7 +141,7 @@ TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生�
 对应 `internal/cwmp/realdevice_test.go` 里的 4 个用例 —— 以后重构解析逻辑时，
 真机的那些怪癖（大写前缀、自闭合空元素、根节点名大小写写错）会被测到。
 
-## 实现过程中踩到/修掉的五个真问题
+## 实现过程中踩到/修掉的七个真问题
 
 1. **CWMP 命名空间回填写成了版本号**（单测抓到）
    `ParseEnvelope` 一度把 `env.CWMPNS` 设成 `"1.0"` 而不是完整的 `urn:dslforum-org:cwmp-1-0`，
@@ -179,6 +179,23 @@ TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生�
    → 新增 `canonicalType()`：归一化成规范写法（`string` / `int` / `unsignedInt` /
    `boolean` / `dateTime` / `base64`…），解析时和**写出去时**都过一遍（后者能顺便
    修正库里已有的旧值），不认识的类型原样保留不瞎改。
+
+6. **无线参数是异步生效的，写完立即读回会误报**（真机写入时抓到）
+   改 5GHz 的 `RadioEnabled`：设备回 `Status=0`（接受了），但同一会话里读回来还是 `0`；
+   几分钟后再查已经是 `1` —— **真的生效了，只是晚**。
+   第一版的「读回对不上就判失败」会因此误报。
+   → 改成两级核对：同会话读回对得上就直接结案；对不上先不判错，把核对任务排到
+   **设备下一轮会话**再跑；那时还对不上才算真没生效。
+   （不用加延时列：`ClaimNextTask` 支持一个 `exclude` 列表，会话记住「本轮跳过的任务」，
+   会话结束时清空，任务自然落到下一轮。）
+
+7. **密码写错了参数**（真机报错告诉我们的）
+   往 `WLANConfiguration.{i}.KeyPassphrase` 写 WPA2 密码，设备回
+   `9003 Invalid arguments` + `...KeyPassphrase -> 9007 Invalid parameter value`。
+   因为 WPA/WPA2-PSK 的密码在 `PreSharedKey.1.KeyPassphrase` 下，前者是给 WEP 的。
+   （两个参数的叶子名都是 `KeyPassphrase`，原来靠叶子名索引永远选不到对的那个。）
+   → 字段候选改成支持**多段尾部路径**，密码优先选 `presharedkey.1.keypassphrase`。
+   > 顺带印证：把设备的逐参数错误完整记进任务结果是值得的 —— 它直接指路了。
 
 ## 相关笔记
 

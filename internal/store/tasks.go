@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -78,16 +79,29 @@ func (s *Store) EnqueueTaskIfAbsent(t *Task) (int64, bool, error) {
 }
 
 // ClaimNextTask 取该设备最早的一条 pending 任务并置为 running。
-// 没有任务时返回 (nil, nil)。
-func (s *Store) ClaimNextTask(deviceID int64) (*Task, error) {
+//
+// exclude 里的任务 ID 会被跳过（但仍保持 pending）—— 用于「本次会话先不要发这条」：
+// 比如写入后的核对任务，要留到设备下一轮会话再跑（真机的无线参数是异步生效的）。
+func (s *Store) ClaimNextTask(deviceID int64, exclude []int64) (*Task, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 
-	row := tx.QueryRow(`SELECT `+taskCols+` FROM tasks
-		WHERE device_id = ? AND status = ? ORDER BY id LIMIT 1`, deviceID, TaskPending)
+	q := `SELECT ` + taskCols + ` FROM tasks WHERE device_id = ? AND status = ?`
+	args := []any{deviceID, TaskPending}
+	if len(exclude) > 0 {
+		placeholders := make([]string, 0, len(exclude))
+		for _, id := range exclude {
+			placeholders = append(placeholders, "?")
+			args = append(args, id)
+		}
+		q += ` AND id NOT IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	q += ` ORDER BY id LIMIT 1`
+
+	row := tx.QueryRow(q, args...)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

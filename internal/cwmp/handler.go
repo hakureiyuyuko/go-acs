@@ -34,6 +34,20 @@ const (
 // 任务载荷（JSON）。
 type gpvPayload struct {
 	Names []string `json:"names"`
+
+	// VerifyTask / Verify：非 0 时表示这是一次「读回核对」。
+	//
+	// 真机实翻过：华为 HN8145X6N 对 WLANConfiguration.5.RadioEnabled 的写入
+	// 返回了 SetParameterValuesResponse Status=0（说“我接受了”），但读回来值根本没变。
+	// 如果不读回，界面就会显示“设置成功”，运维会以为 WiFi 已经开了。
+	// 所以写完之后把期望值一并带上，读回来对不上就把原任务标为失败。
+	VerifyTask int64        `json:"verify_task,omitempty"`
+	Verify     []ParamValue `json:"verify,omitempty"`
+	// Deferred：这是一次推迟到「设备下一轮会话」的核对。
+	// 区分它是因为两种时机的结论不同：
+	//   - 同会话核对：对不上先不判错（可能只是还没生效）；
+	//   - 下一轮会话核对：还对不上就是真的没生效。
+	Deferred bool `json:"deferred,omitempty"`
 }
 
 type gpnPayload struct {
@@ -560,6 +574,9 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		return
 	}
 
+	// 新会话开始：清掉上一轮遗留的「推迟任务」标记（防御性，正常已在 endSession 清过）
+	sess.clearDeferred()
+
 	root := detectRoot(inf.Params)
 	fields := deviceFieldsFromParams(inf.Params)
 
@@ -651,6 +668,13 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 // onGetParameterValuesResponse 处理我们下发的 GetParameterValues 的回执。
 func (s *Server) onGetParameterValuesResponse(w http.ResponseWriter, sess *Session, env *Envelope, m *Node) {
 	params := ParseParamValues(m.Child("ParameterList"))
+
+	// 这条 GPV 可能是一次「读回核对」（带着期望值），先把载荷拿出来
+	var p gpvPayload
+	if t, ok := s.pendingTask(sess); ok && t.Kind == TaskGetParameterValues {
+		_ = json.Unmarshal([]byte(t.Payload), &p)
+	}
+
 	s.warnIfPartialResponse(sess, len(params))
 	if len(params) > 0 && sess.DeviceID != 0 {
 		if err := s.store.UpsertParams(sess.DeviceID, toStoreParams(params), "getvalues"); err != nil {
@@ -666,9 +690,69 @@ func (s *Server) onGetParameterValuesResponse(w http.ResponseWriter, sess *Sessi
 			}
 		}
 	}
+
+	s.checkReadBack(sess, p, params)
+
 	s.finishTask(sess, fmt.Sprintf("收到 %d 个参数", len(params)))
 	s.log.Info("取回参数", "device_id", sess.DeviceID, "count", len(params))
 	s.dispatchNextTask(w, sess)
+}
+
+// checkReadBack 如果这条 GPV 是某次 SetParameterValues 的读回核对，就比对期望值。
+//
+// 分两种时机（见 gpvPayload.Deferred）：
+//   - 同一次会话内的立即核对：对不上**先不判错**。真机的无线参数是异步生效的，
+//     实测写入后同一会话读回仍是旧值，几十秒后才变；或本来就写不动的参数会一直不变。
+//     分不清就先排到下一轮会话再核。
+//   - 设备下一轮会话的延后核对：还对不上就是真的没生效，把原设置任务标为失败。
+func (s *Server) checkReadBack(sess *Session, p gpvPayload, got []ParamValue) {
+	if p.VerifyTask == 0 || len(p.Verify) == 0 {
+		return
+	}
+	problems := verifyReadBack(p.Verify, got)
+	if len(problems) == 0 {
+		s.log.Info("读回核对通过",
+			"device_id", sess.DeviceID, "set_task", p.VerifyTask, "params", len(p.Verify))
+		return
+	}
+
+	if !p.Deferred {
+		s.log.Info("同会话读回仍是旧值，设备可能异步生效；排到下一轮会话再核对",
+			"device_id", sess.DeviceID, "set_task", p.VerifyTask, "problems", problems)
+		s.enqueueDeferredVerify(sess, p)
+		return
+	}
+
+	msg := "设备接受了写入（Status=0）但读回未生效：" + strings.Join(problems, "；")
+	s.log.Warn("写入未生效（已在下一轮会话复核）",
+		"device_id", sess.DeviceID, "set_task", p.VerifyTask, "problems", problems)
+	if err := s.store.FailTask(p.VerifyTask, msg); err != nil {
+		s.log.Warn("标记写入未生效失败", "task_id", p.VerifyTask, "err", err)
+	}
+}
+
+// enqueueDeferredVerify 把核对任务排到设备下一轮会话（本次会话不取它）。
+func (s *Server) enqueueDeferredVerify(sess *Session, p gpvPayload) {
+	names := make([]string, 0, len(p.Verify))
+	for _, v := range p.Verify {
+		names = append(names, v.Name)
+	}
+	payload, _ := json.Marshal(gpvPayload{
+		Names:      names,
+		VerifyTask: p.VerifyTask,
+		Verify:     p.Verify,
+		Deferred:   true,
+	})
+	id, err := s.store.EnqueueTask(&store.Task{
+		DeviceID: sess.DeviceID,
+		Kind:     TaskGetParameterValues,
+		Payload:  string(payload),
+	})
+	if err != nil {
+		s.log.Warn("入队延后核对失败", "device_id", sess.DeviceID, "err", err)
+		return
+	}
+	sess.deferTask(id)
 }
 
 // warnIfPartialResponse 对照任务载荷里的参数名个数，检查 CPE 是不是只回了一部分。
@@ -677,11 +761,8 @@ func (s *Server) onGetParameterValuesResponse(w http.ResponseWriter, sess *Sessi
 // （Config.MaxParamsPerRequest）避免踩到上限；这里留个告警，是为了在遇到别的、
 // 上限更低的设备时能立刻看出来，而不是默默少采集一堆参数。
 func (s *Server) warnIfPartialResponse(sess *Session, got int) {
-	if sess.pendingTask == 0 {
-		return
-	}
-	t, err := s.store.GetTask(sess.pendingTask)
-	if err != nil || t == nil || t.Kind != TaskGetParameterValues {
+	t, ok := s.pendingTask(sess)
+	if !ok || t.Kind != TaskGetParameterValues {
 		return
 	}
 	var p gpvPayload
@@ -729,14 +810,23 @@ func (s *Server) onGetParameterNamesResponse(w http.ResponseWriter, sess *Sessio
 	s.dispatchNextTask(w, sess)
 }
 
-// pendingGPNPayload 取出当前在途 GetParameterNames 任务的载荷。
-func (s *Server) pendingGPNPayload(sess *Session) (gpnPayload, bool) {
-	var p gpnPayload
+// pendingTask 取出当前在途任务。
+func (s *Server) pendingTask(sess *Session) (*store.Task, bool) {
 	if sess.pendingTask == 0 {
-		return p, false
+		return nil, false
 	}
 	t, err := s.store.GetTask(sess.pendingTask)
 	if err != nil || t == nil {
+		return nil, false
+	}
+	return t, true
+}
+
+// pendingGPNPayload 取出当前在途 GetParameterNames 任务的载荷。
+func (s *Server) pendingGPNPayload(sess *Session) (gpnPayload, bool) {
+	var p gpnPayload
+	t, ok := s.pendingTask(sess)
+	if !ok || t.Kind != TaskGetParameterNames {
 		return p, false
 	}
 	if err := json.Unmarshal([]byte(t.Payload), &p); err != nil {
@@ -804,7 +894,7 @@ func statusOrZero(s string) string {
 	return s
 }
 
-// enqueueReadBack 把刚设置过的那批参数读回来。
+// enqueueReadBack 把刚设置过的那批参数读回来，并带上“期望值”以供比对。
 func (s *Server) enqueueReadBack(sess *Session) {
 	if sess.pendingTask == 0 || sess.DeviceID == 0 {
 		return
@@ -821,13 +911,76 @@ func (s *Server) enqueueReadBack(sess *Session) {
 	for _, v := range p.Values {
 		names = append(names, v.Name)
 	}
-	batches, err := s.enqueueGPVDivided(sess.DeviceID, names)
-	if err != nil {
-		s.log.Warn("入队读回校验失败", "device_id", sess.DeviceID, "err", err)
-		return
+
+	// 不用 enqueueGPVDivided：读回要带上期望值，所以自己分批。
+	max := s.cfg.MaxParamsPerRequest
+	if max <= 0 {
+		max = defaultMaxParamsPerRequest
+	}
+	batches := 0
+	for start := 0; start < len(names); start += max {
+		end := start + max
+		if end > len(names) {
+			end = len(names)
+		}
+		payload, _ := json.Marshal(gpvPayload{
+			Names:      names[start:end],
+			VerifyTask: t.ID,
+			Verify:     p.Values[start:end],
+		})
+		if _, err := s.store.EnqueueTask(&store.Task{
+			DeviceID: sess.DeviceID,
+			Kind:     TaskGetParameterValues,
+			Payload:  string(payload),
+		}); err != nil {
+			s.log.Warn("入队读回校验失败", "device_id", sess.DeviceID, "err", err)
+			return
+		}
+		batches++
 	}
 	s.log.Info("设置成功，同一会话内读回核对",
 		"device_id", sess.DeviceID, "params", len(names), "batches", batches)
+}
+
+// verifyReadBack 把读回的结果与期望值比对，返回不一致的说明。
+//
+// 纯函数，便于单测。比较时对布尔值宽容一点（true/1、false/0 视为一样）。
+func verifyReadBack(expect, got []ParamValue) []string {
+	actual := make(map[string]string, len(got))
+	for _, g := range got {
+		actual[strings.ToLower(strings.TrimSpace(g.Name))] = strings.TrimSpace(g.Value)
+	}
+	var problems []string
+	for _, e := range expect {
+		key := strings.ToLower(strings.TrimSpace(e.Name))
+		gotVal, ok := actual[key]
+		want := strings.TrimSpace(e.Value)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("%s：读回里没有这个参数", e.Name))
+			continue
+		}
+		if !sameValue(want, gotVal) {
+			problems = append(problems, fmt.Sprintf("%s：期望 %q，读回 %q", e.Name, want, gotVal))
+		}
+	}
+	return problems
+}
+
+func sameValue(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return normBool(a) == normBool(b) && normBool(a) != ""
+}
+
+func normBool(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true":
+		return "1"
+	case "0", "false":
+		return "0"
+	}
+	return ""
 }
 
 // onFault 处理 CPE 回的错误。
@@ -885,7 +1038,7 @@ func (s *Server) handleCPEReady(w http.ResponseWriter, sess *Session) {
 
 // dispatchNextTask 取一条待办任务发下去；没有就 204 结束会话。
 func (s *Server) dispatchNextTask(w http.ResponseWriter, sess *Session) {
-	t, err := s.store.ClaimNextTask(sess.DeviceID)
+	t, err := s.store.ClaimNextTask(sess.DeviceID, sess.deferredIDs())
 	if err != nil {
 		s.log.Error("取待办任务失败", "device_id", sess.DeviceID, "err", err)
 		s.writeEnvelope(w, sess, newRPCID(), FaultBody(FaultInternalError, "取任务失败"))
@@ -1005,6 +1158,9 @@ func (s *Server) writeEnvelope(w http.ResponseWriter, sess *Session, id, body st
 // endSession 回 204（无内容）并结束会话 —— 这是 TR-069 里「我没活了」的标准表达。
 func (s *Server) endSession(w http.ResponseWriter, sess *Session) {
 	s.log.Debug("会话结束", "session", sess.ID, "device_id", sess.DeviceID)
+	// 清掉推迟列表：本次会话要跳过的任务，下一轮会话就该放行了。
+	// （会话对象会跨多次 HTTP 请求甚至跨会话复用，不清就会把任务永久跳过。）
+	sess.clearDeferred()
 	s.sess.end(sess)
 	w.WriteHeader(http.StatusNoContent)
 }

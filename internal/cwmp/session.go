@@ -31,6 +31,13 @@ type Session struct {
 
 	pendingTask int64 // 已下发、等待 CPE 回执的任务 ID
 
+	// deferIDs：本次会话中要「先跳过」的任务 ID。
+	//
+	// 用途：写入参数后的核对任务。真机（华为 HN8145X6N）的无线参数是**异步生效**的：
+	// 写入立即返回 Status=0，但同一会话里读回来还是旧值，几秒到几十秒后才变。
+	// 所以先把核对任务排到**设备下一轮会话**再跑，避免误报「写入未生效」。
+	deferIDs []int64
+
 	lock chan struct{} // 信号量，保证同一会话串行处理
 }
 
@@ -44,6 +51,23 @@ func (s *Session) tryLock(timeout time.Duration) bool {
 }
 
 func (s *Session) unlock() { <-s.lock }
+
+// deferTask 把某个任务排到下一轮会话再跑（本次会话不取它）。
+// 调用方必须已经持有会话锁。
+func (s *Session) deferTask(id int64) {
+	for _, x := range s.deferIDs {
+		if x == id {
+			return
+		}
+	}
+	s.deferIDs = append(s.deferIDs, id)
+}
+
+// deferredIDs 返回本轮要跳过的任务 ID。调用方必须已持有会话锁。
+func (s *Session) deferredIDs() []int64 { return s.deferIDs }
+
+// clearDeferred 清空推迟列表。一个会话结束时调用，否则任务会被永久跳过。
+func (s *Session) clearDeferred() { s.deferIDs = nil }
 
 // sessionManager 维护所有在途会话。
 type sessionManager struct {

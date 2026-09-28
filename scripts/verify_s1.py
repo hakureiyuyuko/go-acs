@@ -297,6 +297,11 @@ def main():
         check("发射功率候选来自 TransmitPowerSupported 且带单位", "20%" in fhtml)
         check("密码框是 password 且提示为空不修改",
               'type="password"' in fhtml and "为空表示不修改" in fhtml)
+        # 真机实测：往 WLANConfiguration.{i}.KeyPassphrase 写密码会被回 9007
+        # Invalid parameter value，WPA/WPA2-PSK 的密码位在 PreSharedKey.1.KeyPassphrase
+        check("密码字段指向 PreSharedKey.1.KeyPassphrase（不是给 WEP 用的那个）",
+              "PreSharedKey.1.KeyPassphrase" in fhtml and
+              'name="key"' in fhtml)
         check("设备没报的字段不会渲染成表单项（信道带宽）",
               '<div class="wlabel">信道带宽</div>' not in fhtml)
         check("不存在的实例返回 404", get_code(f"/devices/{did}/wifi/999") == 404)
@@ -334,7 +339,46 @@ def main():
             check("没动过的参数没有被一起写入",
                   "TotalAssociations" not in payload and "BeaconType" not in payload)
 
-    print("== 16. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 16. 写入被接受但没生效：同会话不急着判，下一轮会话才定性 ==")
+    if did:
+        # 模拟真机行为：CPE 回 Status=0 但值不变
+        st, loc = post_form(f"/devices/{did}/wifi/1", {"ssid": "WONT-STICK"})
+        check("提交返回 303", st == 303, st)
+        ok, out = run_sim(workdir, "-serial", "VERIFY098", "-oui", "001122", "-once",
+                          "-event", "2 PERIODIC", "-ignore-set", "SSID")
+        check("模拟器会话（故意不生效）成功", ok, out[-200:])
+
+        full = wait_tasks_done(did)
+        spv = sorted([t for t in full["tasks"] if t["Kind"] == "SetParameterValues"], key=lambda x: x["ID"])
+        last = spv[-1] if spv else None
+        # 真机的无线参数是异步生效的（写入后同会话读回还是旧值，几十秒后才变），
+        # 所以第一轮**不能**就判失败，否则会误报。
+        check("同会话读回对不上时不急于判失败（异步生效的可能）",
+              last is not None and last["Status"] == "done",
+              (last or {}).get("Status"))
+
+        # 下一轮会话：延后核对任务跑起来，这时还没变才算真没生效
+        ok, out = run_sim(workdir, "-serial", "VERIFY098", "-oui", "001122", "-once",
+                          "-event", "2 PERIODIC", "-ignore-set", "SSID")
+        check("第二轮会话成功", ok, out[-200:])
+        full = wait_tasks_done(did)
+        spv = sorted([t for t in full["tasks"] if t["Kind"] == "SetParameterValues"], key=lambda x: x["ID"])
+        last = spv[-1] if spv else None
+        check("下一轮会话复核后判定为失败",
+              last is not None and last["Status"] == "failed",
+              (last or {}).get("Status"))
+        check("失败原因说明了「读回未生效」",
+              last is not None and "读回未生效" in last["Result"],
+              (last or {}).get("Result", "")[:110])
+
+        vals = {p["Name"]: p["Value"] for p in full["params"]}
+        got_ssid = vals.get("InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID")
+        # 注意：模拟器每次启动都是新进程、从默认值开始，所以读回的是它的默认 SSID，
+        # 而不是上一轮写进去的值。关键是它**没有**变成我们这次想写的新值。
+        check("设备上的 SSID 确实没变成目标值（所以报失败是对的）",
+              got_ssid != "WONT-STICK", got_ssid)
+
+    print("== 17. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 

@@ -348,6 +348,62 @@ GetParameterNamesResponse (437)  → 200 GetParameterValues(<前 200 个名>)
 注意客户端 IP 是 `192.168.30.3`（光猫的 LAN 侧），而光猫自己对我们呈现的是 `192.168.10.22`
 （它作为 CPE 的 WAN/管理 IP）—— 两张网是由它 NAT 隔开的。
 
+### 真机写入实验：三个值得记的行为（2026-09-28）
+
+在真机（华为 OptiXstar HN8145X6N）上实际跑了几次写入，碰到三个之前想不到的行为：
+
+#### 1. 无线参数是**异步生效**的：立即读回会误报
+
+改了 `WLANConfiguration.5.RadioEnabled`（开 5GHz 射频）：
+
+```
+15:26:52.165  下发 SetParameterValues
+15:26:57.691  设备回 Status=0（接受了，耗时 5.5 秒）
+15:26:57.764  同一会话内读回：RadioEnabled 还是 0
+…
+几分钟后再查：RadioEnabled = 1          ← 真的生效了，只是晚
+```
+
+所以第一版的「读回对不上就判失败」会**误报**。改成两级：
+
+- **同会话立即读回**：对得上就直接结案；对不上**先不判错**
+  （可能就是还没生效），把核对任务排到**设备下一轮会话**再跑；
+- **下一轮会话的延后核对**：还对不上才算真没生效，把设置任务标为失败。
+
+实现上不需要加延时列：`ClaimNextTask` 支持一个 `exclude` 列表，
+会话对象记住「本轮要跳过的任务 ID」，会话结束时清空 —— 任务自然就落到下一轮了。
+
+#### 2. 密码要写到 `PreSharedKey.1.KeyPassphrase`，不是 `KeyPassphrase`
+
+往 `WLANConfiguration.{i}.KeyPassphrase`（同实例下那个空的）写密码，设备直接拒：
+
+```
+CPE 返回错误 9003: Invalid arguments
+  | InternetGatewayDevice.LANDevice.1.WLANConfiguration.5.KeyPassphrase
+    -> 9007 Invalid parameter value
+```
+
+因为 WPA/WPA2-PSK 的密码在 `PreSharedKey.1.KeyPassphrase` 下，
+而 `WLANConfiguration.{i}.KeyPassphrase` 是给 WEP 的。
+
+顺带说明：**设备把逐参数错误报得很清楚**，我们的 Fault 处理把
+`SetParameterValuesFault`（哪个参数、什么码、什么原因）完整记进了任务结果。
+
+→ 修法：表单字段的候选从「只比最后一段」改成「支持多段尾部路径」，
+密码字段的候选顺序改为 `presharedkey.1.keypassphrase` → `keypassphrase`。
+（原来靠叶子名索引，这两个参数的叶子名一样，永远选不到正确的那个。）
+
+#### 3. 写 `SSID` 是同步生效的
+
+改 2.4G 的 SSID（`WirelessNet` → `HomeWifi`）：下发后同一会话读回就是新值，一次到位。
+说明不是所有参数都异步 —— 所以「同会话能对上就不多跑一轮」这个优化是值得的。
+
+#### 未解的一个疑问
+
+5GHz 的 `RadioEnabled` 已经是 `1` 了，但 `Status` 一直是 `Disabled`、`Channel` 是 `0`。
+可能是还要动别的（厂商私有参数 / 重启生效），也可能设备就是不上报。
+先记下来，不猜。
+
 ### 抓到的真机报文已固化成回归样本
 
 放在 `internal/cwmp/testdata/`（不是手写的，是这次联调实际抓下来的原始字节）：
@@ -377,10 +433,10 @@ GetParameterNamesResponse (437)  → 200 GetParameterValues(<前 200 个名>)
 
 | 项目 | 结果 |
 | --- | --- |
-| `go test ./...` | 全部通过（`internal/cwmp` 22 个用例、`internal/store` 6 个用例） |
-| `scripts/verify-s1.sh` | **通过 42 / 失败 0** |
+| `go test ./...` | 全部通过（`internal/cwmp` 27 个用例、`internal/store` 6 个用例、`internal/web` 9 个用例）|
+| `scripts/verify-s1.sh` | **通过 77 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
-| 真机（华为 HN8145X6N） | **纳管成功**，取回 14 个参数，周期性上报稳定 |
+| 真机（华为 HN8145X6N） | **纳管 + 改 WiFi 均成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |
 
 > 以上都是**本次实例的实测值，不是项目常量**。
