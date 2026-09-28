@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l . | grep -v '^reference/' || true)
+          if [ -n "$out" ]; then echo "这些文件没格式化："; echo "$out"; exit 1; fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: CGO_ENABLED=0 go test ./...
+
+      - name: build
+        run: CGO_ENABLED=0 go build ./cmd/acs && CGO_ENABLED=0 go build ./test/cpesim

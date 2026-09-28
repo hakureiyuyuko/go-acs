@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // WanLink 是一条 WAN 连接（TR-098 的 WANIPConnection / WANPPPConnection，

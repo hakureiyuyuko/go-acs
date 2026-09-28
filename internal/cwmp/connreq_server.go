@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // ConnectionRequest 相关的参数名（TR-098）。TR-181 是 Device.ManagementServer.*，字段同名。

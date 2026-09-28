@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // 重启报文要带 CommandKey（设备回 RebootResponse 时会原样带回，便于配对）。

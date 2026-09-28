@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 func newTestServer(t *testing.T, cfg Config) (*Server, *store.Store, int64) {

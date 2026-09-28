@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // 任务类型（存在 tasks.kind 里）。

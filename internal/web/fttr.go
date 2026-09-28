@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // fttrCandidates 描述一类「装子设备」的对象。

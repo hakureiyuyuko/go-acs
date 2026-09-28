@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // WifiBand 是看板上「一个设备的某个频段」的概况。

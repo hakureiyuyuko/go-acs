@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // errFake 代替“控制接口返回的拒绝原因”。

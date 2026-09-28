@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"acs/internal/cwmp"
+	"github.com/hakureiyuyuko/go-acs/internal/cwmp"
 )
 
 type simulator struct {

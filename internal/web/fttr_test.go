@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // 样本取自真机（华为 V271-20 FTTR 主机）读回的 X_HW_APDevice 子设备表。

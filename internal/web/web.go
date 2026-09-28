@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 //go:embed templates/*.html static/*

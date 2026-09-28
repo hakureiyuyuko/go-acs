@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"acs/internal/config"
-	"acs/internal/cwmp"
-	"acs/internal/store"
-	"acs/internal/web"
+	"github.com/hakureiyuyuko/go-acs/internal/config"
+	"github.com/hakureiyuyuko/go-acs/internal/cwmp"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/web"
 )
 
 func main() {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // 这一文件回答一个问题：**谁连在哪个 WLAN 上**。

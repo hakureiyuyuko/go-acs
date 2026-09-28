@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // 详情页的「删除设备」：删完回首页并给提示；重复删要给「不存在」的提示而不是崩。

@@ -3,7 +3,7 @@ package web
 import (
 	"testing"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // 样本取自真机（华为 HN8145X6N）读回的无线参数：2.4G 是实例 1、5G 是实例 5。

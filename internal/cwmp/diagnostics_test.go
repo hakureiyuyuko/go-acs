@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // diagTask 造一条诊断任务（载荷跟真实入队时一样）。

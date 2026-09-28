@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"acs/internal/store"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // cliParams 造一份贴近真机的无线参数：

@@ -1,4 +1,4 @@
-module acs
+module github.com/hakureiyuyuko/go-acs
 
 go 1.27
 
