@@ -139,7 +139,7 @@ def run_chrome_dom(chrome, url):
     """
     try:
         out = subprocess.run(
-            [chrome, "--headless=new", "--no-sandbox", "--disable-gpu",
+            [chrome, "--headless=new", "--accept-lang=zh-CN", "--no-sandbox", "--disable-gpu",
              "--virtual-time-budget=4000", "--dump-dom", url],
             capture_output=True, timeout=60,
         )
@@ -1482,6 +1482,36 @@ def main():
                 proc.wait(timeout=5)
             except Exception:  # noqa: BLE001
                 proc.kill()
+
+    print("== 37b. 多语言：面板可切中 / 英 ==")
+
+    def lang_get(path, cookie=None):
+        # 面板开着登录时要带上会话 cookie，否则会被送到登录页（那样断言的就是登录页了）
+        req = panel_req(BASE + path)
+        if cookie:
+            req.add_header("Cookie", cookie if not PANEL_COOKIE else PANEL_COOKIE + "; " + cookie)
+        return urllib.request.urlopen(req, timeout=20)
+
+    with lang_get("/") as r:
+        zh_html = r.read().decode("utf-8", "replace")
+    check("默认语言是中文", "已纳管设备" in zh_html, "")
+    with lang_get("/?lang=en") as r:
+        en_html = r.read().decode("utf-8", "replace")
+        set_cookie = r.headers.get("Set-Cookie") or ""
+    check("?lang=en 渲染英文", "Managed devices" in en_html and "Devices" in en_html, "")
+    check("切语言会把选择记进 cookie（acs_lang=en）", "acs_lang=en" in set_cookie, set_cookie[:60])
+    # 排除两处按设计会带中文的地方：语言切换按钮（语言自称）、给 JS 的译文 JSON
+    probe = en_html
+    probe = re.sub(r'(?s)<a class="ghost" href="\?lang=[^"]*"[^>]*>.*?</a>', '', probe)
+    probe = re.sub(r'(?s)<script>window\.I18N = .*?</script>', '', probe)
+    check("英文页面里没有残留中文", not re.search(r'[\u4e00-\u9fff]', probe),
+          "".join(re.findall(r'[\u4e00-\u9fff]+', probe)[:5]))
+    with lang_get("/", "acs_lang=en") as r:
+        again = r.read().decode("utf-8", "replace")
+    check("带 acs_lang cookie 的后续请求仍是英文", "Managed devices" in again, "")
+    with lang_get("/?lang=zh") as r:
+        back = r.read().decode("utf-8", "replace")
+    check("?lang=zh 能切回中文", "已纳管设备" in back, "")
 
     print("== 37. 离线判定：超期先主动探测，探不通才判离线 ==")
     acs_bin = os.path.join(workdir, "acs")

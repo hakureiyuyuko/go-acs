@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Device.DisplayName}} · 轻量 TR-069 ACS</title>
+<title>{{.Device.DisplayName}} · {{T "轻量 TR-069 ACS"}}</title>
 <link rel="stylesheet" href="/static/style.css">
 <script>
   // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
@@ -23,80 +23,81 @@
 </head>
 <body>
 <header class="top">
-  <h1>轻量 TR-069 ACS</h1>
+  <h1>{{T "轻量 TR-069 ACS"}}</h1>
   <div class="spacer"></div>
-  <a class="ghost" href="/settings">设置</a>
+  <a class="ghost" href="/settings">{{T "设置"}}</a>
   <button id="autorefresh" class="ghost" type="button" aria-pressed="false"
-          title="每 5 秒自动刷新本页（开关状态与设备列表页共享）">自动刷新 5s：关</button>
-  <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
+          title='{{T "每 5 秒自动刷新本页（开关状态与设备列表页共享）"}}'>{{T "自动刷新 5s：关"}}</button>
+  <button id="theme-toggle" class="ghost" type="button" title='{{T "切换日间 / 夜间模式"}}'>{{T "主题"}}</button>
+  <a class="ghost" href="?lang={{.OtherLang}}" title='{{T "切换界面语言"}}'>{{.OtherLangName}}</a>
   {{if .AuthOn}}
-  <form method="post" action="/logout"><button type="submit" class="ghost" title="退出登录">退出</button></form>
+  <form method="post" action="/logout"><button type="submit" class="ghost" title='{{T "退出登录"}}'>{{T "退出"}}</button></form>
   {{end}}
 </header>
 
 <main>
-  <div class="crumb"><a href="/">设备列表</a> / {{.Device.DisplayName}}</div>
+  <div class="crumb"><a href="/">{{T "设备列表"}}</a> / {{.Device.DisplayName}}</div>
 
   <div class="cards">
     <div class="card">
-      <div class="l">状态</div>
-      <div>{{if .Device.Probing}}<span class="badge probing">探测中</span>{{else if .Device.Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</div>
-      {{if .Device.Probing}}<div class="hint">超期未上报，已主动探测 {{.Device.ProbeCount}} 次<br>最近一次 {{fmtTime .Device.ProbeAt}}</div>{{end}}
+      <div class="l">{{T "状态"}}</div>
+      <div>{{if .Device.Probing}}<span class="badge probing">{{T "探测中"}}</span>{{else if .Device.Online}}<span class="badge on">{{T "在线"}}</span>{{else}}<span class="badge off">{{T "离线"}}</span>{{end}}</div>
+      {{if .Device.Probing}}<div class="hint">{{T "超期未上报，已主动探测 %d 次；最近一次 %s" .Device.ProbeCount (fmtTime .Device.ProbeAt)}}</div>{{end}}
     </div>
-    <div class="card"><div class="n">{{len .Params}}</div><div class="l">已采集参数</div></div>
-    <div class="card"><div class="n">{{.Pending}}</div><div class="l">待办任务</div></div>
+    <div class="card"><div class="n">{{len .Params}}</div><div class="l">{{T "已采集参数"}}</div></div>
+    <div class="card"><div class="n">{{.Pending}}</div><div class="l">{{T "待办任务"}}</div></div>
     <div class="card">
-      <div class="l">操作</div>
+      <div class="l">{{T "操作"}}</div>
       <form method="post" action="/devices/{{.Device.ID}}/refresh" style="margin-top:6px">
         <button type="submit" {{if not .Device.Online}}disabled
-                title="设备离线：它下次上报时才会收到指令，等它回来再点"{{end}}>重新获取设备信息</button>
+                title='{{T "设备离线：它下次上报时才会收到指令，等它回来再点"}}'{{end}}>{{T "重新获取设备信息"}}</button>
       </form>
       <form method="post" action="/devices/{{.Device.ID}}/wake" style="margin-top:8px">
         <button type="submit" class="ghost"
-                {{if not .Device.Online}}disabled title="设备离线：唤醒命令发不出去（离线判定本来就会自动探测）"
-                {{else}}title="让设备立刻回连一次，不用等下次上报"{{end}}>
-          立即唤醒设备
+                {{if not .Device.Online}}disabled title='{{T "设备离线：唤醒命令发不出去（离线判定本来就会自动探测）"}}'
+                {{else}}title='{{T "让设备立刻回连一次，不用等下次上报"}}'{{end}}>
+          {{T "立即唤醒设备"}}
         </button>
       </form>
       <form method="post" action="/devices/{{.Device.ID}}/reboot" style="margin-top:8px"
-            data-confirm="确定要重启「{{.Device.DisplayName}}」吗？设备会立刻断开重启，重启期间无法上网（通常几分钟），重连后 TR-069 会自动接回来。">
+            data-confirm='{{T "确定要重启「%s」吗？设备会立刻断开重启，重启期间无法上网（通常几分钟），重连后 TR-069 会自动接回来。" .Device.DisplayName}}'>
         <button type="submit" class="danger" {{if not .Device.Online}}disabled
-                title="设备离线：重启命令发不出去"{{end}}>重启设备</button>
+                title='{{T "设备离线：重启命令发不出去"}}'{{end}}>{{T "重启设备"}}</button>
       </form>
       <form method="post" action="/devices/{{.Device.ID}}/delete" style="margin-top:8px"
-            data-confirm="确定要从本 ACS 删除「{{.Device.DisplayName}}」吗？只会删掉这里的记录（参数、任务、上报历史），不会动设备本身；如果设备还配着本 ACS 地址，下次上报会重新纳管。">
-        <button type="submit" class="danger">删除设备</button>
+            data-confirm='{{T "确定要从本 ACS 删除「%s」吗？只会删掉这里的记录（参数、任务、上报历史），不会动设备本身；如果设备还配着本 ACS 地址，下次上报会重新纳管。" .Device.DisplayName}}'>
+        <button type="submit" class="danger">{{T "删除设备"}}</button>
       </form>
     </div>
   </div>
   <div class="hint" style="margin:-8px 0 4px">
-    {{if .Device.Online}}任务在设备下次上报时下发（离线时会排队等待）。
-    {{else}}设备当前离线，需要它配合的操作都不可用；它恢复上报后按钮会自动恢复。删除设备只是删本地记录，随时可用。{{end}}
+    {{if .Device.Online}}{{T "任务在设备下次上报时下发（离线时会排队等待）。"}}
+    {{else}}{{T "设备当前离线，需要它配合的操作都不可用；它恢复上报后按钮会自动恢复。删除设备只是删本地记录，随时可用。"}}{{end}}
   </div>
 
   {{if .Notice}}
   <div class="notice {{if not .NoticeErr}}ok{{end}}">{{.Notice}}</div>
   {{end}}
 
-  <h2>备注</h2>
+  <h2>{{T "备注"}}</h2>
   <form method="post" action="/devices/{{.Device.ID}}/note" class="searchbar">
     <input class="filter" style="width:560px" type="text" name="note" value="{{.Device.Note}}"
-           placeholder="例如：3 楼会议室 / 张工负责 / 测试机">
-    <button type="submit">保存备注</button>
+           placeholder='{{T "例如：3 楼会议室 / 张工负责 / 测试机"}}'>
+    <button type="submit">{{T "保存备注"}}</button>
   </form>
   <div class="hint" style="margin-top:-4px">
-    备注保存在本系统内，不会下发到设备；概览页会显示并参与搜索。
+    {{T "备注保存在本系统内，不会下发到设备；概览页会显示并参与搜索。"}}
   </div>
 
   {{if .HasWan}}
-  <h2>WAN 连接</h2>
+  <h2>WAN {{T "连接"}}</h2>
   <div class="hint" style="margin-bottom:10px">
-    共 {{len .Wan}} 条连接，已连接 {{.WanConnected}} 条。
+    {{T "共 %d 条连接，已连接 %d 条。" (len .Wan) .WanConnected}}
   </div>
   <table>
     <thead>
-      <tr><th>连接</th><th>状态</th><th>IP / 掩码</th><th>网关</th><th>MAC</th>
-          <th>寻址 / NAT</th><th>业务</th><th>VLAN</th><th>时长</th><th>采集</th></tr>
+      <tr><th>{{T "连接"}}</th><th>{{T "状态"}}</th><th>IP / {{T "掩码"}}</th><th>{{T "网关"}}</th><th>MAC</th>
+          <th>{{T "寻址 / NAT"}}</th><th>{{T "业务"}}</th><th>VLAN</th><th>{{T "时长"}}</th><th>{{T "采集"}}</th></tr>
     </thead>
     <tbody>
       {{range .Wan}}
@@ -121,7 +122,7 @@
   </table>
   {{end}}
 
-  <h2>基本信息</h2>
+  <h2>{{T "基本信息"}}</h2>
   <div class="kvs">
     {{range .Basic}}
     <div class="row"><div class="k">{{.K}}</div><div class="v mono">{{.V}}</div></div>
@@ -129,15 +130,15 @@
   </div>
 
   {{if .HasFttr}}
-  <h2>FTTR 子设备</h2>
+  <h2>FTTR {{T "子设备"}}</h2>
   <div class="hint" style="margin-bottom:10px">
-    共 {{len .Fttr}} 台子设备，在线 {{.FttrOnline}} 台。
+    {{T "共 %d 台子设备，在线 %d 台。" (len .Fttr) .FttrOnline}}
   </div>
   {{if .Fttr}}
   <table>
     <thead>
-      <tr><th>实例</th><th>型号</th><th>序列号</th><th>MAC</th><th>在线</th><th>终端</th>
-          <th>软件版本</th><th>信道</th><th>组网</th><th>信号</th>{{if .FttrHasOptical}}<th>光功率</th>{{end}}<th>时长</th><th>采集</th></tr>
+      <tr><th>{{T "实例"}}</th><th>{{T "型号"}}</th><th>{{T "序列号"}}</th><th>MAC</th><th>{{T "在线"}}</th><th>{{T "终端"}}</th>
+          <th>{{T "软件版本"}}</th><th>{{T "信道"}}</th><th>{{T "组网"}}</th><th>{{T "信号"}}</th>{{if .FttrHasOptical}}<th>{{T "光功率"}}</th>{{end}}<th>{{T "时长"}}</th><th>{{T "采集"}}</th></tr>
     </thead>
     <tbody>
       {{range .Fttr}}
@@ -149,13 +150,13 @@
         {{$sc := index $.SubClients .Instance}}
         <td>
           {{if .HasOnline}}
-            {{if .Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}
+            {{if .Online}}<span class="badge on">{{T "在线"}}</span>{{else}}<span class="badge off">{{T "离线"}}</span>{{end}}
           {{else if .Status}}{{.Status}}{{else}}<span class="hint">-</span>{{end}}
         </td>
         <td class="mono">
           {{if $sc.HasWlan}}
             {{if $sc.Total}}<button class="linkbtn" type="button" data-modal="{{$sc.ModalID}}"
-                   title="查看这台子设备上的终端">{{$sc.Total}}</button>
+                   title='{{T "查看这台子设备上的终端"}}'>{{$sc.Total}}</button>
             {{else}}0{{end}}
           {{else}}<span class="hint">-</span>{{end}}
         </td>
@@ -164,7 +165,7 @@
         <td {{if .ModeHint}}title="{{.ModeHint}}"{{end}}>{{if .ModeText}}{{.ModeText}}{{else}}<span class="hint">-</span>{{end}}</td>
         <td class="mono">{{if .Signal}}{{.Signal}}{{else}}-{{end}}</td>
         {{if $.FttrHasOptical}}
-        <td class="mono">{{if .OpticalPower}}{{.OpticalPower}}{{else}}<span class="hint" title="设备未上报光功率">-</span>{{end}}</td>
+        <td class="mono">{{if .OpticalPower}}{{.OpticalPower}}{{else}}<span class="hint" title='{{T "设备未上报光功率"}}'>-</span>{{end}}</td>
         {{end}}
         <td class="mono">{{if .Uptime}}{{.Uptime}}{{else}}-{{end}}</td>
         <td class="mono hint">{{fmtTimeShort .Updated}}</td>
@@ -173,50 +174,50 @@
     </tbody>
   </table>
   {{else}}
-  <div class="empty">已探测到设备有子设备对象，但还没采集到内容 —— 等设备下次上报。</div>
+  <div class="empty">{{T "已探测到设备有子设备对象，但还没采集到内容 —— 等设备下次上报。"}}</div>
   {{end}}
   {{end}}
 
-  <h2>网络诊断（Ping）</h2>
+  <h2>{{T "网络诊断（Ping）"}}</h2>
   <form method="post" action="/devices/{{.Device.ID}}/diagnose" class="searchbar">
     <input class="filter" style="width:320px" type="text" name="host" value="{{.DiagHost}}"
-           placeholder="IP 或域名，例如 www.baidu.com">
+           placeholder='IP {{T "或域名，例如 www.baidu.com"}}'>
     <input class="filter" style="width:96px" type="number" name="count" value="4" min="1" max="20">
-    <span class="hint">个包</span>
+    <span class="hint">{{T "个包"}}</span>
     <input class="filter" style="width:300px" type="text" name="interface" value="{{.DiagIface}}"
-           {{if .HasWan}}list="diagIfaces"{{end}} placeholder="承载接口（留空＝设备自选）">
+           {{if .HasWan}}list="diagIfaces"{{end}} placeholder='{{T "承载接口（留空"}}＝{{T "设备自选）"}}'>
     {{if .HasWan}}
     <datalist id="diagIfaces">
       {{range .DiagIfaces}}<option value="{{.K}}">{{.V}}</option>{{end}}
     </datalist>
     {{end}}
     <button type="submit" {{if not .Device.Online}}disabled
-            title="设备离线：诊断要设备自己发包，等它回来再点"{{end}}>诊断</button>
-    {{if not .Device.Online}}<span class="hint">设备离线，等它恢复上报后再诊断</span>{{end}}
+            title='{{T "设备离线：诊断要设备自己发包，等它回来再点"}}'{{end}}>{{T "诊断"}}</button>
+    {{if not .Device.Online}}<span class="hint">{{T "设备离线，等它恢复上报后再诊断"}}</span>{{end}}
   </form>
   {{if .Diag}}
   <div class="diagbox">
     <div class="diaghead">
       <span class="badge {{.Diag.Status}}">{{.Diag.Status}}</span>
-      <span class="hint">任务 #{{.Diag.ID}} · 于 {{fmtTime .Diag.CreatedAt}} 发起{{if .DiagIface}} · 承载接口 {{.DiagIface}}{{end}}</span>
-      {{if .DiagRunning}}<span class="hint">· 诊断进行中，等设备回报…</span>{{end}}
+      <span class="hint">{{T "任务"}} #{{.Diag.ID}} · {{T "于"}} {{fmtTime .Diag.CreatedAt}} {{T "发起"}}{{if .DiagIface}} · {{T "承载接口"}} {{.DiagIface}}{{end}}</span>
+      {{if .DiagRunning}}<span class="hint">· {{T "诊断进行中，等设备回报…"}}</span>{{end}}
     </div>
-    <pre class="diagout">{{if .Diag.Result}}{{.Diag.Result}}{{else}}（还没有结果）{{end}}</pre>
+    <pre class="diagout">{{if .Diag.Result}}{{.Diag.Result}}{{else}}（{{T "还没有结果）"}}{{end}}</pre>
   </div>
   {{else}}
-  <div class="hint">还没跑过诊断。填个 IP 或域名，点「诊断」就行。</div>
+  <div class="hint">{{T "还没跑过诊断。填个 IP 或域名，点「诊断」就行。"}}</div>
   {{end}}
 
-  <h2>无线（WiFi）</h2>
+  <h2>{{T "无线（WiFi）"}}</h2>
   <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px">
     <form method="post" action="/devices/{{.Device.ID}}/wifi">
-      <button type="submit">重新采集无线概况</button>
+      <button type="submit">{{T "重新采集无线概况"}}</button>
     </form>
   </div>
   {{if .WiFi}}
   <table>
     <thead>
-      <tr><th>频段</th><th>SSID</th><th>射频</th><th>信道</th><th>标准</th><th>加密</th><th>终端</th><th>状态</th><th>采集</th><th></th></tr>
+      <tr><th>{{T "频段"}}</th><th>SSID</th><th>{{T "射频"}}</th><th>{{T "信道"}}</th><th>{{T "标准"}}</th><th>{{T "加密"}}</th><th>{{T "终端"}}</th><th>{{T "状态"}}</th><th>{{T "采集"}}</th><th></th></tr>
     </thead>
     <tbody>
       {{range .WiFi}}
@@ -225,7 +226,7 @@
         <td class="mono">{{if .SSID}}<a href="/devices/{{$.Device.ID}}/wifi/{{.Instance}}">{{.SSID}}</a>{{else}}<span class="hint">-</span>{{end}}</td>
         <td>
           {{if .HaveOn}}
-            {{if .On}}<span class="badge on">开</span>{{else}}<span class="badge off">关</span>{{end}}
+            {{if .On}}<span class="badge on">{{T "开"}}</span>{{else}}<span class="badge off">{{T "关"}}</span>{{end}}
           {{else}}<span class="hint">-</span>{{end}}
         </td>
         <td class="mono">{{if .Channel}}{{.Channel}}{{else}}-{{end}}</td>
@@ -234,45 +235,45 @@
         <td class="mono">
           {{if .HasClientsBtn}}
             <button class="linkbtn" type="button" data-modal="{{.ModalID}}"
-                    title="主机 {{if .Clients}}{{.Clients}}{{else}}0{{end}} 台 · 子设备 {{.SubClients}} 台">{{.ClientsAll}}</button>
+                    title='{{if .Clients}}{{T "主机 %s 台" .Clients}}{{else}}{{T "主机 0 台"}}{{end}} · {{T "子设备 %d 台" .SubClients}}' >{{.ClientsAll}}</button>
           {{else if .Clients}}{{.Clients}}{{else}}<span class="hint">-</span>{{end}}
         </td>
         <td class="mono">{{if .Status}}{{.Status}}{{else}}-{{end}}</td>
         <td class="mono hint">{{fmtTimeShort .Updated}}</td>
-        <td><a class="btn" href="/devices/{{$.Device.ID}}/wifi/{{.Instance}}">修改</a></td>
+        <td><a class="btn" href="/devices/{{$.Device.ID}}/wifi/{{.Instance}}">{{T "修改"}}</a></td>
       </tr>
       {{end}}
     </tbody>
   </table>
   <div class="hint" style="margin-top:6px">
-    设备一般不返回明文无线密码，该字段为空属正常。点「终端」数字可以看到已连终端。
+    {{T "设备一般不返回明文无线密码，该字段为空属正常。点「终端」数字可以看到已连终端。"}}
   </div>
   {{else}}
   <div class="empty">
-    还没采集到 WiFi 信息。点上面的按钮入队一次采集，设备下次 Inform 时下发。
+    {{T "还没采集到 WiFi 信息。点上面的按钮入队一次采集，设备下次 Inform 时下发。"}}
   </div>
   {{end}}
 
-  <h2>高级：读取参数子树</h2>
+  <h2>{{T "高级：读取参数子树"}}</h2>
   <form method="post" action="/devices/{{.Device.ID}}/fetch"
         style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
     <input class="filter" style="width:520px" type="text" name="path"
-           value="{{.DefaultPath}}" placeholder="如 InternetGatewayDevice.LANDevice.1.WLANConfiguration.">
+           value="{{.DefaultPath}}" placeholder='{{T "如 InternetGatewayDevice.LANDevice.1.WLANConfiguration."}}'>
     <input class="filter" style="width:250px" type="text" name="exclude"
-           value="AssociatedDevice" placeholder="排除（逗号分隔，可留空）">
-    <input class="filter" style="width:110px" type="text" name="max" value="200" placeholder="上限">
-    <button type="submit">入队读取</button>
+           value="AssociatedDevice" placeholder='{{T "排除（逗号分隔，可留空）"}}'>
+    <input class="filter" style="width:110px" type="text" name="max" value="200" placeholder='{{T "上限"}}'>
+    <button type="submit">{{T "入队读取"}}</button>
   </form>
 
   <details class="fold">
-    <summary>参数（{{len .Params}}）</summary>
+    <summary>{{T "参数（%d）" (len .Params)}}</summary>
     <div style="margin:10px 0; display:flex; align-items:center; gap:12px">
-      <input id="param-filter" class="filter" type="text" placeholder="按参数名过滤，如 DeviceInfo 或 SSID">
+      <input id="param-filter" class="filter" type="text" placeholder='{{T "按参数名过滤，如 DeviceInfo 或 SSID"}}'>
     </div>
     {{if .Params}}
     <table id="param-table" data-pager="20">
       <thead>
-        <tr><th style="width:44%">参数名</th><th>值</th><th style="width:90px">类型</th><th style="width:70px">可写</th><th style="width:92px">更新</th></tr>
+        <tr><th style="width:44%">{{T "参数名"}}</th><th>{{T "值"}}</th><th style="width:90px">{{T "类型"}}</th><th style="width:70px">{{T "可写"}}</th><th style="width:92px">{{T "更新"}}</th></tr>
       </thead>
       <tbody>
         {{range .Params}}
@@ -280,22 +281,22 @@
           <td class="mono">{{.Name}}</td>
           <td class="mono">{{.Value}}</td>
           <td class="mono">{{.ValueType}}</td>
-          <td>{{if .Writable}}是{{else}}否{{end}}</td>
+          <td>{{if .Writable}}{{T "是"}}{{else}}{{T "否"}}{{end}}</td>
           <td class="mono hint">{{fmtTimeShort .UpdatedAt}}</td>
         </tr>
         {{end}}
       </tbody>
     </table>
     {{else}}
-    <div class="empty">还没有采集到参数。等设备下次上报或点上面的「重新获取设备信息」。</div>
+    <div class="empty">{{T "还没有采集到参数。等设备下次上报或点上面的「重新获取设备信息」。"}}</div>
     {{end}}
   </details>
 
   <details class="fold">
-    <summary>任务历史{{if .TaskHistoryLimit}} <span class="hint">最近 {{.TaskHistoryLimit}} 条</span>{{end}}</summary>
+    <summary>{{T "任务历史"}}{{if .TaskHistoryLimit}} <span class="hint">{{T "最近 %d 条" .TaskHistoryLimit}}</span>{{end}}</summary>
     {{if .Tasks}}
     <table id="task-table" data-pager="20">
-    <thead><tr><th>#</th><th>类型</th><th>状态</th><th>结果</th><th>创建</th><th>完成</th></tr></thead>
+    <thead><tr><th>#</th><th>{{T "类型"}}</th><th>{{T "状态"}}</th><th>{{T "结果"}}</th><th>{{T "创建"}}</th><th>{{T "完成"}}</th></tr></thead>
     <tbody>
       {{range .Tasks}}
       <tr>
@@ -310,15 +311,15 @@
     </tbody>
   </table>
   {{else}}
-  <div class="empty">暂无任务</div>
+  <div class="empty">{{T "暂无任务"}}</div>
   {{end}}
   </details>
 
   <details class="fold">
-    <summary>上报记录{{if .InformHistoryLimit}} <span class="hint">最近 {{.InformHistoryLimit}} 条</span>{{end}}</summary>
+    <summary>{{T "上报记录"}}{{if .InformHistoryLimit}} <span class="hint">{{T "最近 %d 条" .InformHistoryLimit}}</span>{{end}}</summary>
     {{if .Informs}}
     <table id="inform-table" data-pager="20">
-    <thead><tr><th>时间</th><th>事件</th><th>参数条数</th><th>重试</th><th>来源 IP</th></tr></thead>
+    <thead><tr><th>{{T "时间"}}</th><th>{{T "事件"}}</th><th>{{T "参数条数"}}</th><th>{{T "重试"}}</th><th>{{T "来源 IP"}}</th></tr></thead>
     <tbody>
       {{range .Informs}}
       <tr>
@@ -332,7 +333,7 @@
     </tbody>
   </table>
   {{else}}
-  <div class="empty">暂无记录</div>
+  <div class="empty">{{T "暂无记录"}}</div>
   {{end}}
   </details>
 
@@ -341,15 +342,15 @@
   {{if .Groups}}
   <div class="modal-mask" id="{{.ModalID}}" hidden>
     <div class="modal">
-      <button class="modal-close" type="button" data-modal-close title="关闭">✕</button>
-      <h3>终端 · {{.Label}}</h3>
+      <button class="modal-close" type="button" data-modal-close title='{{T "关闭"}}'>✕</button>
+      <h3>{{T "终端 ·"}} {{.Label}}</h3>
       <div class="hint" style="margin-bottom:6px">
-        {{if .SubCount}}主机 {{.HostCount}} 台 · 子设备 {{.SubCount}} 台 · {{end}}共 {{.Total}} 台
+        {{if .SubCount}}{{T "主机 %s 台 · 子设备 %s 台" .HostCount .SubCount}} · {{end}}{{T "共 %d 台" .Total}}
       </div>
       {{range .Groups}}
       <div class="cli-group">
         <div class="cli-group-head">{{.Label}}
-          <span class="hint">{{len .Clients}} 台{{if .Updated}} · 采集 {{fmtTimeShort .Updated}}{{end}}</span>
+          <span class="hint">{{T "%d 台" (len .Clients)}}{{if .Updated}} · {{T "采集 %s" (fmtTimeShort .Updated)}}{{end}}</span>
         </div>
         {{template "clilist" .Clients}}
       </div>
@@ -363,13 +364,13 @@
   {{if .Groups}}
   <div class="modal-mask" id="{{.ModalID}}" hidden>
     <div class="modal">
-      <button class="modal-close" type="button" data-modal-close title="关闭">✕</button>
-      <h3>终端 · {{.Label}}</h3>
-      <div class="hint" style="margin-bottom:6px">共 {{.Total}} 台终端</div>
+      <button class="modal-close" type="button" data-modal-close title='{{T "关闭"}}'>✕</button>
+      <h3>{{T "终端 ·"}} {{.Label}}</h3>
+      <div class="hint" style="margin-bottom:6px">{{T "共 %d 台终端" .Total}}</div>
       {{range .Groups}}
       <div class="cli-group">
         <div class="cli-group-head">{{.Label}}
-          <span class="hint">{{len .Clients}} 台{{if .Updated}} · 采集 {{fmtTimeShort .Updated}}{{end}}</span>
+          <span class="hint">{{T "%d 台" (len .Clients)}}{{if .Updated}} · {{T "采集 %s" (fmtTimeShort .Updated)}}{{end}}</span>
         </div>
         {{template "clilist" .Clients}}
       </div>
@@ -389,8 +390,8 @@
       <div class="clirow">
         <div class="climain">
           <div class="climac mono">{{.MAC}}</div>
-          <div class="cliline"><span class="clik">主机名：</span><span class="mono">{{if .HostName}}{{.HostName}}{{else}}<span class="hint">N/A</span>{{end}}</span></div>
-          <div class="cliline"><span class="clik">IP 地址：</span><span class="mono">{{if .IP}}{{.IP}}{{else}}<span class="hint">设备未上报</span>{{end}}</span></div>
+          <div class="cliline"><span class="clik">{{T "主机名："}}</span><span class="mono">{{if .HostName}}{{.HostName}}{{else}}<span class="hint">N/A</span>{{end}}</span></div>
+          <div class="cliline"><span class="clik">IP {{T "地址："}}</span><span class="mono">{{if .IP}}{{.IP}}{{else}}<span class="hint">{{T "设备未上报"}}</span>{{end}}</span></div>
           {{if .Meta}}<div class="climeta hint">{{.Meta}}</div>{{end}}
         </div>
         {{if .HasSignal}}
@@ -404,10 +405,11 @@
     {{end}}
   </ul>
   {{else}}
-  <div class="hint" style="padding:2px 0 8px">没有终端</div>
+  <div class="hint" style="padding:2px 0 8px">{{T "没有终端"}}</div>
   {{end}}
 {{end}}
 
+<script>window.I18N = {{.I18NJSON}};</script>
 <script src="/static/app.js"></script>
 </body>
 </html>

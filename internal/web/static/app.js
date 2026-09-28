@@ -1,3 +1,14 @@
+// 面板前端脚本：分页、参数过滤、搜索框、主题、自动刷新、二次确认、弹窗。
+//
+// 文案统一走 t() 取译文：译文由服务端按当前语言写进 window.I18N
+//（见 internal/web/web.go 的 pageCommon），查不到就原样用中文 —— 不会出现空白或键名。
+
+function t(key) {
+  try {
+    if (window.I18N && window.I18N[key]) return window.I18N[key];
+  } catch (e) { /* 忽略 */ }
+  return key;
+}
 // 设备详情页/概览页上的几处小交互，纯原生 JS，没有依赖。
 //
 //   1. 表格分页：带 data-pager="20" 的表格默认 20 条/页
@@ -35,7 +46,7 @@ function wireAutoRefresh() {
   try { on = localStorage.getItem(KEY) === "1"; } catch (e) { /* 隐私模式下读不到，当关 */ }
 
   function label() {
-    btn.textContent = "自动刷新 " + SECONDS + "s：" + (on ? "开" : "关");
+    btn.textContent = t(on ? "自动刷新 %ds：开" : "自动刷新 %ds：关").replace("%d", SECONDS);
     btn.classList.toggle("on", on);
     btn.setAttribute("aria-pressed", on ? "true" : "false");
   }
@@ -123,7 +134,7 @@ function wireThemeToggle() {
 
   function label() {
     btn.textContent = root.getAttribute("data-theme") === "light"
-      ? "🌙 切换到夜间" : "☀ 切换到日间";
+      ? t("🌙 切换到夜间") : t("☀ 切换到日间");
   }
   label();
 
@@ -182,8 +193,8 @@ function makePager(table, defaultSize) {
   var bar = document.createElement("div");
   bar.className = "pager";
 
-  var prev = mkBtn("‹ 上一页");
-  var next = mkBtn("下一页 ›");
+  var prev = mkBtn(t("‹ 上一页"));
+  var next = mkBtn(t("下一页 ›"));
   var info = document.createElement("span");
   info.className = "pager-info";
 
@@ -192,7 +203,7 @@ function makePager(table, defaultSize) {
   [20, 50, 100, 0].forEach(function (n) {
     var o = document.createElement("option");
     o.value = String(n);
-    o.textContent = n === 0 ? "全部" : n + " 条/页";
+    o.textContent = n === 0 ? t("全部") : t("每页 %d 条").replace("%d", n);
     sizeSel.appendChild(o);
   });
   sizeSel.value = String(size);
@@ -225,8 +236,8 @@ function makePager(table, defaultSize) {
     for (var j = startIdx; j < endIdx; j++) list[j].style.display = "";
 
     info.textContent = size > 0
-      ? "共 " + list.length + " 条 · 第 " + page + " / " + pages + " 页"
-      : "共 " + list.length + " 条";
+      ? t("共 %d 条 · 第 %d / %d 页").replace("%d", list.length).replace("%d", page).replace("%d", pages)
+      : t("共 %d 条").replace("%d", list.length);
     prev.disabled = page <= 1;
     next.disabled = page >= pages;
 

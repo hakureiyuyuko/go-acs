@@ -309,7 +309,7 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, next, http.StatusSeeOther)
 		return
 	}
-	s.render(w, "login.html", map[string]any{
+	s.renderLang(w, r, "login.html", map[string]any{
 		"Next":  next,
 		"Error": "",
 		"User":  "",
@@ -328,7 +328,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	ip := clientIPOf(r)
 
 	if locked, wait := s.opt.Auth.locked(ip); locked {
-		s.renderLoginError(w, next, user,
+		s.renderLoginError(w, r, next, user,
 			fmt.Sprintf("失败次数太多，请 %.0f 秒后再试", wait.Seconds()))
 		return
 	}
@@ -346,7 +346,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	case <-r.Context().Done():
 	}
 	s.logAuth("面板登录失败", ip, user)
-	s.renderLoginError(w, next, user, "账号或密码不对")
+	s.renderLoginError(w, r, next, user, "账号或密码不对")
 }
 
 // handleLogout 退出登录（POST /logout，也接受 GET 方便直接点链接）。
@@ -357,8 +357,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, panelLoginPath, http.StatusSeeOther)
 }
 
-func (s *Server) renderLoginError(w http.ResponseWriter, next, user, msg string) {
-	s.renderStatus(w, http.StatusUnauthorized, "login.html", map[string]any{
+func (s *Server) renderLoginError(w http.ResponseWriter, r *http.Request, next, user, msg string) {
+	s.renderStatus(w, r, http.StatusUnauthorized, "login.html", map[string]any{
 		"Next":  next,
 		"Error": msg,
 		"User":  user,

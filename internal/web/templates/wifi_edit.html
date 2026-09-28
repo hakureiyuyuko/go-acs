@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Device.DisplayName}} · 无线设置 {{.Band.Label}}</title>
+<title>{{.Device.DisplayName}} · {{T "无线设置"}} {{.Band.Label}}</title>
 <link rel="stylesheet" href="/static/style.css">
 <script>
   // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
@@ -23,29 +23,30 @@
 </head>
 <body>
 <header class="top">
-  <h1>轻量 TR-069 ACS</h1>
+  <h1>{{T "轻量 TR-069 ACS"}}</h1>
   <div class="spacer"></div>
-  <a class="ghost" href="/settings">设置</a>
-  <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
+  <a class="ghost" href="/settings">{{T "设置"}}</a>
+  <button id="theme-toggle" class="ghost" type="button" title='{{T "切换日间 / 夜间模式"}}'>{{T "主题"}}</button>
+  <a class="ghost" href="?lang={{.OtherLang}}" title='{{T "切换界面语言"}}'>{{.OtherLangName}}</a>
 </header>
 
 <main>
   <div class="crumb">
-    <a href="/">设备列表</a> /
+    <a href="/">{{T "设备列表"}}</a> /
     <a href="/devices/{{.Device.ID}}">{{.Device.DisplayName}}</a> /
-    无线设置 {{.Band.Label}}
+    {{T "无线设置"}} {{.Band.Label}}
   </div>
 
   {{if eq .Queued "none"}}
-  <div class="notice">没有检测到改动，未下发任何参数。</div>
+  <div class="notice">{{T "没有检测到改动，未下发任何参数。"}}</div>
   {{else if .Queued}}
   <div class="notice ok">
-    已入队 <b>{{.Queued}}</b> 个参数的修改（SetParameterValues）。
-    设备下次 Inform 或连接时会下发；下发成功后会自动把参数<b>读回核对</b>，下面的任务列表里能看到结果。
+    {{T "已入队 %d 个参数的修改（SetParameterValues）。" .Queued}}
+    {{T "设备下次 Inform 或连接时会下发；下发成功后会自动把参数"}}<b>{{T "读回核对"}}</b>，{{T "下面的任务列表里能看到结果。"}}
   </div>
   {{end}}
 
-  <h2>无线设置 · {{.Band.Label}}{{if .Band.Note}} <span class="hint">{{.Band.Note}}</span>{{end}}</h2>
+  <h2>{{T "无线设置 ·"}} {{.Band.Label}}{{if .Band.Note}} <span class="hint">{{.Band.Note}}</span>{{end}}</h2>
   <div class="hint" style="margin:-6px 0 14px">
     BSSID <span class="mono">{{if .Band.BSSID}}{{.Band.BSSID}}{{else}}-{{end}}</span>
   </div>
@@ -61,8 +62,8 @@
           <label class="chk" title="{{$f.Param}}">
             <input type="checkbox" id="f_{{$f.Key}}" name="{{$f.Key}}" value="1"
                    {{if eq $f.Value "1"}}checked{{end}} {{if $f.ReadOnly}}disabled{{end}}>
-            <span>{{if eq $f.Value "1"}}已启用{{else}}已关闭{{end}}</span>
-            {{if $f.ReadOnly}}<span class="badge off">只读</span>{{end}}
+            <span>{{if eq $f.Value "1"}}{{T "已启用"}}{{else}}{{T "已关闭"}}{{end}}</span>
+            {{if $f.ReadOnly}}<span class="badge off">{{T "只读"}}</span>{{end}}
           </label>
         {{else if eq $f.Kind "select"}}
           <select id="f_{{$f.Key}}" name="{{$f.Key}}" title="{{$f.Param}}"
@@ -74,7 +75,7 @@
           </select>
         {{else if eq $f.Kind "password"}}
           <input type="password" id="f_{{$f.Key}}" name="{{$f.Key}}" value="" title="{{$f.Param}}"
-                 placeholder="为空表示不修改" {{if $f.ReadOnly}}disabled{{end}}>
+                 placeholder='{{T "为空表示不修改"}}' {{if $f.ReadOnly}}disabled{{end}}>
         {{else}}
           <input type="text" id="f_{{$f.Key}}" name="{{$f.Key}}" value="{{$f.Value}}" title="{{$f.Param}}"
                  {{if $f.ReadOnly}}disabled{{end}}>
@@ -85,35 +86,35 @@
     {{end}}
     <div class="wrow">
       <div class="wlabel"></div>
-      <div class="winput"><button type="submit">提交</button></div>
+      <div class="winput"><button type="submit">{{T "提交"}}</button></div>
     </div>
   </form>
   {{else}}
   <div class="empty">
-    这台设备还没有采集到可编辑的无线参数。<br>
-    先点<a href="/devices/{{.Device.ID}}">设备详情页</a>的「重新采集无线概况」。
+    {{T "这台设备还没有采集到可编辑的无线参数。"}}<br>
+    {{T "先点"}}<a href="/devices/{{.Device.ID}}">{{T "设备详情页"}}</a>{{T "的「重新采集无线概况」。"}}
   </div>
   {{end}}
 
-  <h2>高级：直接设置任意参数</h2>
+  <h2>{{T "高级：直接设置任意参数"}}</h2>
   <div class="hint" style="margin:-6px 0 10px">
-    可直接指定表单里没有的参数。
+    {{T "可直接指定表单里没有的参数。"}}
   </div>
   <form method="post" action="/devices/{{.Device.ID}}/wifi/{{.Band.Instance}}" class="wform">
     <div class="wrow">
-      <div class="wlabel">参数名</div>
+      <div class="wlabel">{{T "参数名"}}</div>
       <div class="winput"><input type="text" name="adv_name" style="width:520px"
              placeholder="InternetGatewayDevice.LANDevice.1.WLANConfiguration.{{.Band.Instance}}.X_HW_HT20"></div>
     </div>
     <div class="wrow">
-      <div class="wlabel">值</div>
+      <div class="wlabel">{{T "值"}}</div>
       <div class="winput"><input type="text" name="adv_value" style="width:260px"></div>
     </div>
     <div class="wrow">
-      <div class="wlabel">类型</div>
+      <div class="wlabel">{{T "类型"}}</div>
       <div class="winput">
         <select name="adv_type">
-          <option value="">（自动）</option>
+          <option value="">（{{T "自动）"}}</option>
           <option value="string">string</option>
           <option value="boolean">boolean</option>
           <option value="unsignedInt">unsignedInt</option>
@@ -123,14 +124,14 @@
     </div>
     <div class="wrow">
       <div class="wlabel"></div>
-      <div class="winput"><button type="submit">提交</button></div>
+      <div class="winput"><button type="submit">{{T "提交"}}</button></div>
     </div>
   </form>
 
-  <h2>最近任务</h2>
+  <h2>{{T "最近任务"}}</h2>
   {{if .Tasks}}
   <table>
-    <thead><tr><th>#</th><th>类型</th><th>状态</th><th>结果</th><th>创建</th><th>完成</th></tr></thead>
+    <thead><tr><th>#</th><th>{{T "类型"}}</th><th>{{T "状态"}}</th><th>{{T "结果"}}</th><th>{{T "创建"}}</th><th>{{T "完成"}}</th></tr></thead>
     <tbody>
       {{range .Tasks}}
       <tr>
@@ -145,7 +146,7 @@
     </tbody>
   </table>
   {{else}}
-  <div class="empty">暂无任务</div>
+  <div class="empty">{{T "暂无任务"}}</div>
   {{end}}
 </main>
 
@@ -160,6 +161,7 @@
     sync();
   })();
 </script>
+<script>window.I18N = {{.I18NJSON}};</script>
 <script src="/static/app.js"></script>
 </body>
 </html>

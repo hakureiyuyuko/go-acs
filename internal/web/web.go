@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hakureiyuyuko/go-acs/internal/i18n"
 	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
@@ -49,7 +50,7 @@ type Controller interface {
 type Server struct {
 	store *store.Store
 	ctrl  Controller
-	tpl   *template.Template
+	tpls  map[string]*template.Template // 每种语言一套（`{{T "..."}}` 在解析期就绑好语言）
 	opt   Options
 	log   *slog.Logger
 }
@@ -74,17 +75,27 @@ type Options struct {
 
 // Register 把面板路由挂到 mux 上。
 func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options) error {
-	tpl, err := template.New("").Funcs(template.FuncMap{
-		"fmtTime":        formatTime,
-		"fmtTimeShort":   formatTimeShort,
-		"uptime":         formatUptime,
-		"dataModelLabel": dataModelLabel,
-	}).ParseFS(assets, "templates/*.html")
-	if err != nil {
-		return fmt.Errorf("解析模板失败: %w", err)
+	// 每种语言各解析一套模板：文案通过 {{T "..."}} 在解析期就绑定了语言，
+	// 模板里不用每次渲染都做一次查找（也避免在模板里出现 call 之类的噪音）。
+	tpls := make(map[string]*template.Template, len(i18n.Langs))
+	for _, lang := range i18n.Langs {
+		l := lang
+		tpl, err := template.New("").Funcs(template.FuncMap{
+			"fmtTime":        formatTime,
+			"fmtTimeShort":   formatTimeShort,
+			"uptime":         formatUptime,
+			"dataModelLabel": dataModelLabel,
+			"T": func(key string, args ...any) string {
+				return i18n.T(l, key, args...)
+			},
+		}).ParseFS(assets, "templates/*.html")
+		if err != nil {
+			return fmt.Errorf("解析模板失败（%s）: %w", l, err)
+		}
+		tpls[l] = tpl
 	}
 
-	s := &Server{store: st, ctrl: ctrl, tpl: tpl, opt: opt, log: opt.Log}
+	s := &Server{store: st, ctrl: ctrl, tpls: tpls, opt: opt, log: opt.Log}
 
 	// 面板这一套路由统一走鉴权（CWMP 那套在 main 里单独挂，不受影响）。
 	// Guard 每次请求都会读一遍当前凭据，所以设置页改完密码后立刻按新的校验。
@@ -132,10 +143,15 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 	return nil
 }
 
-// renderStatus 同 render，但可以指定 HTTP 状态码（登录失败要回 401）。
-func (s *Server) renderStatus(w http.ResponseWriter, status int, name string, data any) {
+// renderStatus 同 renderLang，但可以指定 HTTP 状态码（登录失败要回 401）。
+func (s *Server) renderStatus(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
+	lang := s.langOf(w, r)
+	tpl := s.tpls[lang]
+	if tpl == nil {
+		tpl = s.tpls[i18n.Default]
+	}
 	var buf bytes.Buffer
-	if err := s.tpl.ExecuteTemplate(&buf, name, data); err != nil {
+	if err := tpl.ExecuteTemplate(&buf, name, data); err != nil {
 		http.Error(w, "模板渲染失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -150,9 +166,103 @@ func (s *Server) renderStatus(w http.ResponseWriter, status int, name string, da
 // 发出去，错误文本还会混进 HTML 里（踩过：模板里调了一个签名不对的方法，
 // 页面被截断、尾巴上多出一行 `template: ...: invalid function signature`）。
 // 缓冲一下，出错就干干净净回 500。
+// langOf 定这次请求用哪种语言，顺带把选择记进 cookie。
+//
+// 优先级：?lang=xx（点语言切换按钮）→ cookie → Accept-Language → 默认中文。
+func (s *Server) langOf(w http.ResponseWriter, r *http.Request) string {
+	if q := i18n.Normalize(r.URL.Query().Get("lang")); q != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name: "acs_lang", Value: q, Path: "/",
+			MaxAge: 365 * 24 * 3600, SameSite: http.SameSiteLaxMode,
+		})
+		return q
+	}
+	if ck, err := r.Cookie("acs_lang"); err == nil {
+		if l := i18n.Normalize(ck.Value); l != "" {
+			return l
+		}
+	}
+	if l := i18n.Pick(r.Header.Get("Accept-Language")); l != "" {
+		return l
+	}
+	return i18n.Default
+}
+
+// pageCommon 是所有页面都要的语言相关数据：当前语言、语言列表、切换器用得到的东西，
+// 以及给前端 JS 用的一份译文（分页按钮那些文案在 app.js 里）。
+func (s *Server) pageCommon(lang string) map[string]any {
+	js := map[string]string{}
+	for _, k := range jsKeys {
+		js[k] = i18n.T(lang, k)
+	}
+	return map[string]any{
+		"I18NJSON":      i18nJSON(js),
+		"Lang":          lang,
+		"Langs":         i18n.Langs,
+		"LangNames":     i18n.LangNames,
+		"OtherLang":     otherLang(lang),
+		"OtherLangName": i18n.LangNames[otherLang(lang)],
+		"I18N":          js,
+	}
+}
+
+// i18nJSON 把译文打成可以直接嵌进 <script> 的 JSON 字面量。
+func i18nJSON(m map[string]string) template.JS {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return template.JS("{}")
+	}
+	return template.JS(b)
+}
+
+func otherLang(lang string) string {
+	if lang == i18n.LangEN {
+		return i18n.LangZH
+	}
+	return i18n.LangEN
+}
+
+// jsKeys 是 app.js 里用到的文案（服务端按语言注入到 window.I18N，
+// 前端 t("原文") 查表；查不到就原样用中文）。
+var jsKeys = []string{
+	"自动刷新 %ds：关", "自动刷新 %ds：开",
+	"🌙 切换到夜间", "☀ 切换到日间",
+	"看到第几页 / 每页多少条",
+	"‹ 上一页", "下一页 ›", "全部",
+	"每页 %d 条", "共 %d 条 · 第 %d / %d 页", "共 %d 条",
+}
+
+// mergeCommon 把公共数据合进页面自己的数据里（页面数据优先）。
+func mergeCommon(data map[string]any, common map[string]any) map[string]any {
+	for k, v := range common {
+		if _, ok := data[k]; !ok {
+			data[k] = v
+		}
+	}
+	return data
+}
+
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
+	s.renderLang(w, nil, name, data)
+}
+
+// renderLang 按请求语言渲染（需要拿到 r 才能协商语言；老调用点走 render 默认中文）。
+func (s *Server) renderLang(w http.ResponseWriter, r *http.Request, name string, data any) {
+	lang := i18n.Default
+	if r != nil {
+		lang = s.langOf(w, r)
+	}
+	tpl := s.tpls[lang]
+	if tpl == nil {
+		tpl = s.tpls[i18n.Default]
+	}
+	// 语言相关的公共数据（当前语言、切换器、给 JS 的译文）统一在这里并进去，
+	// 各页面自己的数据优先。
+	if m, ok := data.(map[string]any); ok {
+		data = mergeCommon(m, s.pageCommon(lang))
+	}
 	var buf bytes.Buffer
-	if err := s.tpl.ExecuteTemplate(&buf, name, data); err != nil {
+	if err := tpl.ExecuteTemplate(&buf, name, data); err != nil {
 		http.Error(w, "模板渲染失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -236,7 +346,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"Notice":    strings.TrimSpace(r.URL.Query().Get("msg")),
 		"NoticeErr": r.URL.Query().Get("err") == "1",
 	}
-	s.render(w, "index.html", data)
+	s.renderLang(w, r, "index.html", data)
 }
 
 // deviceMatches 判断设备是否命中搜索词。q 为空则全部命中。
@@ -521,7 +631,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		// 表单默认值：按设备的数据模型根猜一个 WiFi 路径（只是默认值，用户可改）
 		"DefaultPath": defaultFetchPath(d),
 	}
-	s.render(w, "device.html", data)
+	s.renderLang(w, r, "device.html", data)
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
@@ -571,7 +681,7 @@ func (s *Server) handleWifiEdit(w http.ResponseWriter, r *http.Request) {
 		"Queued": r.URL.Query().Get("queued"),
 		"Path":   "/devices/" + strconv.FormatInt(id, 10) + "/wifi/" + strconv.Itoa(inst),
 	}
-	s.render(w, "wifi_edit.html", data)
+	s.renderLang(w, r, "wifi_edit.html", data)
 }
 
 // handleWifiSave 处理无线编辑表单的提交：把真正变了的字段拼成 SetParameterValues 入队。

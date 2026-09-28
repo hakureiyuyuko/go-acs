@@ -14,6 +14,7 @@
   IPPingDiagnostics、Connection Request（含 HTTP Digest）；不依赖任何厂商私有服务
 - **先探测再显示**：能力探测决定界面出现哪些区块（WAN、FTTR 子设备…），探测不到就整块不显示，不摆空壳
 - **如实呈现设备行为**：能改不能读的参数、异步生效的无线参数、设备没上报的字段（显示 `N/A`），不编数字
+- **面板中英双语**：右上角一键切换（`?lang=` + cookie + 浏览器语言协商），漏翻有测试卡着
 - **离线设备不乱给操作**：详情页里需要设备配合的按钮（重新获取、唤醒、重启、诊断）在离线时变灰，
   删除设备这类本地操作照旧可用
 - **在线状态按设备自己的周期判**：超过`上报周期×2`没上报，先主动发 Connection Request 探三次，
@@ -147,7 +148,7 @@ go build -o cpesim ./test/cpesim
 
 ```bash
 go test ./...                   # 单元测试：协议解析 / 存储 / Web
-bash scripts/verify-s1.sh       # 端到端 309 项：模拟器打真实 HTTP + SOAP，逐条断言
+bash scripts/verify-s1.sh       # 端到端 337 项：模拟器打真实 HTTP + SOAP，逐条断言
 bash scripts/verify-interop.sh  # 与 GenieACS 官方 JS 模拟器互通 8 项
 ```
 
@@ -183,6 +184,7 @@ docs/               需求文档、发布说明与实现笔记
 
 - `docs/requirements.md` —— 需求与实现进度
 - `docs/notes/deploy.md` —— 安装包与部署脚本的实现笔记（systemd 加固、升级回滚、怎么验的）
+- `docs/notes/i18n.md` —— 面板多语言方案（为什么用中文字面量当 key、怎么加一种语言）
 - `docs/notes/loadtest.md` —— **压测记录**：集体上电的并发上限、瓶颈（SQLite 单连接）与实测数据
 - `docs/notes/implementation-notes.md` —— **真机踩坑与实测记录**：协议边界（单次 GetParameterValues 上限、
   写回类型大小写、诊断要最后置 `Requested`）、设备怪癖（能改不能读、异步生效、身份键被元数据改写）、

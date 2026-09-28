@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"html/template"
 	"net"
 	"net/http"
 	"net/url"
@@ -60,6 +61,12 @@ type settingsView struct {
 
 	// AuthOn 决定顶栏显不显示「退出」。
 	AuthOn bool
+
+	// 语言相关的公共数据（顶栏语言切换、给 JS 的译文）。
+	Lang          string
+	OtherLang     string
+	OtherLangName string
+	I18NJSON      template.JS
 }
 
 // handleSettings 渲染设置页。
@@ -87,7 +94,13 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	v.PendingPorts = v.StoredListen != v.Runtime.ACSListen ||
 		v.StoredWebListen != v.Runtime.WebListen
 	v.AuthOn = s.authEnabled()
-	s.render(w, "settings.html", v)
+	lang := s.langOf(w, r)
+	common := s.pageCommon(lang)
+	v.Lang = lang
+	v.OtherLang = common["OtherLang"].(string)
+	v.OtherLangName = common["OtherLangName"].(string)
+	v.I18NJSON = common["I18NJSON"].(template.JS)
+	s.renderLang(w, r, "settings.html", v)
 }
 
 // handleSettingsSave 保存设置（校验完再写库）。

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>设置 · 轻量 TR-069 ACS</title>
+<title>{{T "设置 · 轻量 TR-069 ACS"}}</title>
 <link rel="stylesheet" href="/static/style.css">
 <script>
   // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
@@ -23,17 +23,18 @@
 </head>
 <body>
 <header class="top">
-  <h1><a href="/">轻量 TR-069 ACS</a></h1>
+  <h1><a href="/">{{T "轻量 TR-069 ACS"}}</a></h1>
   <div class="spacer"></div>
-  <a class="ghost" href="/">设备列表</a>
-  <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
+  <a class="ghost" href="/">{{T "设备列表"}}</a>
+  <button id="theme-toggle" class="ghost" type="button" title='{{T "切换日间 / 夜间模式"}}'>{{T "主题"}}</button>
+  <a class="ghost" href="?lang={{.OtherLang}}" title='{{T "切换界面语言"}}'>{{.OtherLangName}}</a>
   {{if .AuthOn}}
-  <form method="post" action="/logout"><button type="submit" class="ghost" title="退出登录">退出</button></form>
+  <form method="post" action="/logout"><button type="submit" class="ghost" title='{{T "退出登录"}}'>{{T "退出"}}</button></form>
   {{end}}
 </header>
 
 <main>
-  <h2>设置</h2>
+  <h2>{{T "设置"}}</h2>
   {{if .Notice}}
   <div class="notice {{if not .NoticeErr}}ok{{end}}">{{.Notice}}</div>
   {{end}}
@@ -41,69 +42,70 @@
   <table class="kv">
     <tbody>
       <tr>
-        <th>ACS 监听（CWMP）</th>
+        <th>ACS {{T "监听（CWMP）"}}</th>
         <td class="mono">{{.Runtime.ACSListen}}</td>
       </tr>
       <tr>
-        <th>面板监听</th>
-        <td class="mono">{{if .Runtime.WebListen}}{{.Runtime.WebListen}}{{else}}与 ACS 同一端口{{end}}</td>
+        <th>{{T "面板监听"}}</th>
+        <td class="mono">{{if .Runtime.WebListen}}{{.Runtime.WebListen}}{{else}}{{T "与 ACS 同一端口"}}{{end}}</td>
       </tr>
       <tr>
-        <th>访问控制</th>
+        <th>{{T "访问控制"}}</th>
         <td>
-          {{if .WebAuth}}<span class="badge on">已启用</span> <span class="mono">{{.WebUser}}</span>
-          {{else}}<span class="badge off">未启用</span>{{end}}
+          {{if .WebAuth}}<span class="badge on">{{T "已启用"}}</span> <span class="mono">{{.WebUser}}</span>
+          {{else}}<span class="badge off">{{T "未启用"}}</span>{{end}}
         </td>
       </tr>
     </tbody>
   </table>
   {{if .PendingPorts}}
-  <div class="notice" style="margin-top:12px">监听地址已保存，重启服务后生效。</div>
+  <div class="notice" style="margin-top:12px">{{T "监听地址已保存，重启服务后生效。"}}</div>
   {{end}}
 
   <form method="post" action="/settings" class="wform" style="margin-top:22px">
-    <h3>监听地址</h3>
+    <h3>{{T "监听地址"}}</h3>
     <div class="wrow">
-      <div class="wlabel">ACS 监听（CWMP）</div>
+      <div class="wlabel">ACS {{T "监听（CWMP）"}}</div>
       <div class="winput"><input type="text" name="acs_listen" value="{{.StoredListen}}" placeholder=":9090"></div>
     </div>
     <div class="wrow">
-      <div class="wlabel">面板监听</div>
-      <div class="winput"><input type="text" name="web_listen" value="{{.StoredWebListen}}" placeholder="与 ACS 同一端口"></div>
+      <div class="wlabel">{{T "面板监听"}}</div>
+      <div class="winput"><input type="text" name="web_listen" value="{{.StoredWebListen}}" placeholder='{{T "与 ACS 同一端口"}}'></div>
     </div>
 
-    <h3>访问控制</h3>
+    <h3>{{T "访问控制"}}</h3>
     <div class="wrow">
-      <div class="wlabel">账号密码保护</div>
+      <div class="wlabel">{{T "账号密码保护"}}</div>
       <div class="winput">
         <label class="chk">
           <input type="checkbox" name="auth" value="1" {{if .WebAuth}}checked{{end}}>
-          <span>启用</span>
+          <span>{{T "启用"}}</span>
         </label>
       </div>
     </div>
     <div class="wrow">
-      <div class="wlabel">账号</div>
+      <div class="wlabel">{{T "账号"}}</div>
       <div class="winput"><input type="text" name="web_user" value="{{.WebUser}}" placeholder="admin"></div>
     </div>
     <div class="wrow">
-      <div class="wlabel">新密码</div>
+      <div class="wlabel">{{T "新密码"}}</div>
       <div class="winput">
-        <input type="password" name="web_pass" value="" placeholder="{{if .HasPassword}}留空表示不修改{{else}}至少 6 位{{end}}">
+        <input type="password" name="web_pass" value="" placeholder="{{if .HasPassword}}{{T "留空表示不修改"}}{{else}}{{T "至少 6 位"}}{{end}}">
       </div>
     </div>
     <div class="wrow">
-      <div class="wlabel">确认密码</div>
+      <div class="wlabel">{{T "确认密码"}}</div>
       <div class="winput"><input type="password" name="web_pass2" value=""></div>
     </div>
 
     <div class="wrow">
       <div class="wlabel"></div>
-      <div class="winput"><button type="submit">保存</button></div>
+      <div class="winput"><button type="submit">{{T "保存"}}</button></div>
     </div>
   </form>
 </main>
 
+<script>window.I18N = {{.I18NJSON}};</script>
 <script src="/static/app.js"></script>
 </body>
 </html>
