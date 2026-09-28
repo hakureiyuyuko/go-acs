@@ -71,6 +71,45 @@
     {{end}}
   </div>
 
+  {{if .HasFttr}}
+  <h2>FTTR 子设备</h2>
+  <div class="hint" style="margin-bottom:10px">
+    共 {{len .Fttr}} 台子设备，在线 {{.FttrOnline}} 台。
+    实例号由枚举得到（同一型号不同实例号可能不连续，例如 1 / 2 / 4）。
+    每个子设备还带自己的无线配置，可单独下发修改。
+  </div>
+  {{if .Fttr}}
+  <table>
+    <thead>
+      <tr><th>实例</th><th>型号</th><th>序列号</th><th>MAC</th><th>在线</th>
+          <th>软件版本</th><th>信道</th><th>信号</th><th>时长</th><th>采集</th></tr>
+    </thead>
+    <tbody>
+      {{range .Fttr}}
+      <tr>
+        <td class="mono">{{.Instance}}</td>
+        <td>{{if .Model}}{{.Model}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Serial}}{{.Serial}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .MAC}}{{.MAC}}{{else}}-{{end}}</td>
+        <td>
+          {{if .HasOnline}}
+            {{if .Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}
+          {{else if .Status}}{{.Status}}{{else}}<span class="hint">-</span>{{end}}
+        </td>
+        <td class="mono">{{if .Firmware}}{{.Firmware}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Channel}}{{.Channel}}{{else}}-{{end}}{{if .Band}} <span class="hint">{{.Band}}</span>{{end}}</td>
+        <td class="mono">{{if .Signal}}{{.Signal}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Uptime}}{{.Uptime}}{{else}}-{{end}}</td>
+        <td class="mono hint">{{fmtTimeShort .Updated}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">已探测到设备有子设备对象，但还没采集到内容 —— 等设备下次上报。</div>
+  {{end}}
+  {{end}}
+
   <h2>网络诊断（Ping）</h2>
   <form method="post" action="/devices/{{.Device.ID}}/diagnose" class="searchbar">
     <input class="filter" style="width:320px" type="text" name="host" value="{{.DiagHost}}"

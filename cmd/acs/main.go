@@ -51,6 +51,7 @@ func run(args []string) error {
 		SessionTimeout:      cfg.SessionTimeout,
 		AutoFetchDeviceInfo: cfg.AutoFetchInfo,
 		AutoFetchWiFi:       cfg.AutoFetchWiFi,
+		ProbeCapabilities:   cfg.ProbeCapabilities,
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		LogRawSOAP:          cfg.LogRawSOAP,
 		OfflineAfter:        cfg.OfflineAfter,

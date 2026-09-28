@@ -1,0 +1,156 @@
+package web
+
+import (
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"acs/internal/store"
+)
+
+// fttrCandidates 描述一类「装子设备」的对象。
+//
+// 必须与 cwmp.fttrProbeCandidates 保持一致 —— web 包不反向依赖 cwmp，
+// 所以这里抄了一份。改一处记得改另一处。
+//
+//   - detect：顶层对象前缀，能力探测枚举顶层时看这个
+//   - instance：实例号紧跟在这个前缀后面（可能比 detect 多一级）
+//   - 华为 FTTR：对象直接是 X_HW_APDevice.{i}.，两者相同
+//   - 标准 TR-181 Multi-AP：对象是 DataElements.Network.，
+//     而实例在 …Network.Device.{i}.，多一层 Device.
+type fttrCandidate struct {
+	detect   string
+	instance string
+}
+
+var fttrCandidates = []fttrCandidate{
+	{"internetgatewaydevice.x_hw_apdevice.", "internetgatewaydevice.x_hw_apdevice."},
+	{"device.wifi.dataelements.network.", "device.wifi.dataelements.network.device."},
+}
+
+// FttrNode 是一台 FTTR 子设备（子光猫 / 子 AP）。
+type FttrNode struct {
+	Instance  int
+	Model     string
+	Serial    string
+	MAC       string
+	Online    bool
+	HasOnline bool
+	Status    string
+	Firmware  string
+	Hardware  string
+	Channel   string
+	Band      string
+	Uptime    string
+	Signal    string
+	Sync      string
+	Mode      string
+	Updated   time.Time
+}
+
+// FttrOverview 从设备已采集的参数里解析出子设备列表。
+//
+// ok=false 表示**这台设备没有这类对象**，界面应当整块不渲染 ——
+// 而不是渲染一个空区块让人以为坏了。
+//
+// 为什么这么判：顶层对象节点（如 …X_HW_APDevice.）只会在能力探测（next_level 枚举）
+// 或子树枚举时产生，所以「存在以候选前缀开头的参数名」就足以说明设备有这能力。
+func FttrOverview(params []store.Param) ([]FttrNode, bool) {
+	// 第一遍：按 detect 前缀判断能力是否存在，并推出实例前缀。
+	//
+	// 保留设备自己的拼法（真机上出现过 InternetGateWayDevice. 这种大小写写错的情况），
+	// 直接拿它去查/比较才不会漏。
+	instancePrefix := ""
+	for _, c := range fttrCandidates {
+		for _, p := range params {
+			if !strings.HasPrefix(strings.ToLower(p.Name), c.detect) {
+				continue
+			}
+			head := p.Name[:len(c.detect)]     // 设备拼法的 detect 部分
+			tail := c.instance[len(c.detect):] // 相对 detect 多出的那级（如 "device."）
+			instancePrefix = head + tail
+			break
+		}
+		if instancePrefix != "" {
+			break
+		}
+	}
+	if instancePrefix == "" {
+		return nil, false
+	}
+
+	// 子设备顶层字段形如 <instancePrefix><实例号>.<字段名>
+	re := regexp.MustCompile(`(?i)^` + regexp.QuoteMeta(instancePrefix) + `(\d+)\.([A-Za-z0-9_]+)$`)
+
+	byInst := map[int]*FttrNode{}
+	for _, p := range params {
+		m := re.FindStringSubmatch(p.Name)
+		if m == nil {
+			continue
+		}
+		inst, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		n := byInst[inst]
+		if n == nil {
+			n = &FttrNode{Instance: inst}
+			byInst[inst] = n
+		}
+		if p.UpdatedAt.After(n.Updated) {
+			n.Updated = p.UpdatedAt
+		}
+		v := strings.TrimSpace(p.Value)
+		// 按**叶子名后缀**匹配：不同型号的字段名有出入，用后缀更耐用
+		switch {
+		case strings.HasSuffix(strings.ToLower(m[2]), "devicetype"):
+			n.Model = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "serialnumber"):
+			n.Serial = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "macaddr"):
+			n.MAC = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "onlineflag"):
+			n.HasOnline = true
+			n.Online = v == "1" || strings.EqualFold(v, "true")
+		case strings.HasSuffix(strings.ToLower(m[2]), "devicestatus"):
+			n.Status = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "softwareversion"):
+			n.Firmware = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "hardwareversion"):
+			n.Hardware = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "currentchannel"):
+			n.Channel = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "supportedrfband"):
+			n.Band = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "uptime"):
+			n.Uptime = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "signalintensity"):
+			n.Signal = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "syncstatus"):
+			n.Sync = v
+		case strings.HasSuffix(strings.ToLower(m[2]), "workingmode"):
+			n.Mode = v
+		}
+	}
+
+	out := make([]FttrNode, 0, len(byInst))
+	for _, n := range byInst {
+		out = append(out, *n)
+	}
+	// 实例号不连续是常态（真机上是 1/2/4），按号排序更符合直觉
+	sort.Slice(out, func(i, j int) bool { return out[i].Instance < out[j].Instance })
+	return out, true
+}
+
+// fttrClientCount 汇总子设备在线台数（给界面上的小字用）。
+func fttrOnlineCount(nodes []FttrNode) int {
+	n := 0
+	for _, x := range nodes {
+		if x.Online {
+			n++
+		}
+	}
+	return n
+}

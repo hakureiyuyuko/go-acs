@@ -24,12 +24,13 @@ type Config struct {
 	Password string
 	Realm    string
 
-	SessionTimeout time.Duration
-	OfflineAfter   time.Duration
-	MaxBodyBytes   int64
-	LogRawSOAP     bool
-	AutoFetchInfo  bool
-	AutoFetchWiFi  bool
+	SessionTimeout    time.Duration
+	OfflineAfter      time.Duration
+	MaxBodyBytes      int64
+	LogRawSOAP        bool
+	AutoFetchInfo     bool
+	AutoFetchWiFi     bool
+	ProbeCapabilities bool
 
 	// MaxParamsPerRequest: 单次 GetParameterValues 最多带多少个参数名。
 	// 真机实测（华为 HN8145X6N）单次最多只回 256 个，超出静默丢弃，所以必须分批。
@@ -54,6 +55,7 @@ func Load(args []string) (*Config, error) {
 		MaxParamsPerRequest: 200,
 		AutoFetchInfo:       true,
 		AutoFetchWiFi:       true,
+		ProbeCapabilities:   true,
 		LogLevel:            "info",
 		RetentionDays:       30,
 	}
@@ -74,6 +76,7 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&c.LogRawSOAP, "log-soap", c.LogRawSOAP, "是否记录原始 SOAP 报文")
 	fs.BoolVar(&c.AutoFetchInfo, "auto-fetch-info", c.AutoFetchInfo, "Inform 后自动取设备基本信息")
 	fs.BoolVar(&c.AutoFetchWiFi, "auto-fetch-wifi", c.AutoFetchWiFi, "首次纳管/BOOTSTRAP 时自动采集无线概况（看板用）")
+	fs.BoolVar(&c.ProbeCapabilities, "probe-capabilities", c.ProbeCapabilities, "首次纳管时探测设备能力（如有没有 FTTR 子设备）")
 	fs.IntVar(&c.MaxParamsPerRequest, "max-params-per-request", c.MaxParamsPerRequest,
 		"单次 GetParameterValues 最多带多少个参数名（真机单次上限可能只有 256）")
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "日志级别 debug/info/warn/error")
@@ -128,6 +131,9 @@ func fromEnv(c *Config) {
 	}
 	if v := os.Getenv("ACS_AUTO_FETCH_WIFI"); v != "" {
 		c.AutoFetchWiFi = parseBool(v)
+	}
+	if v := os.Getenv("ACS_PROBE_CAPABILITIES"); v != "" {
+		c.ProbeCapabilities = parseBool(v)
 	}
 	if v := os.Getenv("ACS_SESSION_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

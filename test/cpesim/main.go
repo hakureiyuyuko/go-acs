@@ -66,6 +66,10 @@ type simulator struct {
 
 	// pendingDiag 记录“已经开始跑、等着下次会话报结果”的诊断
 	pendingDiag string
+
+	// fttr 子设备（FTTR 从光猫/子 AP）的数量。
+	// 默认 0 —— 这样能同时验证「探测不到就不显示区块」那条。
+	fttr int
 }
 
 func main() {
@@ -93,6 +97,7 @@ func main() {
 	flag.StringVar(&ignoreSet, "ignore-set", "", "模拟“接受写入但不生效”的参数名子串（逗号分隔）")
 	flag.StringVar(&writeOnly, "write-only", "", "模拟“能改不能读”的参数名子串（逗号分隔，写接受但读回为空）")
 	flag.BoolVar(&diagDelay, "diag-delay", false, "ping 诊断改为异步：下次会话才出结果并带事件 8 DIAGNOSTICS COMPLETE")
+	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
 	flag.Parse()
 	s.diagDelay = diagDelay
 
@@ -258,6 +263,29 @@ func (s *simulator) buildParams(root, specVersion string) {
 	set(ping+"MinimumResponseTime", "0", "unsignedInt")
 	set(ping+"AverageResponseTime", "0", "unsignedInt")
 	set(ping+"MaximumResponseTime", "0", "unsignedInt")
+
+	// FTTR 子设备（可选）。
+	//
+	// 实例号**故意做成不连续的**（1/4/7...）—— 真机上就是 1/2/4，
+	// 写死连续编号的代码在真机上是会踩坑的。
+	for i := 1; i <= s.fttr; i++ {
+		inst := i*3 - 2
+		ap := root + fmt.Sprintf("X_HW_APDevice.%d.", inst)
+		set(ap+"SerialNumber", fmt.Sprintf("SUBSN%06d", i), "string")
+		set(ap+"DeviceType", "K251-20", "string")
+		set(ap+"APMacAddr", fmt.Sprintf("02:00:00:00:00:%02X", i), "string")
+		set(ap+"ApOnlineFlag", "1", "string")
+		set(ap+"DeviceStatus", "OK", "string")
+		set(ap+"ManufacturerOUI", "00259E", "string")
+		set(ap+"SoftwareVersion", "V5R023C10S300", "string")
+		set(ap+"HardwareVersion", "3B78.A", "string")
+		set(ap+"CurrentChannel", "1,36", "string")
+		set(ap+"SupportedRFBand", "2.4G,5G", "string")
+		set(ap+"SignalIntensity", "0", "string")
+		set(ap+"SyncStatus", "3", "string")
+		set(ap+"UpTime", "361:36:38", "string")
+		set(ap+"WorkingMode", "repeater", "string")
+	}
 }
 
 // startConnectionRequestServer 起一个假的 CPE 侧 HTTP 服务。

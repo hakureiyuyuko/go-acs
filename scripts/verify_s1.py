@@ -638,13 +638,41 @@ def main():
         check("异步诊断也完成了（等设备下次会话回报）", d1["Status"] == "done", d1["Status"])
         check("异步诊断次数正确（2 个）", "发送包 2" in d1["Result"], d1["Result"][:90])
 
-    print("== 22. 三个页面都要加载 app.js（分页/搜索/主题都靠它）==")
+    print("== 23. 三个页面都要加载 app.js（分页/搜索/主题都靠它）==")
     if did:
         for p in ("/", f"/devices/{did}", f"/devices/{did}/wifi/1"):
             st, h = get(p)
             check(f"{p} 引入了 app.js", "static/app.js" in h)
 
-    print("== 23. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 24. FTTR 子设备：有就显示、没有就不显示 ==")
+    if did:
+        st, h = get(f"/devices/{did}")
+        check("没有 FTTR 能力的设备不显示该区块", "FTTR 子设备" not in h)
+
+    # 带子设备能力的设备（模拟器 -fttr 2）
+    ok, out = run_sim(workdir, "-serial", "VERIFY-FTTR", "-oui", "001122", "-fttr", "2",
+                      "-once", "-event", "0 BOOTSTRAP")
+    check("FTTR 设备注册会话成功", ok, out[-200:])
+    ds = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-FTTR"]
+    check("FTTR 设备已纳管", len(ds) == 1, len(ds))
+    if ds:
+        fid = ds[0]["ID"]
+        full = api_device(fid)
+        ap = [p["Name"] for p in full["params"] if "X_HW_APDevice" in p["Name"]]
+        check("能力探测 + 子树采集都在注册那一次会话里完成了", len(ap) > 0, len(ap))
+
+        st, h = get(f"/devices/{fid}")
+        check("详情页显示了「FTTR 子设备」区块", "FTTR 子设备" in h)
+        check("区块里报了子设备台数", "共 2 台子设备" in h)
+        check("子设备序列号正确", "SUBSN000001" in h and "SUBSN000002" in h)
+        sec = h.split("FTTR 子设备", 1)[1]
+        # 只看每行的第一个单元格（就是实例号），别把后面的“信号=0”当成实例号
+        insts = re.findall(r'<tr>\s*<td class="mono">(\d+)</td>', sec)
+        check("实例号按设备自报的不连续编号显示（1 / 4）",
+              insts[:2] == ["1", "4"], insts)
+        check("显示了子设备采集时间", "采集" in sec)
+
+    print("== 25. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 

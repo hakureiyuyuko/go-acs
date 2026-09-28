@@ -125,6 +125,17 @@ func (s *Store) HasParamPrefix(deviceID int64, prefix string) (bool, error) {
 	return n > 0, err
 }
 
+// HasObjectNodes 判断库里是否已经存过对象节点（名字以 "." 结尾）。
+//
+// 用于「能力探测只做一次」：顶层对象节点只会在 next_level 枚举时产生，
+// 有就说明已经探测过了，不必每轮 BOOTSTRAP 都再探一次。
+func (s *Store) HasObjectNodes(deviceID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM device_params
+		WHERE device_id = ? AND name LIKE '%.' LIMIT 1`, deviceID).Scan(&n)
+	return n > 0, err
+}
+
 // WifiParams 一次性取出**所有设备**的无线相关参数，按 device_id 分组。
 //
 // 看板要展示每台设备的 2.4G/5G 概况，逐设备查参数会变成 N+1 查询，

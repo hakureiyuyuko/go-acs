@@ -267,8 +267,14 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// FTTR 子设备：**探测不到就整块不显示**（不是显示一个空区块）
+	fttr, hasFttr := FttrOverview(params)
+
 	data := map[string]any{
 		"Device":      d,
+		"Fttr":        fttr,
+		"HasFttr":     hasFttr,
+		"FttrOnline":  fttrOnlineCount(fttr),
 		"Diag":        diag,
 		"DiagHost":    diagHost,
 		"DiagRunning": diag != nil && (diag.Status == store.TaskRunning || diag.Status == store.TaskPending),

@@ -83,6 +83,11 @@ type gpnPayload struct {
 	SkipStore bool `json:"skip_store,omitempty"`
 	// Max：取值名单的最大条数（0 = 不限制）。
 	Max int `json:"max,omitempty"`
+
+	// ProbeFTTR：这是一次「能力探测」。枚举完之后看看设备有没有 FTTR / 子设备对象，
+	// 有就顺手把那个子树也拉了（同一个会话里接着做）。
+	// 探测不到就什么都不做 —— 界面上的「FTTR 子设备」区块直接不显示。
+	ProbeFTTR bool `json:"probe_fttr,omitempty"`
 }
 
 type spvPayload struct {
@@ -120,6 +125,7 @@ type Config struct {
 	LockWait            time.Duration // 同一会话并发请求最多等多久
 	AutoFetchDeviceInfo bool          // Inform 后是否自动去取设备基本信息
 	AutoFetchWiFi       bool          // 首次纳管/BOOTSTRAP 时是否自动采集无线概况（看板用）
+	ProbeCapabilities   bool          // 首次纳管时是否探测设备能力（如有没有 FTTR 子设备）
 	MaxBodyBytes        int64
 	LogRawSOAP          bool
 	OfflineAfter        time.Duration // 超过多久没上报就算离线
@@ -328,6 +334,45 @@ func (s *Server) EnqueueDiagnostics(deviceID int64, host string, count int) (int
 func (s *Server) Diagnose(deviceID int64, host string, count int) error {
 	_, err := s.EnqueueDiagnostics(deviceID, host, count)
 	return err
+}
+
+// fttrProbeCandidates 是「装子设备 / 子光猫」的对象前缀（小写用于比较）。
+//
+// 这件事没有统一标准，所以列候选、探测到哪个用哪个；一个都没探测到就把整个区块藏起来：
+//   - 华为 FTTR：InternetGatewayDevice.X_HW_APDevice.（实测过，就是子光猫表）
+//   - 标准 TR-181 Multi-AP（Wi-Fi Data Elements）：Device.WiFi.DataElements.Network.
+//
+// 只认顶层对象（纳管时枚举的就是顶层），更深层的子设备对象暂不支持。
+var fttrProbeCandidates = []string{
+	"internetgatewaydevice.x_hw_apdevice.",
+	"device.wifi.dataelements.network.",
+}
+
+// detectFTTRPrefix 从一批参数名里找出 FTTR / 子设备对象的顶层前缀。
+// 返回的是**设备自己的拼法**（前 len(候选) 个字符），直接用去枚举不会因大小写而失败。
+func detectFTTRPrefix(names []string) (string, bool) {
+	for _, n := range names {
+		low := strings.ToLower(n)
+		for _, c := range fttrProbeCandidates {
+			if strings.HasPrefix(low, c) {
+				return n[:len(c)], true
+			}
+		}
+	}
+	return "", false
+}
+
+// EnqueueProbeCapabilities 入队一条「看看设备有什么能力」的探测任务。
+// 只枚举顶层对象，不改参数、不下发任何东西。
+func (s *Server) EnqueueProbeCapabilities(deviceID int64, root string) (int64, error) {
+	if root == "" {
+		root = "InternetGatewayDevice."
+	}
+	return s.enqueueSubtree(deviceID, gpnPayload{
+		Path:      root,
+		NextLevel: true,
+		ProbeFTTR: true,
+	})
 }
 
 // EnqueueFetchSubtree 入队一条「枚举某个子树下的所有参数，再把值取回来」的任务。
@@ -799,6 +844,17 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		s.enqueueDiagResultRead(sess, running.ID)
 	}
 
+	// 能力探测（每台设备只做一次）：枚举顶层对象，看有没有 FTTR / 子设备对象。
+	// 探测到会在同一个会话里顺手把那个子树拉回来（见 onGetParameterNamesResponse）。
+	// 不探测到就永远不显示那个区块 —— 不要给用户看一个空区块。
+	if s.cfg.ProbeCapabilities && (created || inf.HasEvent("0 BOOTSTRAP")) {
+		if probed, err := s.store.HasObjectNodes(deviceID); err == nil && !probed {
+			if _, err := s.EnqueueProbeCapabilities(deviceID, root); err != nil {
+				s.log.Warn("入队能力探测失败", "device_id", deviceID, "err", err)
+			}
+		}
+	}
+
 	s.writeEnvelope(w, sess, env.ID, InformResponseBody())
 }
 
@@ -970,6 +1026,24 @@ func (s *Server) onGetParameterNamesResponse(w http.ResponseWriter, sess *Sessio
 
 	if havePayload && p.ThenFetch {
 		s.chainFetchAfterNames(sess, p, infos)
+	}
+
+	// 能力探测：只枚举了顶层对象，看看有没有 FTTR / 子设备对象。
+	// 有的话**在同一个会话里**接着把那个子树拉了（不探测到就什么都不做，
+	// 界面上的「FTTR 子设备」区块直接不显示）。
+	if havePayload && p.ProbeFTTR && sess.DeviceID != 0 {
+		names := make([]string, 0, len(infos))
+		for _, in := range infos {
+			names = append(names, in.Name)
+		}
+		if prefix, ok := detectFTTRPrefix(names); ok {
+			s.log.Info("探测到 FTTR/子设备对象，接着采集", "device_id", sess.DeviceID, "prefix", prefix)
+			if _, err := s.EnqueueFetchSubtree(sess.DeviceID, prefix, nil, 0); err != nil {
+				s.log.Warn("入队采集 FTTR 子树失败", "device_id", sess.DeviceID, "err", err)
+			}
+		} else {
+			s.log.Info("未探测到 FTTR/子设备对象（界面不显示该区块）", "device_id", sess.DeviceID)
+		}
 	}
 
 	s.finishTask(sess, fmt.Sprintf("收到 %d 个参数名", len(infos)))
