@@ -70,6 +70,7 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 | `-max-body` | `ACS_MAX_BODY` | `4MiB` | 单请求体上限 |
 | `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名（真机单次上限可能只有 256，见下文）|
 | `-auto-fetch-info` | `ACS_AUTO_FETCH_INFO` | `true` | Inform 后自动取设备基本信息 |
+| `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | 首次纳管/BOOTSTRAP 时自动采集无线概况（看板用）|
 | `-log-level` / `-log-json` | `ACS_LOG_LEVEL` / `ACS_LOG_JSON` | `info` / 否 | 日志 |
 | `-log-soap` | `ACS_LOG_SOAP` | 否 | 打印原始 SOAP 报文（排障用） |
 
@@ -101,6 +102,9 @@ docs/               需求文档与笔记
 - **CPE→ACS 接收**：`Inform` / `Fault` / 各类 `*Response` / `TransferComplete`（先记录）
 - **Web 界面**：设备列表 + 设备详情（基本信息 / 参数表带过滤 / 任务历史 / Inform 记录）+ 一键「重新获取设备信息」
 - **JSON API**：`/api/devices`、`/api/devices/{id}`
+- **看板 WiFi 概览**：首页按设备分频段展示 2.4G/5G 的 SSID、射频开关、信道、标准、加密与**已连终端数**，
+  并给出终端总数；首次纳管 / `0 BOOTSTRAP` 时**自动采集**（先枚举子树圈出真实实例号，
+  再按后缀白名单只取十几个摘要字段，不会把四百多个 WLAN 参数全拉回来）
 - **读取任意参数子树**：界面上的「读取参数子树」表单，或
   `POST /api/devices/{id}/fetch` `{"path":"...","exclude":["..."],"max":200}` ——
   先 `GetParameterNames` 枚举再 `GetParameterValues` 取值，两步在**同一个会话**里完成

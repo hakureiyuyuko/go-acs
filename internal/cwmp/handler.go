@@ -50,6 +50,13 @@ type gpnPayload struct {
 
 	// Exclude：参数名里包含任一子串就跳过（例如不要抓 AssociatedDevice 这张大表）。
 	Exclude []string `json:"exclude,omitempty"`
+	// Include：非空时，只保留以其中任一项为**后缀**的参数名。
+	// 用于“只要十来个关键字段”的场景（看板的 WiFi 概览），避免把整棵子树都拉回来。
+	Include []string `json:"include,omitempty"`
+	// SkipStore：枚举出来的名字不写库。
+	// 自动探测（如 WiFi 概览）只用名字做一次取值，不需要把几百个子树节点名
+	// 都塞进参数表把界面刷屏。
+	SkipStore bool `json:"skip_store,omitempty"`
 	// Max：取值名单的最大条数（0 = 不限制）。
 	Max int `json:"max,omitempty"`
 }
@@ -81,6 +88,7 @@ type Config struct {
 	SessionTimeout      time.Duration // 会话空闲多久算超时
 	LockWait            time.Duration // 同一会话并发请求最多等多久
 	AutoFetchDeviceInfo bool          // Inform 后是否自动去取设备基本信息
+	AutoFetchWiFi       bool          // 首次纳管/BOOTSTRAP 时是否自动采集无线概况（看板用）
 	MaxBodyBytes        int64
 	LogRawSOAP          bool
 	OfflineAfter        time.Duration // 超过多久没上报就算离线
@@ -161,6 +169,12 @@ func (s *Server) FetchSubtree(deviceID int64, path string, exclude []string, max
 	return err
 }
 
+// FetchWiFi 给外部（Web/REST）用：采集无线概况（看板上的 2.4G/5G 那一栏）。
+func (s *Server) FetchWiFi(deviceID int64) error {
+	_, err := s.EnqueueFetchWiFi(deviceID)
+	return err
+}
+
 // EnqueueFetchDeviceInfo 入队一条「取设备基本信息」的任务。
 func (s *Server) EnqueueFetchDeviceInfo(deviceID int64) (int64, error) {
 	d, err := s.store.GetDevice(deviceID)
@@ -211,22 +225,78 @@ func (s *Server) EnqueueFetchSubtree(deviceID int64, path string, exclude []stri
 	if path == "" {
 		return 0, fmt.Errorf("参数路径不能为空")
 	}
-	payload, _ := json.Marshal(gpnPayload{
+	return s.enqueueSubtree(deviceID, gpnPayload{
 		Path:      path,
-		NextLevel: false,
 		ThenFetch: true,
 		Exclude:   exclude,
 		Max:       max,
 	})
+}
+
+func (s *Server) enqueueSubtree(deviceID int64, p gpnPayload) (int64, error) {
+	payload, _ := json.Marshal(p)
 	id, err := s.store.EnqueueTask(&store.Task{
 		DeviceID: deviceID,
 		Kind:     TaskGetParameterNames,
 		Payload:  string(payload),
 	})
 	if err == nil {
-		s.log.Info("已入队：枚举参数子树", "device_id", deviceID, "path", path, "max", max)
+		s.log.Info("已入队：枚举参数子树",
+			"device_id", deviceID, "path", p.Path,
+			"include", len(p.Include), "exclude", p.Exclude)
 	}
 	return id, err
+}
+
+// wifiSummarySuffixes 是「看板 WiFi 概览」需要的那几个字段（TR-098 与 TR-181 两套命名都列上）。
+// 有了它就不用把 400 多个 WLAN 参数全拉回来，只取摘要，轻很多。
+var wifiSummarySuffixes = []string{
+	".SSID",              // 名称
+	".Enable",            // 服务开关
+	".RadioEnabled",      // 射频开关（厂商私有，很常见）
+	".Status",            // Up / Down / Disabled
+	".Channel",           // 当前信道
+	".AutoChannelEnable", // 自动信道
+	".Standard",          // 无线标准
+	".X_HW_Standard",     // 厂商私有的标准
+	".BSSID",
+	".BeaconType", // 认证类型
+	".WPAAuthenticationMode",
+	".WPAEncryptionModes",
+	".X_HW_WPAand11iAuthenticationMode",
+	".X_HW_WPAand11iEncryptionModes",
+	".X_HW_RFBand",                     // 频段（厂商私有）
+	".OperatingFrequencyBand",          // 频段（TR-181）
+	".TotalAssociations",               // 已连终端数
+	".AssociatedDeviceNumberOfEntries", // 已连终端数（TR-181）
+	".SSIDAdvertisementEnabled",        // 是否广播 SSID
+}
+
+// wifiSubtreePath 给出无线参数的子树路径。
+// 数据模型根未知时先按 TR-098 猜一个 —— 枚举不到东西不会报错，只是看板那栏空着。
+func wifiSubtreePath(root string) string {
+	if root == "Device." {
+		return "Device.WiFi."
+	}
+	return root + "LANDevice.1.WLANConfiguration."
+}
+
+// EnqueueFetchWiFi 入队一条「采集无线概况」的任务。
+//
+// 走「枚举 + 按后缀白名单取值」：枚举能把真实的实例号圈出来（真机上 2.4G 是 1、5G 是 5，
+// 不是 1 和 2，写死就会读空），白名单保证只拉十几个摘要字段而不是四百多个。
+// SkipStore 让枚举出来的几百个名字不写库，免得把参数表刷屏。
+func (s *Server) EnqueueFetchWiFi(deviceID int64) (int64, error) {
+	d, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return s.enqueueSubtree(deviceID, gpnPayload{
+		Path:      wifiSubtreePath(d.DataModelRoot),
+		ThenFetch: true,
+		Include:   wifiSummarySuffixes,
+		SkipStore: true,
+	})
 }
 
 // enqueueGPVDivided 把一批参数名**分批**入队成若干条 GetParameterValues 任务。
@@ -263,18 +333,32 @@ func (s *Server) enqueueGPVDivided(deviceID int64, names []string) (int, error) 
 
 // filterLeafNames 从枚举结果里挑出可以取值的叶子参数名。
 //   - 对象节点（以 "." 结尾）跳过，因为它们不是叶子；
+//   - include 非空时，只保留以其中任一项为后缀的名字；
 //   - 名字包含 exclude 里任一子串的跳过；
 //   - 超过 max 就截断。
-func filterLeafNames(infos []ParamInfo, exclude []string, max int) []string {
+func filterLeafNames(infos []ParamInfo, include, exclude []string, max int) []string {
 	out := make([]string, 0, len(infos))
 	for _, in := range infos {
-		n := strings.TrimSpace(in.Name)
-		if n == "" || strings.HasSuffix(n, ".") {
+		name := strings.TrimSpace(in.Name)
+		if name == "" || strings.HasSuffix(name, ".") {
 			continue
+		}
+		lower := strings.ToLower(name)
+		if len(include) > 0 {
+			keep := false
+			for _, inc := range include {
+				if inc != "" && strings.HasSuffix(lower, strings.ToLower(inc)) {
+					keep = true
+					break
+				}
+			}
+			if !keep {
+				continue
+			}
 		}
 		skip := false
 		for _, e := range exclude {
-			if e != "" && strings.Contains(n, e) {
+			if e != "" && strings.Contains(name, e) {
 				skip = true
 				break
 			}
@@ -282,7 +366,7 @@ func filterLeafNames(infos []ParamInfo, exclude []string, max int) []string {
 		if skip {
 			continue
 		}
-		out = append(out, n)
+		out = append(out, name)
 		if max > 0 && len(out) >= max {
 			break
 		}
@@ -509,6 +593,15 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		}
 	}
 
+	// 无线概况（看板上的 2.4G/5G 那一栏）：首次纳管 / BOOTSTRAP 时采一次。
+	// 只取十几个摘要字段（SSID/开关/信道/标准/加密/终端数），不会把
+	// 四百多个 WLAN 参数全拉回来，所以对设备负担很小。
+	if s.cfg.AutoFetchWiFi && (created || inf.HasEvent("0 BOOTSTRAP")) {
+		if _, err := s.EnqueueFetchWiFi(deviceID); err != nil {
+			s.log.Warn("入队采集无线概况失败", "device_id", deviceID, "err", err)
+		}
+	}
+
 	s.writeEnvelope(w, sess, env.ID, InformResponseBody())
 }
 
@@ -563,7 +656,11 @@ func (s *Server) warnIfPartialResponse(sess *Session, got int) {
 // 它会被下面的 dispatchNextTask 在**同一个会话**里马上发出去。
 func (s *Server) onGetParameterNamesResponse(w http.ResponseWriter, sess *Session, env *Envelope, m *Node) {
 	infos := ParseParameterInfoStructs(m.Child("ParameterList"))
-	if len(infos) > 0 && sess.DeviceID != 0 {
+
+	// 先把这条任务的载荷拿出来：它决定要不要把名字写库、要不要接着取值。
+	p, havePayload := s.pendingGPNPayload(sess)
+
+	if !p.SkipStore && len(infos) > 0 && sess.DeviceID != 0 {
 		params := make([]store.Param, 0, len(infos))
 		for _, in := range infos {
 			params = append(params, store.Param{
@@ -577,31 +674,45 @@ func (s *Server) onGetParameterNamesResponse(w http.ResponseWriter, sess *Sessio
 		}
 	}
 
-	s.chainFetchAfterNames(sess, infos)
+	s.log.Info("枚举参数名",
+		"device_id", sess.DeviceID, "count", len(infos),
+		"path", p.Path, "stored", !p.SkipStore, "have_payload", havePayload)
+
+	if havePayload && p.ThenFetch {
+		s.chainFetchAfterNames(sess, p, infos)
+	}
 
 	s.finishTask(sess, fmt.Sprintf("收到 %d 个参数名", len(infos)))
-	s.log.Info("枚举参数名", "device_id", sess.DeviceID, "count", len(infos))
 	s.dispatchNextTask(w, sess)
 }
 
-// chainFetchAfterNames 根据 GetParameterNames 任务的载荷，决定要不要接着取值。
-func (s *Server) chainFetchAfterNames(sess *Session, infos []ParamInfo) {
-	if sess.pendingTask == 0 || sess.DeviceID == 0 {
-		return
+// pendingGPNPayload 取出当前在途 GetParameterNames 任务的载荷。
+func (s *Server) pendingGPNPayload(sess *Session) (gpnPayload, bool) {
+	var p gpnPayload
+	if sess.pendingTask == 0 {
+		return p, false
 	}
 	t, err := s.store.GetTask(sess.pendingTask)
 	if err != nil || t == nil {
-		return
+		return p, false
 	}
-	var p gpnPayload
-	if err := json.Unmarshal([]byte(t.Payload), &p); err != nil || !p.ThenFetch {
-		return
+	if err := json.Unmarshal([]byte(t.Payload), &p); err != nil {
+		return p, false
 	}
+	return p, true
+}
 
-	names := filterLeafNames(infos, p.Exclude, p.Max)
+// chainFetchAfterNames 按任务载荷里的白/黑名单，把要取值的参数名入队成 GPV。
+// 入队的任务会被紧跟着的 dispatchNextTask 在**同一个会话**里发出去。
+func (s *Server) chainFetchAfterNames(sess *Session, p gpnPayload, infos []ParamInfo) {
+	if sess.DeviceID == 0 {
+		return
+	}
+	names := filterLeafNames(infos, p.Include, p.Exclude, p.Max)
 	if len(names) == 0 {
 		s.log.Warn("枚举到 0 个可取值参数，跳过取值",
-			"device_id", sess.DeviceID, "path", p.Path, "exclude", p.Exclude)
+			"device_id", sess.DeviceID, "path", p.Path,
+			"include", p.Include, "exclude", p.Exclude)
 		return
 	}
 	batches, err := s.enqueueGPVDivided(sess.DeviceID, names)

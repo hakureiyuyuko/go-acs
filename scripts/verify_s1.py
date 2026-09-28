@@ -172,8 +172,10 @@ def main():
     d98 = [d for d in api_devices() if d["SerialNumber"] == "VERIFY098"]
     if d98:
         full = api_device(d98[0]["ID"])
-        gpv = [t for t in full["tasks"] if t["Kind"] == "GetParameterValues"]
-        check("周期上报没有重复入队取信息任务", len(gpv) == 1, len(gpv))
+        # 只看「取基本信息」那一类任务（现在还有 WiFi 采集任务，不能笼统数 GPV）
+        basic = [t for t in full["tasks"]
+                 if t["Kind"] == "GetParameterValues" and "DeviceInfo.Manufacturer" in t["Payload"]]
+        check("周期上报没有重复入队「取基本信息」", len(basic) == 1, len(basic))
 
     print("== 10. 手工刷新设备信息 ==")
     if d98:
@@ -207,7 +209,38 @@ def main():
         check("详情页展示了基本信息", "基本信息" in html and "SimVendor" in html)
         check("详情页展示了参数表", "DeviceInfo.SoftwareVersion" in html)
 
-    print("== 12. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 12. 看板上的 WiFi 概览 ==")
+    st, html = get("/")
+    check("看板 200", st == 200, st)
+    check("看板有「WiFi 概览」区块", "WiFi 概览" in html)
+    check("看板出现 2.4G 的 SSID", "SimWiFi" in html)
+    check("看板出现 5G 的 SSID", "SimWiFi-5G" in html)
+    check("看板有无线终端统计", "无线终端" in html)
+    check("看板有频段/射频列", "频段" in html and "射频" in html)
+
+    print("== 13. 无线概况是自动采集的（不用手工点）==")
+    d98 = [d for d in api_devices() if d["SerialNumber"] == "VERIFY098"]
+    if d98:
+        full = api_device(d98[0]["ID"])
+        names = [p["Name"] for p in full["params"]]
+        check("自动采集到了 WLAN 参数",
+              any(n.endswith("WLANConfiguration.1.SSID") for n in names),
+              [n for n in names if "WLAN" in n][:3])
+        check("自动采集到了频段（X_HW_RFBand）",
+              any(n.endswith("X_HW_RFBand") for n in names))
+        # 只取摘要字段，不能把整棵几百个参数的子树拉回来
+        wlan = [n for n in names if "WLANConfiguration" in n]
+        check(f"只采集摘要字段（{len(wlan)} 条，应在 1..40 之间）", 0 < len(wlan) <= 40, len(wlan))
+        # 枚举出来的名字不该写库（SkipStore），否则参数表会被几百个空值刷屏
+        check("枚举出来的名字没有写库",
+              not any(n.endswith(".Associate" + "dDevice.") or n.endswith(".APWMMParameter.") for n in names),
+              len(names))
+
+        st, dhtml = get(f"/devices/{d98[0]['ID']}")
+        check("设备详情页有无线区块", "无线（WiFi）" in dhtml)
+        check("详情页显示两个 SSID", "SimWiFi" in dhtml and "SimWiFi-5G" in dhtml)
+
+    print("== 14. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 

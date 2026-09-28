@@ -125,6 +125,40 @@ func (s *Store) HasParamPrefix(deviceID int64, prefix string) (bool, error) {
 	return n > 0, err
 }
 
+// WifiParams 一次性取出**所有设备**的无线相关参数，按 device_id 分组。
+//
+// 看板要展示每台设备的 2.4G/5G 概况，逐设备查参数会变成 N+1 查询，
+// 所以这里一条 SQL 拿全（数据量小时完全够用；设备规模很大时应换成物化视图或
+// 单独一张 wifi_summary 表，见 NFR-3）。
+func (s *Store) WifiParams() (map[int64][]Param, error) {
+	rows, err := s.db.Query(`SELECT device_id, name, value, value_type, writable, source, updated_at
+		FROM device_params
+		WHERE name LIKE '%WLANConfiguration.%'
+		   OR name LIKE '%WiFi.Radio.%'
+		   OR name LIKE '%WiFi.SSID.%'
+		   OR name LIKE '%WiFi.AccessPoint.%'
+		ORDER BY device_id, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[int64][]Param{}
+	for rows.Next() {
+		var devID int64
+		var p Param
+		var wr int
+		var upd string
+		if err := rows.Scan(&devID, &p.Name, &p.Value, &p.ValueType, &wr, &p.Source, &upd); err != nil {
+			return nil, err
+		}
+		p.Writable = wr == 1
+		p.UpdatedAt = parseTS(upd)
+		out[devID] = append(out[devID], p)
+	}
+	return out, rows.Err()
+}
+
 // paramCounts 一次性取出每个设备的参数个数，避免列表页 N+1 查询。
 func (s *Store) paramCounts() (map[int64]int, error) {
 	rows, err := s.db.Query(`SELECT device_id, COUNT(*) FROM device_params GROUP BY device_id`)

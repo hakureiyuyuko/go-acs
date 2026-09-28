@@ -158,6 +158,45 @@ func (s *simulator) buildParams(root, specVersion string) {
 
 	set(wan+"ExternalIPAddress", "203.0.113.7", "string")
 	set(wan+"ConnectionStatus", "Connected", "string")
+
+	// 无线参数。
+	// 特意把实例号做成 **1 和 5**（不是 1 和 2）—— 真机（华为 HN8145X6N）就是这么编号的，
+	// 写死 1/2 会读空。
+	if root == "Device." {
+		// TR-181：Radio / SSID / AccessPoint 分开在不同对象下
+		set("Device.WiFi.Radio.1.Enable", "1", "boolean")
+		set("Device.WiFi.Radio.1.Status", "Up", "string")
+		set("Device.WiFi.Radio.1.Channel", "36", "unsignedInt")
+		set("Device.WiFi.Radio.1.OperatingFrequencyBand", "5GHz", "string")
+		set("Device.WiFi.SSID.1.SSID", "SimWiFi", "string")
+		set("Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries", "2", "unsignedInt")
+		set("Device.WiFi.AccessPoint.1.SSIDAdvertisementEnabled", "1", "boolean")
+	} else {
+		wlan := root + "LANDevice.1.WLANConfiguration."
+		set(wlan+"1.SSID", "SimWiFi", "string")
+		set(wlan+"1.Enable", "1", "boolean")
+		set(wlan+"1.RadioEnabled", "1", "boolean")
+		set(wlan+"1.Status", "Up", "string")
+		set(wlan+"1.Channel", "6", "unsignedInt")
+		set(wlan+"1.Standard", "11ax", "string")
+		set(wlan+"1.BSSID", "00:11:22:33:44:55", "string")
+		set(wlan+"1.BeaconType", "11i", "string")
+		set(wlan+"1.WPAEncryptionModes", "AESEncryption", "string")
+		set(wlan+"1.TotalAssociations", "2", "unsignedInt")
+		set(wlan+"1.X_HW_RFBand", "2.4GHz", "string")
+
+		set(wlan+"5.SSID", "SimWiFi-5G", "string")
+		set(wlan+"5.Enable", "1", "boolean")
+		set(wlan+"5.RadioEnabled", "0", "boolean")
+		set(wlan+"5.Status", "Disabled", "string")
+		set(wlan+"5.Channel", "0", "unsignedInt")
+		set(wlan+"5.Standard", "11ax", "string")
+		set(wlan+"5.BSSID", "00:11:22:33:44:56", "string")
+		set(wlan+"5.BeaconType", "11i", "string")
+		set(wlan+"5.WPAEncryptionModes", "AESEncryption", "string")
+		set(wlan+"5.TotalAssociations", "0", "unsignedInt")
+		set(wlan+"5.X_HW_RFBand", "5GHz", "string")
+	}
 }
 
 // startConnectionRequestServer 起一个假的 CPE 侧 HTTP 服务。

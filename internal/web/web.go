@@ -28,6 +28,8 @@ type Controller interface {
 	RequestRefresh(deviceID int64) error
 	// FetchSubtree 枚举某个参数子树下的参数并把值取回来。
 	FetchSubtree(deviceID int64, path string, exclude []string, max int) error
+	// FetchWiFi 采集无线概况（看板上的 2.4G/5G 那一栏）。
+	FetchWiFi(deviceID int64) error
 }
 
 // Server 是界面服务。
@@ -46,8 +48,9 @@ type kv struct {
 // Register 把界面路由挂到 mux 上。
 func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	tpl, err := template.New("").Funcs(template.FuncMap{
-		"fmtTime": formatTime,
-		"uptime":  formatUptime,
+		"fmtTime":   formatTime,
+		"uptime":    formatUptime,
+		"wifiCount": wifiCount,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return fmt.Errorf("解析模板失败: %w", err)
@@ -65,9 +68,11 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	mux.HandleFunc("GET /devices/{id}", s.handleDevice)
 	mux.HandleFunc("POST /devices/{id}/refresh", s.handleRefresh)
 	mux.HandleFunc("POST /devices/{id}/fetch", s.handleFetch)
+	mux.HandleFunc("POST /devices/{id}/wifi", s.handleWifi)
 	mux.HandleFunc("GET /api/devices", s.apiDevices)
 	mux.HandleFunc("GET /api/devices/{id}", s.apiDevice)
 	mux.HandleFunc("POST /api/devices/{id}/fetch", s.apiFetch)
+	mux.HandleFunc("POST /api/devices/{id}/wifi", s.apiWifi)
 	return nil
 }
 
@@ -82,10 +87,28 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "读取统计失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// 无线概况：一次查询拿全设备的无线参数，再按设备/频段整理
+	wifiParams, err := s.store.WifiParams()
+	if err != nil {
+		wifiParams = map[int64][]store.Param{}
+	}
+	wifiByDevice := map[int64][]WifiBand{}
+	totalClients := 0
+	for _, d := range devices {
+		bands := WifiOverview(wifiParams[d.ID])
+		if len(bands) > 0 {
+			wifiByDevice[d.ID] = bands
+			totalClients += wifiCount(bands)
+		}
+	}
+
 	data := map[string]any{
-		"Devices": devices,
-		"Stats":   stats,
-		"Path":    r.URL.Path,
+		"Devices":      devices,
+		"Stats":        stats,
+		"WiFi":         wifiByDevice,
+		"TotalClients": totalClients,
+		"Path":         r.URL.Path,
 	}
 	if err := s.tpl.ExecuteTemplate(w, "index.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -120,6 +143,11 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	pending, _ := s.store.PendingTaskCount(id)
 
+	wifiParams, err := s.store.WifiParams()
+	if err != nil {
+		wifiParams = map[int64][]store.Param{}
+	}
+
 	data := map[string]any{
 		"Device":  d,
 		"Basic":   basicInfo(d, params),
@@ -127,6 +155,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		"Tasks":   tasks,
 		"Informs": informs,
 		"Pending": pending,
+		"WiFi":    WifiOverview(wifiParams[id]),
 		"Path":    "/devices/" + strconv.FormatInt(id, 10),
 		// 表单默认值：按设备的数据模型根猜一个 WiFi 路径（只是默认值，用户可改）
 		"DefaultPath": defaultFetchPath(d),
@@ -146,6 +175,39 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		_ = s.ctrl.RequestRefresh(id)
 	}
 	http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+// handleWifi 处理界面上的「重新采集无线概况」按钮。
+func (s *Server) handleWifi(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if s.ctrl != nil {
+		_ = s.ctrl.FetchWiFi(id)
+	}
+	http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+func (s *Server) apiWifi(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSONError(w, fmt.Errorf("设备 ID 非法"), http.StatusBadRequest)
+		return
+	}
+	if s.ctrl == nil {
+		writeJSONError(w, fmt.Errorf("未接入控制接口"), http.StatusInternalServerError)
+		return
+	}
+	if err := s.ctrl.FetchWiFi(id); err != nil {
+		writeJSONError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"queued": true,
+		"note":   "任务会在设备下次 Inform 时下发；只采集 SSID/开关/信道/标准/加密/终端数等摘要字段",
+	})
 }
 
 // handleFetch 处理界面上的「读取参数子树」表单。

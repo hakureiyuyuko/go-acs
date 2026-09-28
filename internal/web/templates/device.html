@@ -41,6 +41,46 @@
     {{end}}
   </div>
 
+  <h2>无线（WiFi）</h2>
+  <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px">
+    <form method="post" action="/devices/{{.Device.ID}}/wifi">
+      <button type="submit">重新采集无线概况</button>
+    </form>
+    <span class="hint">只采集 SSID / 开关 / 信道 / 标准 / 加密 / 终端数等摘要字段，负担很小</span>
+  </div>
+  {{if .WiFi}}
+  <table>
+    <thead>
+      <tr><th>频段</th><th>SSID</th><th>射频</th><th>信道</th><th>标准</th><th>加密</th><th>终端</th><th>状态</th></tr>
+    </thead>
+    <tbody>
+      {{range .WiFi}}
+      <tr>
+        <td><b>{{.Label}}</b>{{if .Note}} <span class="hint">{{.Note}}</span>{{end}}</td>
+        <td class="mono">{{if .SSID}}{{.SSID}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td>
+          {{if .HaveOn}}
+            {{if .On}}<span class="badge on">开</span>{{else}}<span class="badge off">关</span>{{end}}
+          {{else}}<span class="hint">-</span>{{end}}
+        </td>
+        <td class="mono">{{if .Channel}}{{.Channel}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Standard}}{{.Standard}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Security}}{{.Security}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Clients}}{{.Clients}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Status}}{{.Status}}{{else}}-{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  <div class="hint" style="margin-top:6px">
+    WPA 密码类参数若为空，通常是<b>设备不允许读取</b>（本机这台华为就是：能改不能读）。
+  </div>
+  {{else}}
+  <div class="empty">
+    还没采集到 WiFi 信息。点上面的按钮入队一次采集，设备下次 Inform 时下发。
+  </div>
+  {{end}}
+
   <h2>读取参数子树</h2>
   <form method="post" action="/devices/{{.Device.ID}}/fetch"
         style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">

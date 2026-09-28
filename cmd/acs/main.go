@@ -50,6 +50,7 @@ func run(args []string) error {
 		Password:            cfg.Password,
 		SessionTimeout:      cfg.SessionTimeout,
 		AutoFetchDeviceInfo: cfg.AutoFetchInfo,
+		AutoFetchWiFi:       cfg.AutoFetchWiFi,
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		LogRawSOAP:          cfg.LogRawSOAP,
 		OfflineAfter:        cfg.OfflineAfter,

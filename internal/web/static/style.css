@@ -54,6 +54,13 @@ button, .btn {
   padding: 7px 14px; cursor: pointer; font-size: 13px; font-family: inherit;
 }
 button:hover, .btn:hover { filter: brightness(1.1); text-decoration: none; }
+button.ghost {
+  background: transparent; color: var(--accent);
+  border: 1px solid #2b4a7d; padding: 4px 10px; font-size: 12.5px;
+}
+button.ghost:hover { background: #16233a; }
+.wifi-on { color: var(--ok); }
+.wifi-off { color: var(--dim); }
 input.filter {
   background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
   border-radius: 7px; padding: 7px 11px; width: 320px; font-family: inherit; font-size: 13px;

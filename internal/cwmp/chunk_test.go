@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"acs/internal/store"
@@ -38,7 +39,7 @@ func TestFilterLeafNames(t *testing.T) {
 	}
 
 	// 不排除任何东西时：只跳过对象节点，叶子参数全保留
-	got := filterLeafNames(infos, nil, 0)
+	got := filterLeafNames(infos, nil, nil, 0)
 	want := []string{
 		"Device.WiFi.SSID",
 		"Device.WiFi.AssociatedDevice.1.MACAddress",
@@ -55,13 +56,13 @@ func TestFilterLeafNames(t *testing.T) {
 	}
 
 	// 排除子串
-	got = filterLeafNames(infos, []string{"AssociatedDevice", "Channel"}, 0)
+	got = filterLeafNames(infos, nil, []string{"AssociatedDevice", "Channel"}, 0)
 	if len(got) != 2 || got[0] != "Device.WiFi.SSID" || got[1] != "Device.WiFi.RadioEnabled" {
 		t.Errorf("排除后 = %v", got)
 	}
 
 	// 截断
-	got = filterLeafNames(infos, nil, 1)
+	got = filterLeafNames(infos, nil, nil, 1)
 	if len(got) != 1 || got[0] != "Device.WiFi.SSID" {
 		t.Errorf("截断后 = %v", got)
 	}
@@ -145,10 +146,33 @@ func TestEnqueueGPVDividedUsesDefaultLimit(t *testing.T) {
 
 // 枚举 → 自动取值的链路：GPN 任务载荷里的 then_fetch 决定要不要接着入队 GPV。
 func TestFilterLeafNamesRespectsEmpty(t *testing.T) {
-	if got := filterLeafNames(nil, nil, 0); len(got) != 0 {
+	if got := filterLeafNames(nil, nil, nil, 0); len(got) != 0 {
 		t.Errorf("空输入应得空结果，实际 %v", got)
 	}
-	if got := filterLeafNames([]ParamInfo{{Name: "A."}, {Name: ""}}, nil, 0); len(got) != 0 {
+	if got := filterLeafNames([]ParamInfo{{Name: "A."}, {Name: ""}}, nil, nil, 0); len(got) != 0 {
 		t.Errorf("只有对象节点时应得空结果，实际 %v", got)
+	}
+}
+
+// Include 白名单：只保留以指定后缀结尾的名字（看板的 WiFi 摘要靠它避免拉回整棵子树）。
+func TestFilterLeafNamesInclude(t *testing.T) {
+	infos := []ParamInfo{
+		{Name: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID"},
+		{Name: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.TotalAssociations"},
+		{Name: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase"},
+		{Name: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.AssociatedDevice.1.MACAddress"},
+	}
+	got := filterLeafNames(infos, []string{".SSID", ".TotalAssociations"}, nil, 0)
+	if len(got) != 2 {
+		t.Fatalf("白名单应筛出 2 条，实际 %d: %v", len(got), got)
+	}
+	if !strings.HasSuffix(got[0], ".SSID") || !strings.HasSuffix(got[1], ".TotalAssociations") {
+		t.Errorf("筛选结果不对: %v", got)
+	}
+
+	// 白名单与黑名单同时生效
+	got = filterLeafNames(infos, []string{".SSID", ".TotalAssociations"}, []string{"Total"}, 0)
+	if len(got) != 1 || !strings.HasSuffix(got[0], ".SSID") {
+		t.Errorf("白+黑名单同时生效时结果不对: %v", got)
 	}
 }

@@ -197,6 +197,25 @@ VoiceService:1.0[1](Endpoint:1, SIPEndpoint:1)
    也就是说下一步做 Connection Request（主动唤醒）时，**可以用这台真机做真实验收**，
    不像很多部署那样被 NAT 挡住。
 
+### 看板上的 WiFi 概览（2.4G / 5G + 终端数）
+
+首页（`/`）新增「WiFi 概览」表，每台设备的每个频段一行：频段、SSID、射频开关、信道、
+标准、加密、已连终端数；顶部统计卡里加了「无线终端」总数，设备列表里也有一列。
+
+采集方式（重要）：**不是把整棵 WLAN 子树拉回来**。先用 `GetParameterNames` 枚举子树，
+把真实实例号圈出来（这台机器是 1 和 5），再按**后缀白名单**（`wifiSummarySuffixes`，
+只有 `.SSID` / `.Channel` / `.TotalAssociations` … 共 19 项）筛出十几个名字去取值。
+对比：整棵子树是 376 个叶子参数，摘要只要 22 个 —— 轻了一个数量级。
+
+两个细节：
+
+- 枚举出来的几百个名字**不写库**（GPN 任务载荷里的 `skip_store`），否则参数表会被几百个空值刷屏。
+- 频段**以设备自报为准**（`X_HW_RFBand` / `OperatingFrequencyBand`）；设备没报就显示「实例 N」，
+  不根据实例号猜（真机上 5G 是实例 5，猜成「实例 2 就是 5G」会错）。
+
+采集时机：首次纳管或收到 `0 BOOTSTRAP` 时自动做一次（`-auto-fetch-wifi`，默认开）；
+界面上每个设备都有「重新采集」按钮，也可 `POST /api/devices/{id}/wifi`。
+
 ### 实战：读真机的 WiFi 信息（顺带挖出一个真 bug）
 
 用界面上的「读取参数子树」或 `POST /api/devices/1/fetch` 对

@@ -18,6 +18,7 @@
     <div class="card"><div class="n">{{.Stats.Devices}}</div><div class="l">已纳管设备</div></div>
     <div class="card"><div class="n">{{.Stats.Online}}</div><div class="l">在线</div></div>
     <div class="card"><div class="n">{{.Stats.Params}}</div><div class="l">已采集参数</div></div>
+    <div class="card"><div class="n">{{.TotalClients}}</div><div class="l">无线终端</div></div>
     <div class="card"><div class="n">{{.Stats.PendingTask}}</div><div class="l">待办任务</div></div>
     <div class="card"><div class="n">{{.Stats.FailedTask}}</div><div class="l">失败任务</div></div>
   </div>
@@ -29,19 +30,27 @@
       <tr>
         <th>状态</th><th>名称</th><th>序列号</th><th>OUI</th>
         <th>软件版本</th><th>数据模型</th><th>最后上报</th><th>参数</th>
+        <th>无线终端</th><th></th>
       </tr>
     </thead>
     <tbody>
-      {{range .Devices}}
+      {{range $d := .Devices}}
+      {{$bands := index $.WiFi $d.ID}}
       <tr>
-        <td>{{if .Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</td>
-        <td><a href="/devices/{{.ID}}">{{.DisplayName}}</a></td>
-        <td class="mono">{{.SerialNumber}}</td>
-        <td class="mono">{{.OUI}}</td>
-        <td class="mono">{{if .SoftwareVersion}}{{.SoftwareVersion}}{{else}}-{{end}}</td>
-        <td class="mono">{{if .DataModelRoot}}{{.DataModelRoot}}{{else}}<span class="hint">未知</span>{{end}}</td>
-        <td class="mono">{{fmtTime .LastInformAt}}</td>
-        <td class="mono">{{.ParamCount}}</td>
+        <td>{{if $d.Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</td>
+        <td><a href="/devices/{{$d.ID}}">{{$d.DisplayName}}</a></td>
+        <td class="mono">{{$d.SerialNumber}}</td>
+        <td class="mono">{{$d.OUI}}</td>
+        <td class="mono">{{if $d.SoftwareVersion}}{{$d.SoftwareVersion}}{{else}}-{{end}}</td>
+        <td class="mono">{{if $d.DataModelRoot}}{{$d.DataModelRoot}}{{else}}<span class="hint">未知</span>{{end}}</td>
+        <td class="mono">{{fmtTime $d.LastInformAt}}</td>
+        <td class="mono">{{$d.ParamCount}}</td>
+        <td class="mono">{{if $bands}}{{wifiCount $bands}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td>
+          <form method="post" action="/devices/{{$d.ID}}/wifi">
+            <button type="submit" class="ghost">{{if $bands}}重新采集{{else}}采集 WiFi{{end}}</button>
+          </form>
+        </td>
       </tr>
       {{end}}
     </tbody>
@@ -49,7 +58,56 @@
   {{else}}
   <div class="empty">
     还没有设备接入。<br>
-    把 CPE 的 ACS URL 指到本服务的 <span class="mono">/acs</span>，设备下次 Inform 就会出现在这里。
+    把 CPE 的 ACS URL 指到本服务的 <span class="mono">/acs</span>（或根路径 <span class="mono">/</span>），设备下次 Inform 就会出现在这里。
+  </div>
+  {{end}}
+
+  <h2>WiFi 概览</h2>
+  <div class="hint" style="margin:-4px 0 10px">
+    频段按设备自报的值显示；实例号由枚举得到（同一型号不同频段的实例号不连续，例如 2.4G=1、5G=5）。
+    列表里的「无线终端」是各频段已连终端数之和。
+  </div>
+  {{if .WiFi}}
+  <table>
+    <thead>
+      <tr>
+        <th>设备</th><th>频段</th><th>SSID</th><th>射频</th>
+        <th>信道</th><th>标准</th><th>加密</th><th>终端</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range $d := .Devices}}
+      {{$bands := index $.WiFi $d.ID}}
+      {{if $bands}}
+        {{range $i, $b := $bands}}
+        <tr>
+          {{if eq $i 0}}
+          <td rowspan="{{len $bands}}"><a href="/devices/{{$d.ID}}">{{$d.DisplayName}}</a></td>
+          {{end}}
+          <td><b>{{$b.Label}}</b>{{if $b.Note}} <span class="hint">{{$b.Note}}</span>{{end}}</td>
+          <td class="mono">{{if $b.SSID}}{{$b.SSID}}{{else}}<span class="hint">-</span>{{end}}</td>
+          <td>
+            {{if $b.HaveOn}}
+              {{if $b.On}}<span class="badge on">开</span>{{else}}<span class="badge off">关</span>{{end}}
+            {{else if $b.Status}}
+              <span class="badge off">{{$b.Status}}</span>
+            {{else}}<span class="hint">-</span>{{end}}
+          </td>
+          <td class="mono">{{if $b.Channel}}{{$b.Channel}}{{else}}-{{end}}</td>
+          <td class="mono">{{if $b.Standard}}{{$b.Standard}}{{else}}-{{end}}</td>
+          <td class="mono">{{if $b.Security}}{{$b.Security}}{{else}}-{{end}}</td>
+          <td class="mono">{{if $b.Clients}}{{$b.Clients}}{{else}}-{{end}}</td>
+        </tr>
+        {{end}}
+      {{end}}
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">
+    还没有采集到 WiFi 信息。<br>
+    设备首次纳管或上报 <span class="mono">0 BOOTSTRAP</span> 时会自动采集；
+    也可以点上面列表里的「采集 WiFi」，或在设备详情页点「重新采集无线概况」。
   </div>
   {{end}}
 </main>
