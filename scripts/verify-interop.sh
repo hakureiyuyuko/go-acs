@@ -72,7 +72,7 @@ if d:
     check("OUI 解析正确", dev["OUI"] == "202BC1", dev["OUI"])
     check("软件版本解析正确", dev["SoftwareVersion"].startswith("V100R001"), dev["SoftwareVersion"])
     check("数据模型根探测正确", dev["DataModelRoot"] == "InternetGatewayDevice.", dev["DataModelRoot"])
-    check("取回参数数 >= 14", dev["ParamCount"] >= 14, dev["ParamCount"])
+    check("取回参数条数 >= 14", dev["ParamCount"] >= 14, dev["ParamCount"])
     check("设备在线", dev["Online"] is True)
 print(f"结果：通过 {ok} / 失败 {fail}")
 sys.exit(1 if fail else 0)

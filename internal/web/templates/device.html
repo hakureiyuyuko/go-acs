@@ -306,7 +306,7 @@
     <summary>上报记录{{if .InformHistoryLimit}} <span class="hint">最近 {{.InformHistoryLimit}} 条</span>{{end}}</summary>
     {{if .Informs}}
     <table id="inform-table" data-pager="20">
-    <thead><tr><th>时间</th><th>事件</th><th>参数数</th><th>重试</th><th>来源 IP</th></tr></thead>
+    <thead><tr><th>时间</th><th>事件</th><th>参数条数</th><th>重试</th><th>来源 IP</th></tr></thead>
     <tbody>
       {{range .Informs}}
       <tr>

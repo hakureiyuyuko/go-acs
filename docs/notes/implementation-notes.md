@@ -110,7 +110,7 @@ TypeError: Cannot read properties of undefined (reading 'replace')
 | 软件版本 | V100R001IRQC56B017 |
 | 硬件版本 | 40501 |
 | 数据模型根 | InternetGatewayDevice. |
-| 参数数 | 15 |
+| 参数条数 | 15 |
 
 这证明我们的 XML 解析对**第三方实现的报文**是真的可用，而不只是能读自己生成的东西。
 

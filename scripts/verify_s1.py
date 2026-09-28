@@ -243,7 +243,7 @@ def main():
         check("SpecVersion 已写入", d["SpecVersion"] == "1.0", d["SpecVersion"])
         check("设备标记为在线", d["Online"] is True)
         check("connectionRequestURL 已记录", d["ConnRequestURL"].startswith("http://"), d["ConnRequestURL"])
-        check("参数数 >= 12", d["ParamCount"] >= 12, d["ParamCount"])
+        check("参数条数 >= 12", d["ParamCount"] >= 12, d["ParamCount"])
 
         full = api_device(d["ID"])
         names = [p["Name"] for p in full["params"]]
