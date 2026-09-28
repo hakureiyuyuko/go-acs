@@ -43,6 +43,8 @@ type gpvPayload struct {
 	// 所以写完之后把期望值一并带上，读回来对不上就把原任务标为失败。
 	VerifyTask int64        `json:"verify_task,omitempty"`
 	Verify     []ParamValue `json:"verify,omitempty"`
+	// Prev 是写入前的值，用于分辨「未生效」与「设备不回读」（见 spvPayload.Prev）
+	Prev []ParamValue `json:"prev,omitempty"`
 	// Deferred：这是一次推迟到「设备下一轮会话」的核对。
 	// 区分它是因为两种时机的结论不同：
 	//   - 同会话核对：对不上先不判错（可能只是还没生效）；
@@ -78,6 +80,13 @@ type gpnPayload struct {
 type spvPayload struct {
 	Values       []ParamValue `json:"values"`
 	ParameterKey string       `json:"parameter_key"`
+	// Prev 是写入前设备上的值（从本地库取）。
+	//
+	// 为什么需要它：核对时要能分辨下面两种“读回是空的”情况 ——
+	//   - 写入前就非空、写后空了 → 可能真没生效；
+	//   - 写入前就是空、写后也是空 → 这个参数**设备不回读**（典型：WiFi 密码），
+	//     属于「无法核对」而不是「未生效」。没有 Prev 就分不开，会把改密码误判为失败。
+	Prev []ParamValue `json:"prev,omitempty"`
 }
 
 type rebootPayload struct {
@@ -358,12 +367,23 @@ func (s *Server) enqueueGPVDivided(deviceID int64, names []string) (int, error) 
 // EnqueueSetParameters 入队一条设置参数的任务。
 //
 // ParameterKey 由我们生成、CPE 必须在响应里原样回传，用来把“哪一次设置”对上。
+// 同时记下写入前的值（用于之后核对时区分「未生效」与「设备不回读」）。
 func (s *Server) EnqueueSetParameters(deviceID int64, vals []ParamValue) (int64, error) {
 	if len(vals) == 0 {
 		return 0, fmt.Errorf("没有要设置的参数")
 	}
+	prev := make([]ParamValue, 0, len(vals))
+	for _, v := range vals {
+		pv := ParamValue{Name: v.Name}
+		if p, ok, err := s.store.GetParam(deviceID, v.Name); err == nil && ok {
+			pv.Value = p.Value
+			pv.Type = p.ValueType
+		}
+		prev = append(prev, pv)
+	}
+
 	key := newRPCID()
-	payload, _ := json.Marshal(spvPayload{Values: vals, ParameterKey: key})
+	payload, _ := json.Marshal(spvPayload{Values: vals, ParameterKey: key, Prev: prev})
 	id, err := s.store.EnqueueTask(&store.Task{
 		DeviceID:   deviceID,
 		Kind:       TaskSetParameterValues,
@@ -709,10 +729,16 @@ func (s *Server) checkReadBack(sess *Session, p gpvPayload, got []ParamValue) {
 	if p.VerifyTask == 0 || len(p.Verify) == 0 {
 		return
 	}
-	problems := verifyReadBack(p.Verify, got)
+	problems, unverifiable := verifyReadBack(p.Verify, p.Prev, got)
+
 	if len(problems) == 0 {
+		if len(unverifiable) > 0 {
+			// 对上了、或者本来就核对不了（设备不回读，如密码）：直接结案，不用再等一轮
+			s.noteUnverifiable(p.VerifyTask, unverifiable)
+		}
 		s.log.Info("读回核对通过",
-			"device_id", sess.DeviceID, "set_task", p.VerifyTask, "params", len(p.Verify))
+			"device_id", sess.DeviceID, "set_task", p.VerifyTask,
+			"params", len(p.Verify), "unverifiable", len(unverifiable))
 		return
 	}
 
@@ -723,11 +749,28 @@ func (s *Server) checkReadBack(sess *Session, p gpvPayload, got []ParamValue) {
 		return
 	}
 
+	// 已经等过一轮了：把确实没生效的和无法核对的分开结论
+	if len(unverifiable) > 0 {
+		s.noteUnverifiable(p.VerifyTask, unverifiable)
+	}
 	msg := "设备接受了写入（Status=0）但读回未生效：" + strings.Join(problems, "；")
 	s.log.Warn("写入未生效（已在下一轮会话复核）",
 		"device_id", sess.DeviceID, "set_task", p.VerifyTask, "problems", problems)
 	if err := s.store.FailTask(p.VerifyTask, msg); err != nil {
 		s.log.Warn("标记写入未生效失败", "task_id", p.VerifyTask, "err", err)
+	}
+}
+
+// noteUnverifiable 把「已接受但设备不回读、无法核对」的参数记到任务结果里。
+// 状态仍是成功 —— 因为确实没有证据表明失败（密码这类参数本来就读不出来）。
+func (s *Server) noteUnverifiable(taskID int64, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	msg := fmt.Sprintf("设置成功（Status=0）；%d 个参数设备不回读、无法核对：%s",
+		len(names), strings.Join(names, "，"))
+	if err := s.store.CompleteTask(taskID, msg); err != nil {
+		s.log.Warn("更新任务结果失败", "task_id", taskID, "err", err)
 	}
 }
 
@@ -741,6 +784,7 @@ func (s *Server) enqueueDeferredVerify(sess *Session, p gpvPayload) {
 		Names:      names,
 		VerifyTask: p.VerifyTask,
 		Verify:     p.Verify,
+		Prev:       p.Prev,
 		Deferred:   true,
 	})
 	id, err := s.store.EnqueueTask(&store.Task{
@@ -974,6 +1018,7 @@ func (s *Server) enqueueReadBack(sess *Session) {
 			Names:      names[start:end],
 			VerifyTask: t.ID,
 			Verify:     p.Values[start:end],
+			Prev:       prevSlice(p.Prev, start, end),
 		})
 		if _, err := s.store.EnqueueTask(&store.Task{
 			DeviceID: sess.DeviceID,
@@ -989,28 +1034,63 @@ func (s *Server) enqueueReadBack(sess *Session) {
 		"device_id", sess.DeviceID, "params", len(names), "batches", batches)
 }
 
-// verifyReadBack 把读回的结果与期望值比对，返回不一致的说明。
+// verifyReadBack 把读回的结果与期望值比对。
 //
-// 纯函数，便于单测。比较时对布尔值宽容一点（true/1、false/0 视为一样）。
-func verifyReadBack(expect, got []ParamValue) []string {
+// 纯函数，便于单测。返回两组：
+//   - problems：确实对不上的（设备没生效）
+//   - unverifiable：“读回是空的，而且**写入前就是空的**” —— 这类参数设备根本
+//     不回读内容（典型：WiFi 密码），属于无法核对，**不能当失败**。
+//
+// 比较时对布尔值宽容一点（true/1、false/0 视为一样）。
+func verifyReadBack(expect, prev, got []ParamValue) (problems, unverifiable []string) {
 	actual := make(map[string]string, len(got))
 	for _, g := range got {
-		actual[strings.ToLower(strings.TrimSpace(g.Name))] = strings.TrimSpace(g.Value)
+		actual[keyOf(g.Name)] = strings.TrimSpace(g.Value)
 	}
-	var problems []string
+	before := make(map[string]string, len(prev))
+	for _, pv := range prev {
+		before[keyOf(pv.Name)] = strings.TrimSpace(pv.Value)
+	}
+
 	for _, e := range expect {
-		key := strings.ToLower(strings.TrimSpace(e.Name))
-		gotVal, ok := actual[key]
+		key := keyOf(e.Name)
 		want := strings.TrimSpace(e.Value)
+		// 写入前就是空的，且我们这次要写一个非空值 —— 这类参数很可能读不回来
+		wasEmpty := before[key] == ""
+
+		gotVal, ok := actual[key]
 		if !ok {
-			problems = append(problems, fmt.Sprintf("%s：读回里没有这个参数", e.Name))
+			if wasEmpty {
+				unverifiable = append(unverifiable, e.Name)
+			} else {
+				problems = append(problems, fmt.Sprintf("%s：读回里没有这个参数", e.Name))
+			}
 			continue
 		}
-		if !sameValue(want, gotVal) {
-			problems = append(problems, fmt.Sprintf("%s：期望 %q，读回 %q", e.Name, want, gotVal))
+		if sameValue(want, gotVal) {
+			continue
 		}
+		if gotVal == "" && wasEmpty {
+			// 写前写后都是空 → 设备不回读该参数（如 WiFi 密码），无法核对
+			unverifiable = append(unverifiable, e.Name)
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("%s：期望 %q，读回 %q", e.Name, want, gotVal))
 	}
-	return problems
+	return problems, unverifiable
+}
+
+func keyOf(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
+
+// prevSlice 取 Prev 的 [start,end) 段（读回会被分批，Prev 要跟着切）。
+func prevSlice(prev []ParamValue, start, end int) []ParamValue {
+	if start >= len(prev) {
+		return nil
+	}
+	if end > len(prev) {
+		end = len(prev)
+	}
+	return prev[start:end]
 }
 
 func sameValue(a, b string) bool {

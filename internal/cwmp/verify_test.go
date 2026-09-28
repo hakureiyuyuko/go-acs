@@ -12,14 +12,20 @@ func TestVerifyReadBack(t *testing.T) {
 		{Name: "Device.WiFi.Radio.5.RadioEnabled", Value: "1", Type: "boolean"},
 		{Name: "Device.WiFi.SSID.1.SSID", Value: "NewName", Type: "string"},
 	}
+	// 写入前：RadioEnabled 是 0，SSID 是 OldName
+	prev := []ParamValue{
+		{Name: "Device.WiFi.Radio.5.RadioEnabled", Value: "0"},
+		{Name: "Device.WiFi.SSID.1.SSID", Value: "OldName"},
+	}
 
 	t.Run("全部一致", func(t *testing.T) {
 		got := []ParamValue{
 			{Name: "Device.WiFi.Radio.5.RadioEnabled", Value: "1"},
 			{Name: "Device.WiFi.SSID.1.SSID", Value: "NewName"},
 		}
-		if p := verifyReadBack(expect, got); len(p) != 0 {
-			t.Errorf("应无问题，实际 %v", p)
+		p, u := verifyReadBack(expect, prev, got)
+		if len(p) != 0 || len(u) != 0 {
+			t.Errorf("应无问题，实际 problems=%v unverifiable=%v", p, u)
 		}
 	})
 
@@ -28,27 +34,31 @@ func TestVerifyReadBack(t *testing.T) {
 			{Name: "Device.WiFi.Radio.5.RadioEnabled", Value: "true"},
 			{Name: "Device.WiFi.SSID.1.SSID", Value: "NewName"},
 		}
-		if p := verifyReadBack(expect, got); len(p) != 0 {
+		p, _ := verifyReadBack(expect, prev, got)
+		if len(p) != 0 {
 			t.Errorf("true/1 应视为一致，实际 %v", p)
 		}
 	})
 
-	t.Run("值没生效", func(t *testing.T) {
+	t.Run("值没生效：写前非空、写后没变", func(t *testing.T) {
 		got := []ParamValue{
 			{Name: "Device.WiFi.Radio.5.RadioEnabled", Value: "0"},
 			{Name: "Device.WiFi.SSID.1.SSID", Value: "NewName"},
 		}
-		p := verifyReadBack(expect, got)
+		p, u := verifyReadBack(expect, prev, got)
 		if len(p) != 1 {
-			t.Fatalf("应报 1 个不一致，实际 %v", p)
+			t.Fatalf("应报 1 个未生效，实际 problems=%v unverifiable=%v", p, u)
+		}
+		if len(u) != 0 {
+			t.Errorf("不该有无法核对项: %v", u)
 		}
 	})
 
 	t.Run("读回里根本没这个参数", func(t *testing.T) {
 		got := []ParamValue{{Name: "Device.WiFi.SSID.1.SSID", Value: "NewName"}}
-		p := verifyReadBack(expect, got)
+		p, _ := verifyReadBack(expect, prev, got)
 		if len(p) != 1 {
-			t.Fatalf("应报 1 个不一致，实际 %v", p)
+			t.Fatalf("应报 1 个未生效，实际 %v", p)
 		}
 	})
 
@@ -57,8 +67,49 @@ func TestVerifyReadBack(t *testing.T) {
 			{Name: "device.wifi.radio.5.radioenabled", Value: "0"},
 			{Name: "Device.WiFi.SSID.1.SSID", Value: "NewName"},
 		}
-		if p := verifyReadBack(expect, got); len(p) != 1 {
-			t.Errorf("应报 1 个不一致，实际 %v", p)
+		p, _ := verifyReadBack(expect, prev, got)
+		if len(p) != 1 {
+			t.Errorf("应报 1 个未生效，实际 %v", p)
+		}
+	})
+}
+
+// 关键：**写only 参数（如 WiFi 密码）不能被当成「未生效」**。
+//
+// 真机背景：往 WLANConfiguration.5.PreSharedKey.1.KeyPassphrase 写密码，
+// 设备回 Status=0 但读回永远是空串（能改不能读）。如果一律判失败，
+// 就会把一次成功的改密码报成失败。
+func TestVerifyReadBackWriteOnlyParam(t *testing.T) {
+	expect := []ParamValue{
+		{Name: "...PreSharedKey.1.KeyPassphrase", Value: "secret123", Type: "string"},
+	}
+	// 写入前就是空的（设备从来没回读过它）
+	prev := []ParamValue{{Name: "...PreSharedKey.1.KeyPassphrase", Value: ""}}
+
+	t.Run("读回是空串", func(t *testing.T) {
+		got := []ParamValue{{Name: "...PreSharedKey.1.KeyPassphrase", Value: ""}}
+		p, u := verifyReadBack(expect, prev, got)
+		if len(p) != 0 {
+			t.Errorf("不该判失败（设备本来就不回读），实际 %v", p)
+		}
+		if len(u) != 1 {
+			t.Errorf("应报无法核对，实际 %v", u)
+		}
+	})
+
+	t.Run("读回压根没带这个参数", func(t *testing.T) {
+		p, u := verifyReadBack(expect, prev, nil)
+		if len(p) != 0 || len(u) != 1 {
+			t.Errorf("应算无法核对，实际 problems=%v unverifiable=%v", p, u)
+		}
+	})
+
+	t.Run("写入前非空、写后空了 → 算未生效", func(t *testing.T) {
+		prev2 := []ParamValue{{Name: "...PreSharedKey.1.KeyPassphrase", Value: "oldsecret"}}
+		got := []ParamValue{{Name: "...PreSharedKey.1.KeyPassphrase", Value: ""}}
+		p, u := verifyReadBack(expect, prev2, got)
+		if len(p) != 1 || len(u) != 0 {
+			t.Errorf("应算未生效，实际 problems=%v unverifiable=%v", p, u)
 		}
 	})
 }

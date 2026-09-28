@@ -53,6 +53,11 @@ type simulator struct {
 	// Status=0（“我接受了”）但**不真的应用**这个值。
 	// 用来复现真机上的那个行为（写入被接受但静默失效），验证 ACS 的读回核对能抓出来。
 	ignoreSet []string
+
+	// writeOnly 里的子串命中时，模拟“能改不能读”的参数（典型：WiFi 密码）：
+	// 接受写入（回 Status=0），但**读回永远是空串**。
+	// 真机上华为的 PreSharedKey.1.KeyPassphrase 就是这样。
+	writeOnly []string
 }
 
 func main() {
@@ -61,6 +66,7 @@ func main() {
 	var root string
 	var crPort int
 	var ignoreSet string
+	var writeOnly string
 	flag.StringVar(&s.acsURL, "acs", "http://127.0.0.1:7547/acs", "ACS 的 CWMP 地址")
 	flag.StringVar(&s.user, "user", "", "CPE→ACS 认证账号")
 	flag.StringVar(&s.pass, "pass", "", "CPE→ACS 认证密码")
@@ -76,11 +82,17 @@ func main() {
 	flag.StringVar(&root, "dm", "098", "数据模型：098(TR-098) 或 181(TR-181)")
 	flag.IntVar(&crPort, "cr-port", 0, "ConnectionRequest 监听端口（0 = 随机）")
 	flag.StringVar(&ignoreSet, "ignore-set", "", "模拟“接受写入但不生效”的参数名子串（逗号分隔）")
+	flag.StringVar(&writeOnly, "write-only", "", "模拟“能改不能读”的参数名子串（逗号分隔，写接受但读回为空）")
 	flag.Parse()
 
 	for _, part := range strings.Split(ignoreSet, ",") {
 		if p := strings.TrimSpace(part); p != "" {
 			s.ignoreSet = append(s.ignoreSet, p)
+		}
+	}
+	for _, part := range strings.Split(writeOnly, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			s.writeOnly = append(s.writeOnly, p)
 		}
 	}
 
@@ -494,6 +506,11 @@ func (s *simulator) setParameterValues(m *cwmp.Node) string {
 			log.Printf("  设置 %s = %s （本次故意不生效，模拟真机静默失效）", v.Name, v.Value)
 			continue
 		}
+		if s.matchAny(s.writeOnly, v.Name) {
+			// 真机行为（如 WiFi 密码）：接受写入，但读回永远是空串
+			log.Printf("  设置 %s （能改不能读，接受但不落入可读值）", v.Name)
+			continue
+		}
 		log.Printf("  设置 %s = %s", v.Name, v.Value)
 		s.params[v.Name] = v.Value
 		s.types[v.Name] = v.Type
@@ -503,7 +520,11 @@ func (s *simulator) setParameterValues(m *cwmp.Node) string {
 }
 
 func (s *simulator) shouldIgnore(name string) bool {
-	for _, sub := range s.ignoreSet {
+	return s.matchAny(s.ignoreSet, name)
+}
+
+func (s *simulator) matchAny(subs []string, name string) bool {
+	for _, sub := range subs {
 		if strings.Contains(name, sub) {
 			return true
 		}

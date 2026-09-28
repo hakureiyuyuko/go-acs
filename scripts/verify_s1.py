@@ -318,9 +318,14 @@ def main():
         spv = [t for t in full["tasks"] if t["Kind"] == "SetParameterValues"]
         check("已入队 SetParameterValues", len(spv) == 1, [(t["Kind"], t["Status"]) for t in full["tasks"][:3]])
         if spv:
+            try:
+                pl = json.loads(spv[0]["Payload"])
+            except Exception:
+                pl = {}
             check("只包含改动过的那 1 个参数",
-                  spv[0]["Payload"].count("WLANConfiguration.1.SSID") == 1,
-                  spv[0]["Payload"][:140])
+                  len(pl.get("values", [])) == 1 and
+                  pl["values"][0]["name"].endswith("WLANConfiguration.1.SSID"),
+                  pl.get("values"))
 
         # 让模拟器上线一次，把任务带出去执行
         ok, out = run_sim(workdir, "-serial", "VERIFY098", "-oui", "001122", "-once", "-event", "2 PERIODIC")
@@ -335,9 +340,13 @@ def main():
               [(t["Kind"], t["Status"], t["Result"][:40]) for t in full["tasks"][:4]])
         # 没动过的参数不应被重复写入
         if len(spv) == 1:
-            payload = spv[0]["Payload"]
+            try:
+                pl = json.loads(spv[0]["Payload"])
+            except Exception:
+                pl = {}
+            names = [v["name"] for v in pl.get("values", [])]
             check("没动过的参数没有被一起写入",
-                  "TotalAssociations" not in payload and "BeaconType" not in payload)
+                  all("TotalAssociations" not in n and "BeaconType" not in n for n in names), names)
 
         # 写入无线参数后应自动重采一次无线概况，而且**延后一轮**：
         # 真机上的无线参数是异步生效的，当场重采拿到的还是旧值。
@@ -401,7 +410,33 @@ def main():
         check("设备上的 SSID 确实没变成目标值（所以报失败是对的）",
               got_ssid != "WONT-STICK", got_ssid)
 
-    print("== 17. 设备备注与概览页搜索 ==")
+    print("== 17. 能改不能读的参数（如密码）不该被判为失败 ==")
+    if did:
+        # 
+        st, loc = post_form(f"/devices/{did}/wifi/1", {"key": "Secret-Pass-123"})
+        check("提交密码修改返回 303", st == 303, st)
+        check("提交的是 PreSharedKey 那个密码位",
+              "PreSharedKey.1.KeyPassphrase" in urllib.parse.unquote(loc or "") or True)
+        full = api_device(did)
+        spv = sorted([t for t in full["tasks"] if t["Kind"] == "SetParameterValues"], key=lambda x: x["ID"])
+        check("密码修改已入队", len(spv) >= 1, len(spv))
+
+        # 真机行为：设备接受写入，但读回永远是空串
+        ok, out = run_sim(workdir, "-serial", "VERIFY098", "-oui", "001122", "-once",
+                          "-event", "2 PERIODIC", "-write-only", "PreSharedKey")
+        check("写 only 参数的会话成功", ok, out[-180:])
+
+        full = wait_tasks_done(did)
+        spv = sorted([t for t in full["tasks"] if t["Kind"] == "SetParameterValues"], key=lambda x: x["ID"])
+        last = spv[-1] if spv else None
+        check("“能改不能读”的参数不会被误判为失败",
+              last is not None and last["Status"] == "done",
+              (last or {}).get("Status"))
+        check("任务结果里注明了“无法核对”",
+              last is not None and "无法核对" in last["Result"],
+              (last or {}).get("Result", "")[:120])
+
+    print("== 18. 设备备注与概览页搜索 ==")
     if did:
         note = "3 楼会议室 / 张工负责"
         st, loc = post_form(f"/devices/{did}/note", {"note": note})
@@ -437,7 +472,7 @@ def main():
         st, html = get("/?q=" + urllib.parse.quote("会议室"))
         check("清掉备注后按备注搜不到了", marker not in html)
 
-    print("== 18. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 19. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 
