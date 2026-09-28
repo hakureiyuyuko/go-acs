@@ -88,6 +88,11 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 			"T": func(key string, args ...any) string {
 				return i18n.T(l, key, args...)
 			},
+			// TS 翻译**后端拼出来的**字符串（任务结果、提示语、分组名…）：
+			// 先精确查表，再用占位符做正则匹配，认不出就原样返回。
+			"TS": func(text string) string {
+				return i18n.TSmart(l, text)
+			},
 		}).ParseFS(assets, "templates/*.html")
 		if err != nil {
 			return fmt.Errorf("解析模板失败（%s）: %w", l, err)

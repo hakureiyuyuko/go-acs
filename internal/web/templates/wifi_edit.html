@@ -46,7 +46,7 @@
   </div>
   {{end}}
 
-  <h2>{{T "无线设置 ·"}} {{.Band.Label}}{{if .Band.Note}} <span class="hint">{{.Band.Note}}</span>{{end}}</h2>
+  <h2>{{T "无线设置 ·"}} {{.Band.Label}}{{if .Band.Note}} <span class="hint">{{TS .Band.Note}}</span>{{end}}</h2>
   <div class="hint" style="margin:-6px 0 14px">
     BSSID <span class="mono">{{if .Band.BSSID}}{{.Band.BSSID}}{{else}}-{{end}}</span>
   </div>
@@ -55,7 +55,7 @@
   <form method="post" action="/devices/{{.Device.ID}}/wifi/{{.Band.Instance}}" class="wform">
     {{range $f := .Fields}}
     <div class="wrow">
-      <div class="wlabel">{{$f.Label}}</div>
+      <div class="wlabel">{{TS $f.Label}}</div>
       <div class="winput">
         {{if eq $f.Kind "bool"}}
           <input type="hidden" name="h_{{$f.Key}}" value="1">
@@ -70,7 +70,7 @@
                   data-autochannel="{{if eq $f.Key "channel"}}1{{end}}"
                   {{if $f.ReadOnly}}disabled{{end}}>
             {{range $o := $f.Options}}
-            <option value="{{$o.Value}}" {{if eq $o.Value $f.Value}}selected{{end}}>{{$o.Label}}</option>
+            <option value="{{$o.Value}}" {{if eq $o.Value $f.Value}}selected{{end}}>{{TS $o.Label}}</option>
             {{end}}
           </select>
         {{else if eq $f.Kind "password"}}
@@ -80,7 +80,7 @@
           <input type="text" id="f_{{$f.Key}}" name="{{$f.Key}}" value="{{$f.Value}}" title="{{$f.Param}}"
                  {{if $f.ReadOnly}}disabled{{end}}>
         {{end}}
-        {{if $f.Hint}}<div class="hint">{{$f.Hint}}</div>{{end}}
+        {{if $f.Hint}}<div class="hint">{{TS $f.Hint}}</div>{{end}}
       </div>
     </div>
     {{end}}

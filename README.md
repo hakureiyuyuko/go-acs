@@ -148,7 +148,7 @@ go build -o cpesim ./test/cpesim
 
 ```bash
 go test ./...                   # 单元测试：协议解析 / 存储 / Web
-bash scripts/verify-s1.sh       # 端到端 337 项：模拟器打真实 HTTP + SOAP，逐条断言
+bash scripts/verify-s1.sh       # 端到端 340 项：模拟器打真实 HTTP + SOAP，逐条断言
 bash scripts/verify-interop.sh  # 与 GenieACS 官方 JS 模拟器互通 8 项
 ```
 

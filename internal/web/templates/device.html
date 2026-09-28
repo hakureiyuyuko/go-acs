@@ -76,7 +76,7 @@
   </div>
 
   {{if .Notice}}
-  <div class="notice {{if not .NoticeErr}}ok{{end}}">{{.Notice}}</div>
+  <div class="notice {{if not .NoticeErr}}ok{{end}}">{{TS .Notice}}</div>
   {{end}}
 
   <h2>{{T "备注"}}</h2>
@@ -125,7 +125,7 @@
   <h2>{{T "基本信息"}}</h2>
   <div class="kvs">
     {{range .Basic}}
-    <div class="row"><div class="k">{{.K}}</div><div class="v mono">{{.V}}</div></div>
+    <div class="row"><div class="k">{{TS .K}}</div><div class="v mono">{{TS .V}}</div></div>
     {{end}}
   </div>
 
@@ -162,8 +162,8 @@
         </td>
         <td class="mono">{{if .Firmware}}{{.Firmware}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Channel}}{{.Channel}}{{else}}-{{end}}{{if .Band}} <span class="hint">{{.Band}}</span>{{end}}</td>
-        <td {{if .ModeHint}}title="{{.ModeHint}}"{{end}}>{{if .ModeText}}{{.ModeText}}{{else}}<span class="hint">-</span>{{end}}</td>
-        <td class="mono">{{if .Signal}}{{.Signal}}{{else}}-{{end}}</td>
+        <td {{if .ModeHint}}title="{{TS .ModeHint}}"{{end}}>{{if .ModeText}}{{TS .ModeText}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td class="mono">{{if .Signal}}{{TS .Signal}}{{else}}-{{end}}</td>
         {{if $.FttrHasOptical}}
         <td class="mono">{{if .OpticalPower}}{{.OpticalPower}}{{else}}<span class="hint" title='{{T "设备未上报光功率"}}'>-</span>{{end}}</td>
         {{end}}
@@ -202,7 +202,7 @@
       <span class="hint">{{T "任务"}} #{{.Diag.ID}} · {{T "于"}} {{fmtTime .Diag.CreatedAt}} {{T "发起"}}{{if .DiagIface}} · {{T "承载接口"}} {{.DiagIface}}{{end}}</span>
       {{if .DiagRunning}}<span class="hint">· {{T "诊断进行中，等设备回报…"}}</span>{{end}}
     </div>
-    <pre class="diagout">{{if .Diag.Result}}{{.Diag.Result}}{{else}}（{{T "还没有结果）"}}{{end}}</pre>
+    <pre class="diagout">{{if .Diag.Result}}{{TS .Diag.Result}}{{else}}（{{T "还没有结果）"}}{{end}}</pre>
   </div>
   {{else}}
   <div class="hint">{{T "还没跑过诊断。填个 IP 或域名，点「诊断」就行。"}}</div>
@@ -222,7 +222,7 @@
     <tbody>
       {{range .WiFi}}
       <tr>
-        <td><b>{{.Label}}</b>{{if .Note}} <span class="hint">{{.Note}}</span>{{end}}</td>
+        <td><b>{{TS .Label}}</b>{{if .Note}} <span class="hint">{{TS .Note}}</span>{{end}}</td>
         <td class="mono">{{if .SSID}}<a href="/devices/{{$.Device.ID}}/wifi/{{.Instance}}">{{.SSID}}</a>{{else}}<span class="hint">-</span>{{end}}</td>
         <td>
           {{if .HaveOn}}
@@ -301,9 +301,9 @@
       {{range .Tasks}}
       <tr>
         <td class="mono">{{.ID}}</td>
-        <td class="mono">{{.Kind}}</td>
+        <td class="mono">{{TS .Kind}}</td>
         <td><span class="badge {{.Status}}">{{.Status}}</span></td>
-        <td class="mono">{{if .Result}}{{.Result}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .Result}}{{TS .Result}}{{else}}-{{end}}</td>
         <td class="mono">{{fmtTime .CreatedAt}}</td>
         <td class="mono">{{fmtTime .FinishedAt}}</td>
       </tr>
@@ -343,13 +343,13 @@
   <div class="modal-mask" id="{{.ModalID}}" hidden>
     <div class="modal">
       <button class="modal-close" type="button" data-modal-close title='{{T "关闭"}}'>✕</button>
-      <h3>{{T "终端 ·"}} {{.Label}}</h3>
+      <h3>{{T "终端 ·"}} {{TS .Label}}</h3>
       <div class="hint" style="margin-bottom:6px">
         {{if .SubCount}}{{T "主机 %s 台 · 子设备 %s 台" .HostCount .SubCount}} · {{end}}{{T "共 %d 台" .Total}}
       </div>
       {{range .Groups}}
       <div class="cli-group">
-        <div class="cli-group-head">{{.Label}}
+        <div class="cli-group-head">{{TS .Label}}
           <span class="hint">{{T "%d 台" (len .Clients)}}{{if .Updated}} · {{T "采集 %s" (fmtTimeShort .Updated)}}{{end}}</span>
         </div>
         {{template "clilist" .Clients}}
@@ -365,11 +365,11 @@
   <div class="modal-mask" id="{{.ModalID}}" hidden>
     <div class="modal">
       <button class="modal-close" type="button" data-modal-close title='{{T "关闭"}}'>✕</button>
-      <h3>{{T "终端 ·"}} {{.Label}}</h3>
+      <h3>{{T "终端 ·"}} {{TS .Label}}</h3>
       <div class="hint" style="margin-bottom:6px">{{T "共 %d 台终端" .Total}}</div>
       {{range .Groups}}
       <div class="cli-group">
-        <div class="cli-group-head">{{.Label}}
+        <div class="cli-group-head">{{TS .Label}}
           <span class="hint">{{T "%d 台" (len .Clients)}}{{if .Updated}} · {{T "采集 %s" (fmtTimeShort .Updated)}}{{end}}</span>
         </div>
         {{template "clilist" .Clients}}
@@ -392,10 +392,10 @@
           <div class="climac mono">{{.MAC}}</div>
           <div class="cliline"><span class="clik">{{T "主机名："}}</span><span class="mono">{{if .HostName}}{{.HostName}}{{else}}<span class="hint">N/A</span>{{end}}</span></div>
           <div class="cliline"><span class="clik">IP {{T "地址："}}</span><span class="mono">{{if .IP}}{{.IP}}{{else}}<span class="hint">{{T "设备未上报"}}</span>{{end}}</span></div>
-          {{if .Meta}}<div class="climeta hint">{{.Meta}}</div>{{end}}
+          {{if .Meta}}<div class="climeta hint">{{TS .Meta}}</div>{{end}}
         </div>
         {{if .HasSignal}}
-        <div class="clisig" title="{{.SignalTitle}}">
+        <div class="clisig" title="{{TS .SignalTitle}}">
           <span class="sigbars" data-sig="{{.SignalPct}}" data-bars="{{.SignalBars}}"><i class="{{if ge .SignalBars 1}}on{{end}}"></i><i class="{{if ge .SignalBars 2}}on{{end}}"></i><i class="{{if ge .SignalBars 3}}on{{end}}"></i><i class="{{if ge .SignalBars 4}}on{{end}}"></i></span>
           <span class="sigpct mono">{{.SignalPct}}%</span>
         </div>

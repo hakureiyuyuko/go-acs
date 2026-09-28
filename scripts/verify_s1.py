@@ -1513,6 +1513,24 @@ def main():
         back = r.read().decode("utf-8", "replace")
     check("?lang=zh 能切回中文", "已纳管设备" in back, "")
 
+    # 设备详情页也要全英文（任务类型/结果、无线字段、终端分组名、提示语都有后端拼的字符串）
+    if did:
+        with lang_get("/devices/%d?lang=en" % did) as r:
+            dev_en = r.read().decode("utf-8", "replace")
+        probe2 = re.sub(r'(?s)<a class="ghost" href="\?lang=[^"]*"[^>]*>.*?</a>', '', dev_en)
+        probe2 = re.sub(r'(?s)<script>window\.I18N = .*?</script>', '', probe2)
+        left = re.findall(r'[\u4e00-\u9fff]+', probe2)
+        check("英文的设备详情页里没有残留中文", not left, "｜".join(dict.fromkeys(left))[:120])
+
+    # 动作提示语是后端拼的字符串、通过 ?msg= 回显，走的也是「显示时翻译」
+    for zh, en in (("已保存。", "Saved."),
+                   ("诊断已入队，会在设备下次上报时下发", "Diagnostics queued")):
+        with lang_get("/?lang=en&msg=" + urllib.parse.quote(zh)) as r:
+            page = r.read().decode("utf-8", "replace")
+        m = re.search(r'class="notice[^"]*">\s*(.*?)\s*</div>', page, re.S)
+        notice = m.group(1) if m else ""
+        check("动作提示语在英文界面上是英文：%s" % en, en in notice, notice[:60])
+
     print("== 37. 离线判定：超期先主动探测，探不通才判离线 ==")
     acs_bin = os.path.join(workdir, "acs")
     sim_bin = os.path.join(workdir, "cpesim")

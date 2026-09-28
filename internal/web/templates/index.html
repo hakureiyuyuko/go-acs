@@ -44,7 +44,7 @@
 
   <h2>{{T "设备列表"}}</h2>
   {{if .Notice}}
-  <div class="notice {{if not .NoticeErr}}ok{{end}}">{{.Notice}}</div>
+  <div class="notice {{if not .NoticeErr}}ok{{end}}">{{TS .Notice}}</div>
   {{end}}
   <div class="filters">
     <span class="hint">{{T "筛选"}}</span>
