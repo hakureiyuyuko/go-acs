@@ -1,0 +1,19 @@
+# 参考用的第三方源码（clone 而来，不进库）
+/reference/
+
+# 构建产物
+/acs
+/cpesim
+/bin/
+
+# 运行时数据
+*.db
+*.db-shm
+*.db-wal
+/data/
+/files/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp

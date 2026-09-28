@@ -1,0 +1,145 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"time"
+)
+
+// Param 是设备上的一个参数节点。
+type Param struct {
+	Name      string
+	Value     string
+	ValueType string
+	Writable  bool
+	Source    string // inform / getvalues / getnames / set 等，便于排查值从哪来
+	UpdatedAt time.Time
+}
+
+// UpsertParams 批量写参数。
+//
+// writable 用 OR 合并：Inform 里的参数不带可写信息，不能把
+// GetParameterNames 已经探到的 writable=true 给覆盖掉。
+func (s *Store) UpsertParams(deviceID int64, params []Param, source string) error {
+	if len(params) == 0 {
+		return nil
+	}
+	now := ts(time.Now())
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT INTO device_params
+		(device_id, name, value, value_type, writable, source, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (device_id, name) DO UPDATE SET
+			value      = excluded.value,
+			value_type = excluded.value_type,
+			writable   = MAX(device_params.writable, excluded.writable),
+			source     = excluded.source,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, p := range params {
+		if p.Name == "" {
+			continue
+		}
+		t := p.ValueType
+		if t == "" {
+			t = "string"
+		}
+		wr := 0
+		if p.Writable {
+			wr = 1
+		}
+		if _, err := stmt.Exec(deviceID, p.Name, p.Value, t, wr, source, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetParam 取单个参数。
+func (s *Store) GetParam(deviceID int64, name string) (Param, bool, error) {
+	row := s.db.QueryRow(`SELECT name, value, value_type, writable, source, updated_at
+		FROM device_params WHERE device_id = ? AND name = ?`, deviceID, name)
+	var p Param
+	var wr int
+	var upd string
+	err := row.Scan(&p.Name, &p.Value, &p.ValueType, &wr, &p.Source, &upd)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Param{}, false, nil
+	}
+	if err != nil {
+		return Param{}, false, err
+	}
+	p.Writable = wr == 1
+	p.UpdatedAt = parseTS(upd)
+	return p, true, nil
+}
+
+// ListParams 返回一台设备的全部参数（按名字排序）。
+func (s *Store) ListParams(deviceID int64) ([]Param, error) {
+	rows, err := s.db.Query(`SELECT name, value, value_type, writable, source, updated_at
+		FROM device_params WHERE device_id = ? ORDER BY name`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Param
+	for rows.Next() {
+		var p Param
+		var wr int
+		var upd string
+		if err := rows.Scan(&p.Name, &p.Value, &p.ValueType, &wr, &p.Source, &upd); err != nil {
+			return nil, err
+		}
+		p.Writable = wr == 1
+		p.UpdatedAt = parseTS(upd)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// CountParams 数一台设备有多少参数。
+func (s *Store) CountParams(deviceID int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM device_params WHERE device_id = ?`, deviceID).Scan(&n)
+	return n, err
+}
+
+// HasParamPrefix 判断某前缀（如 "Device.DeviceInfo."）下是否已有参数。
+// 用于决定要不要自动去取「最基本的设备信息」。
+func (s *Store) HasParamPrefix(deviceID int64, prefix string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM device_params WHERE device_id = ? AND name LIKE ? || '%' LIMIT 1`,
+		deviceID, prefix).Scan(&n)
+	return n > 0, err
+}
+
+// paramCounts 一次性取出每个设备的参数个数，避免列表页 N+1 查询。
+func (s *Store) paramCounts() (map[int64]int, error) {
+	rows, err := s.db.Query(`SELECT device_id, COUNT(*) FROM device_params GROUP BY device_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]int{}
+	for rows.Next() {
+		var id int64
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}

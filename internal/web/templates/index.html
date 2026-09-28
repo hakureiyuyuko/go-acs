@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设备列表 · 轻量 TR-069 ACS</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>轻量 TR-069 ACS</h1>
+  <div class="spacer"></div>
+  <span class="hint">CWMP 端点 <span class="mono">/acs</span></span>
+</header>
+
+<main>
+  <div class="cards">
+    <div class="card"><div class="n">{{.Stats.Devices}}</div><div class="l">已纳管设备</div></div>
+    <div class="card"><div class="n">{{.Stats.Online}}</div><div class="l">在线</div></div>
+    <div class="card"><div class="n">{{.Stats.Params}}</div><div class="l">已采集参数</div></div>
+    <div class="card"><div class="n">{{.Stats.PendingTask}}</div><div class="l">待办任务</div></div>
+    <div class="card"><div class="n">{{.Stats.FailedTask}}</div><div class="l">失败任务</div></div>
+  </div>
+
+  <h2>设备列表</h2>
+  {{if .Devices}}
+  <table>
+    <thead>
+      <tr>
+        <th>状态</th><th>名称</th><th>序列号</th><th>OUI</th>
+        <th>软件版本</th><th>数据模型</th><th>最后上报</th><th>参数</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Devices}}
+      <tr>
+        <td>{{if .Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</td>
+        <td><a href="/devices/{{.ID}}">{{.DisplayName}}</a></td>
+        <td class="mono">{{.SerialNumber}}</td>
+        <td class="mono">{{.OUI}}</td>
+        <td class="mono">{{if .SoftwareVersion}}{{.SoftwareVersion}}{{else}}-{{end}}</td>
+        <td class="mono">{{if .DataModelRoot}}{{.DataModelRoot}}{{else}}<span class="hint">未知</span>{{end}}</td>
+        <td class="mono">{{fmtTime .LastInformAt}}</td>
+        <td class="mono">{{.ParamCount}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">
+    还没有设备接入。<br>
+    把 CPE 的 ACS URL 指到本服务的 <span class="mono">/acs</span>，设备下次 Inform 就会出现在这里。
+  </div>
+  {{end}}
+</main>
+</body>
+</html>

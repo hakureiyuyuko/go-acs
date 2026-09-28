@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Device.DisplayName}} · 轻量 TR-069 ACS</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>轻量 TR-069 ACS</h1>
+  <div class="spacer"></div>
+  <span class="hint">CWMP 端点 <span class="mono">/acs</span></span>
+</header>
+
+<main>
+  <div class="crumb"><a href="/">设备列表</a> / {{.Device.DisplayName}}</div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="l">状态</div>
+      <div>{{if .Device.Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</div>
+    </div>
+    <div class="card"><div class="n">{{len .Params}}</div><div class="l">已采集参数</div></div>
+    <div class="card"><div class="n">{{.Pending}}</div><div class="l">待办任务</div></div>
+    <div class="card">
+      <div class="l">操作</div>
+      <form method="post" action="/devices/{{.Device.ID}}/refresh" style="margin-top:6px">
+        <button type="submit">重新获取设备信息</button>
+      </form>
+    </div>
+  </div>
+  <div class="hint" style="margin:-8px 0 4px">
+    任务会在设备下次 Inform（或主动连接）时下发；设备离线时任务会一直排队等待。
+  </div>
+
+  <h2>基本信息</h2>
+  <div class="kvs">
+    {{range .Basic}}
+    <div class="row"><div class="k">{{.K}}</div><div class="v mono">{{.V}}</div></div>
+    {{end}}
+  </div>
+
+  <h2>参数（{{len .Params}}）</h2>
+  <div style="margin-bottom:10px; display:flex; align-items:center; gap:12px">
+    <input id="param-filter" class="filter" type="text" placeholder="按参数名过滤，如 DeviceInfo 或 SSID">
+    <span id="param-count" class="hint"></span>
+  </div>
+  {{if .Params}}
+  <table id="param-table">
+    <thead>
+      <tr><th style="width:46%">参数名</th><th>值</th><th style="width:90px">类型</th><th style="width:80px">可写</th></tr>
+    </thead>
+    <tbody>
+      {{range .Params}}
+      <tr data-name="{{.Name}}">
+        <td class="mono">{{.Name}}</td>
+        <td class="mono">{{.Value}}</td>
+        <td class="mono">{{.ValueType}}</td>
+        <td>{{if .Writable}}是{{else}}否{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">还没有采集到参数。等设备下次上报或点上面的「重新获取设备信息」。</div>
+  {{end}}
+
+  <h2>任务历史</h2>
+  {{if .Tasks}}
+  <table>
+    <thead><tr><th>#</th><th>类型</th><th>状态</th><th>结果</th><th>创建</th><th>完成</th></tr></thead>
+    <tbody>
+      {{range .Tasks}}
+      <tr>
+        <td class="mono">{{.ID}}</td>
+        <td class="mono">{{.Kind}}</td>
+        <td><span class="badge {{.Status}}">{{.Status}}</span></td>
+        <td class="mono">{{if .Result}}{{.Result}}{{else}}-{{end}}</td>
+        <td class="mono">{{fmtTime .CreatedAt}}</td>
+        <td class="mono">{{fmtTime .FinishedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">暂无任务</div>
+  {{end}}
+
+  <h2>Inform 记录</h2>
+  {{if .Informs}}
+  <table>
+    <thead><tr><th>时间</th><th>事件</th><th>参数数</th><th>重试</th><th>来源 IP</th></tr></thead>
+    <tbody>
+      {{range .Informs}}
+      <tr>
+        <td class="mono">{{fmtTime .CreatedAt}}</td>
+        <td class="mono">{{if .Events}}{{.Events}}{{else}}-{{end}}</td>
+        <td class="mono">{{.ParamCount}}</td>
+        <td class="mono">{{.RetryCount}}</td>
+        <td class="mono">{{.SourceIP}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">暂无记录</div>
+  {{end}}
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
