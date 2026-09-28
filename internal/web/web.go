@@ -35,8 +35,8 @@ type Controller interface {
 	FetchNames(deviceID int64, path string, nextLevel bool) error
 	// WakeDevice 主动唤醒设备（发 Connection Request），返回给用户看的一句话。
 	WakeDevice(deviceID int64) (string, error)
-	// Diagnose 下发一次 ping 诊断。
-	Diagnose(deviceID int64, host string, count int) error
+	// Diagnose 下发一次 ping 诊断。iface 是可选承载接口（留空 = 设备自选）。
+	Diagnose(deviceID int64, host string, count int, iface string) error
 	// SetParameters 下发 SetParameterValues（改 WiFi 名字/密码/开关等）。
 	SetParameters(deviceID int64, params []store.Param) error
 }
@@ -202,11 +202,14 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 	}
 	host := strings.TrimSpace(r.Form.Get("host"))
 	count, _ := strconv.Atoi(strings.TrimSpace(r.Form.Get("count")))
+	// 承载接口：可选。留空 = 由设备自己选出口；填了就让设备从那个接口出去
+	// （真机上有的设备自己选的出口没有路由，见 cwmp.diagPayload.Interface）。
+	iface := strings.TrimSpace(r.Form.Get("interface"))
 	if s.ctrl == nil {
 		http.Redirect(w, r, back+"?msg="+url.QueryEscape("未接入控制接口")+"&err=1", http.StatusSeeOther)
 		return
 	}
-	if err := s.ctrl.Diagnose(id, host, count); err != nil {
+	if err := s.ctrl.Diagnose(id, host, count, iface); err != nil {
 		http.Redirect(w, r, back+"?msg="+url.QueryEscape(err.Error())+"&err=1", http.StatusSeeOther)
 		return
 	}
@@ -285,14 +288,17 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 
 	var diag *store.Task
 	diagHost := ""
+	diagIface := ""
 	for _, t := range tasks {
 		if t.Kind == diagTaskKind {
 			diag = t // tasks 按 ID 倒序，第一条就是最近一次
 			var p struct {
-				Host string `json:"host"`
+				Host      string `json:"host"`
+				Interface string `json:"interface"`
 			}
 			if json.Unmarshal([]byte(t.Payload), &p) == nil {
 				diagHost = p.Host
+				diagIface = p.Interface
 			}
 			break
 		}
@@ -313,6 +319,8 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		"WanConnected": wanConnCount(wan),
 		"Diag":         diag,
 		"DiagHost":     diagHost,
+		"DiagIface":    diagIface,
+		"DiagIfaces":   diagInterfaceOptions(wan),
 		"DiagRunning":  diag != nil && (diag.Status == store.TaskRunning || diag.Status == store.TaskPending),
 		"Notice":       strings.TrimSpace(r.URL.Query().Get("msg")),
 		"NoticeErr":    r.URL.Query().Get("err") == "1",

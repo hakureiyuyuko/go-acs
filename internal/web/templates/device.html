@@ -157,14 +157,28 @@
            placeholder="IP 或域名，例如 www.baidu.com">
     <input class="filter" style="width:96px" type="number" name="count" value="4" min="1" max="20">
     <span class="hint">个包</span>
+    <input class="filter" style="width:300px" type="text" name="interface" value="{{.DiagIface}}"
+           {{if .HasWan}}list="diagIfaces"{{end}} placeholder="承载接口（留空＝设备自选）">
+    {{if .HasWan}}
+    <datalist id="diagIfaces">
+      {{range .DiagIfaces}}<option value="{{.K}}">{{.V}}</option>{{end}}
+    </datalist>
+    {{end}}
     <button type="submit">诊断</button>
     <span class="hint">让设备自己发 ICMP（标准的 IPPingDiagnostics），不用我们代劳</span>
   </form>
+  <div class="hint" style="margin:-4px 0 10px">
+    承载接口对应标准的 <span class="mono">IPPingDiagnostics.Interface</span>：
+    留空时由设备自己选出口 —— 真机上有的设备会选错（实测华为 FTTR 主机的 INTERNET WAN
+    是桥接、没有默认路由，于是「成功 0、0ms」秒失败）；
+    这时可以指定从哪条 WAN 出去，比如选那条 TR069 管理连接去 Ping 内网 / 管理网。
+    输入框可手填没采集到的写法。
+  </div>
   {{if .Diag}}
   <div class="diagbox">
     <div class="diaghead">
       <span class="badge {{.Diag.Status}}">{{.Diag.Status}}</span>
-      <span class="hint">任务 #{{.Diag.ID}} · 于 {{fmtTime .Diag.CreatedAt}} 发起</span>
+      <span class="hint">任务 #{{.Diag.ID}} · 于 {{fmtTime .Diag.CreatedAt}} 发起{{if .DiagIface}} · 承载接口 {{.DiagIface}}{{end}}</span>
       {{if .DiagRunning}}<span class="hint">· 诊断进行中，等设备回报…</span>{{end}}
     </div>
     <pre class="diagout">{{if .Diag.Result}}{{.Diag.Result}}{{else}}（还没有结果）{{end}}</pre>

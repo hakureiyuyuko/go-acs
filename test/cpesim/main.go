@@ -66,6 +66,12 @@ type simulator struct {
 	// 真机就是这个行为（所以 ACS 不能指望在同一会话里拿到结果）。
 	diagDelay bool
 
+	// pingNeedIface 非空时，模拟「设备自己选的出口出不去、必须显式指定承载接口」：
+	// 诊断时 IPPingDiagnostics.Interface 不含这个子串，就全部失败（秒失败、延时全 0）。
+	// 真机案例：华为 V271-20（FTTR 主机）的 INTERNET WAN 是桥接、没有默认路由，
+	// ACS 不指定 Interface 时设备一发包就 no route。
+	pingNeedIface string
+
 	// pendingDiag 记录“已经开始跑、等着下次会话报结果”的诊断
 	pendingDiag string
 
@@ -113,12 +119,15 @@ func main() {
 	flag.StringVar(&ignoreSet, "ignore-set", "", "模拟“接受写入但不生效”的参数名子串（逗号分隔）")
 	flag.StringVar(&writeOnly, "write-only", "", "模拟“能改不能读”的参数名子串（逗号分隔，写接受但读回为空）")
 	flag.BoolVar(&diagDelay, "diag-delay", false, "ping 诊断改为异步：下次会话才出结果并带事件 8 DIAGNOSTICS COMPLETE")
+	var pingNeedIface string
+	flag.StringVar(&pingNeedIface, "ping-need-iface", "", "模拟「必须指定承载接口才出得去」：诊断时 Interface 不含该子串就全失败（留空则不启用）")
 	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
 	flag.BoolVar(&noWAN, "no-wan", false, "不模拟 WAN 连接对象（用于验证“没有就不显示”）")
 	flag.StringVar(&crUser, "cr-user", "", "Connection Request 监听要求的用户名（留空则用设备参数里的）")
 	flag.StringVar(&crPass, "cr-pass", "", "Connection Request 监听要求的密码")
 	flag.Parse()
 	s.diagDelay = diagDelay
+	s.pingNeedIface = pingNeedIface
 	s.noWAN = noWAN
 	s.crUser, s.crPass = crUser, crPass
 
@@ -659,7 +668,8 @@ func (s *simulator) startDiagnostic(name string) {
 	if v, err := strconv.Atoi(s.params[prefix+"NumberOfRepetitions"]); err == nil && v > 0 {
 		n = v
 	}
-	log.Printf("开始 ping 诊断：host=%s count=%d（diag-delay=%v）", host, n, s.diagDelay)
+	log.Printf("开始 ping 诊断：host=%s count=%d interface=%q（diag-delay=%v）",
+		host, n, s.params[prefix+"Interface"], s.diagDelay)
 	if s.diagDelay {
 		s.pendingDiag = prefix
 		return
@@ -676,8 +686,17 @@ func (s *simulator) finishDiagnostic(prefix string, n int) {
 	if strings.Contains(prefix, "never") || s.params[prefix+"Host"] == "" {
 		fail = n
 	}
+	// 模拟「设备自己选的出口出不去」：没指定承载接口（或指定得不对）就是全失败，
+	// 而且**当场**返回 —— 真机上就是这样（没有路由，包根本没发出去）。
+	if s.pingNeedIface != "" && !strings.Contains(s.params[prefix+"Interface"], s.pingNeedIface) {
+		log.Printf("  ping 全失败：承载接口 %q 不含 %q", s.params[prefix+"Interface"], s.pingNeedIface)
+		fail = n
+	}
 	ok := n - fail
 	rtt := 10 + len(s.params[prefix+"Host"])%20 // 10..29，可重现
+	if ok == 0 {
+		rtt = 0 // 一个包都没通：延时没有意义（真机就是 0）
+	}
 	s.params[prefix+"DiagnosticsState"] = "Complete"
 	s.params[prefix+"SuccessCount"] = strconv.Itoa(ok)
 	s.params[prefix+"FailureCount"] = strconv.Itoa(fail)

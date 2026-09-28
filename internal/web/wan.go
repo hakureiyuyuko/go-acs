@@ -142,6 +142,29 @@ func (w WanLink) WanKind() string {
 	return w.Container
 }
 
+// diagInterfaceOptions 给出诊断表单里「承载接口」的候选值。
+//
+// 备选就是这台设备上已经采集到的每条 WAN 连接 —— 包括 TR069 那条管理连接（
+// 用它可以去诊断管理网/内网）。表单是个可编辑的输入框 + datalist：既推荐常用的，
+// 也允许手填没采集到的写法（不同厂商接受的对象不一样，不强限）。
+func diagInterfaceOptions(links []WanLink) []kv {
+	out := make([]kv, 0, len(links))
+	for _, l := range links {
+		desc := l.WanKind()
+		if l.IP != "" {
+			desc += " " + l.IP
+		}
+		if l.Service != "" {
+			desc += " " + l.Service
+		}
+		if l.Status != "" {
+			desc += " " + l.Status
+		}
+		out = append(out, kv{K: l.Path, V: l.WanLabel() + "（" + desc + "）"})
+	}
+	return out
+}
+
 // wanConnCount 统计状态为 Connected 的条数（给标题小字用）。
 func wanConnCount(links []WanLink) int {
 	n := 0

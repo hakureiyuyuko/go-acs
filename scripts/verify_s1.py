@@ -640,6 +640,62 @@ def main():
         check("异步诊断也完成了（等设备下次会话回报）", d1["Status"] == "done", d1["Status"])
         check("异步诊断次数正确（2 个）", "发送包 2" in d1["Result"], d1["Result"][:90])
 
+    print("== 22. ping 诊断的承载接口（可选，Interface）==")
+    if did:
+        # 真机案例：华为 FTTR 主机的 INTERNET WAN 是桥接、没有默认路由，
+        # 设备自己选的出口发不出去 → 「成功 0、延时 0/0/0」秒失败。
+        # 这时候要能显式指定从哪条 WAN 出去（比如那条 TR069 管理连接）。
+        IFACE = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1"
+        need = ("-serial", "VERIFY098", "-oui", "001122",
+                "-ping-need-iface", "WANConnectionDevice.1")
+
+        # (1) 不指定承载接口 → 模拟器（模拟上述真机）全失败
+        st, loc = post_form(f"/devices/{did}/diagnose", {"host": "www.baidu.com", "count": "2"})
+        check("不带承载接口的诊断入队", st == 303, loc)
+        full = api_device(did)
+        d = max([t for t in full["tasks"] if t["Kind"] == "Diagnostics"], key=lambda x: x["ID"])
+        check("留空时载荷里没有 interface 字段（= 设备自选）",
+              '"interface"' not in d["Payload"], d["Payload"][:140])
+        ok, out = run_sim(workdir, *need, "-once", "-event", "2 PERIODIC")
+        check("诊断会话成功", ok, out[-160:])
+        full = wait_tasks_done(did, kinds=("Diagnostics",))
+        d = max([t for t in full["tasks"] if t["Kind"] == "Diagnostics"], key=lambda x: x["ID"])
+        check("自己选出口时全失败（模拟没有路由的设备）",
+              d["Status"] == "done" and "成功 0" in d["Result"] and "失败 2" in d["Result"],
+              d["Result"][:120])
+        check("全失败时延时是 0/0/0", "= 0/0/0 ms" in d["Result"], d["Result"][:120])
+        check("全失败时提醒「可试试指定承载接口」", "可试试指定承载接口" in d["Result"], d["Result"][:200])
+
+        # (2) 指定承载接口 → 同一台设备就通了
+        st, loc = post_form(f"/devices/{did}/diagnose",
+                            {"host": "www.baidu.com", "count": "2", "interface": IFACE})
+        check("带承载接口的诊断入队", st == 303, loc)
+        full = api_device(did)
+        d = max([t for t in full["tasks"] if t["Kind"] == "Diagnostics"], key=lambda x: x["ID"])
+        check("承载接口写进了任务载荷", IFACE in d["Payload"], d["Payload"][:160])
+        ok, out = run_sim(workdir, *need, "-once", "-event", "2 PERIODIC")
+        check("带承载接口的诊断会话成功", ok, out[-160:])
+        full = wait_tasks_done(did, kinds=("Diagnostics",))
+        d = max([t for t in full["tasks"] if t["Kind"] == "Diagnostics"], key=lambda x: x["ID"])
+        check("指定承载接口后通了", "成功 2" in d["Result"], d["Result"][:120])
+        check("结果里记下了承载接口（便于复盘）", IFACE in d["Result"], d["Result"][:200])
+
+        # (3) 界面：承载接口输入框 + 下拉备选（来自设备已采集的 WAN 连接）
+        st, h = get(f"/devices/{did}")
+        check("诊断表单里有承载接口输入框", 'name="interface"' in h, st)
+        check("输入框挂了 datalist 备选", "diagIfaces" in h and "<datalist" in h, st)
+        check("备选里有这台设备的 WAN 连接路径",
+              "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1" in h, st)
+        check("界面上说明了留空=设备自选", "留空＝设备自选" in h, st)
+        # 跑完的诊断要在结果框里回显当时用的承载接口
+        st, h = get(f"/devices/{did}")
+        check("最近一次诊断回显承载接口", f"承载接口 {IFACE}" in h, st)
+
+        # (4) 非法承载接口要被拦下（不能进 SOAP 报文）
+        st, loc = post_form(f"/devices/{did}/diagnose",
+                            {"host": "1.1.1.1", "count": "2", "interface": "a b<c>"})
+        check("非法承载接口被拒", st == 303 and "err=1" in (loc or ""), loc)
+
     print("== 23. 三个页面都要加载 app.js（分页/搜索/主题都靠它）==")
     if did:
         for p in ("/", f"/devices/{did}", f"/devices/{did}/wifi/1"):

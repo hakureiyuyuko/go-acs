@@ -288,6 +288,44 @@ type diagPayload struct {
 	Host   string `json:"host"`
 	Count  int    `json:"count"`
 	Prefix string `json:"prefix"` // 诊断对象前缀（以 "." 结尾）
+
+	// Interface 是**可选**的承载接口（标准 IPPingDiagnostics.Interface）。
+	//
+	// 留空 = 由设备自己选出口。但真机上不能假设设备会选对：实测华为 V271-20
+	// （FTTR 主机）的 INTERNET WAN 是桥接、系统路由表里没有默认路由，设备
+	// 自己发 ICMP 一发包就 no route → 秒回「成功 0 失败 4、延时 0/0/0」；
+	// 这时候得显式指定从哪条 WAN 出去（比如那条 TR069 的管理连接，
+	// 用来诊断管理网/内网）。
+	Interface string `json:"interface,omitempty"`
+}
+
+// normalizeDiagInterface 校验承载接口。
+//
+// 空串合法（= 设备自选）。非空时限制字符集 —— 这个值会直接进 SOAP 报文，
+// 不合法的字符早点拦下来比让设备回 9008/9003 清楚。
+//
+// 故意**不限定**必须是哪一类对象：标准举的例子是 WAN 连接路径
+// （InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1），
+// 但不同厂商也接受别的写法（Device.IP.Interface.1 等），我们不替用户做这个判断。
+func normalizeDiagInterface(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", nil
+	}
+	if len(v) > 256 {
+		return "", fmt.Errorf("承载接口太长：%q", v)
+	}
+	if strings.HasPrefix(v, ".") || strings.HasSuffix(v, ".") || strings.Contains(v, "..") {
+		return "", fmt.Errorf("承载接口格式不对：%q", v)
+	}
+	for _, r := range v {
+		ok := r == '.' || r == '_' || r == '-' ||
+			(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if !ok {
+			return "", fmt.Errorf("承载接口格式不对：%q", v)
+		}
+	}
+	return v, nil
 }
 
 // diagnosticsPrefix 返回本设备上 ping 诊断对象的前缀。
@@ -313,7 +351,11 @@ var diagnosticsReadFields = []string{
 }
 
 // EnqueueDiagnostics 入队一次 ping 诊断。
-func (s *Server) EnqueueDiagnostics(deviceID int64, host string, count int) (int64, error) {
+// EnqueueDiagnostics 入队一次 ping 诊断。
+//
+// iface 是可选承载接口（IPPingDiagnostics.Interface）：留空表示由设备自己选出口，
+// 非空表示指定从哪个接口/哪条 WAN 出去（详见 diagPayload.Interface 的注释）。
+func (s *Server) EnqueueDiagnostics(deviceID int64, host string, count int, iface string) (int64, error) {
 	host = strings.TrimSpace(host)
 	if host == "" {
 		return 0, fmt.Errorf("请填要诊断的 IP 或域名")
@@ -321,6 +363,10 @@ func (s *Server) EnqueueDiagnostics(deviceID int64, host string, count int) (int
 	// 这串内容会直接进 SOAP 报文，限制字符集（不光是防注入，也能早点提示填错）
 	if len(host) > 253 || strings.ContainsAny(host, " \t\r\n<>&\"'") {
 		return 0, fmt.Errorf("目标格式不对：%q", host)
+	}
+	iface, err := normalizeDiagInterface(iface)
+	if err != nil {
+		return 0, err
 	}
 	if count <= 0 || count > 20 {
 		count = 4
@@ -333,9 +379,10 @@ func (s *Server) EnqueueDiagnostics(deviceID int64, host string, count int) (int
 		return 0, fmt.Errorf("已经有一次诊断在排队或进行中（任务 #%d），等它结束再说", open.ID)
 	}
 	payload, _ := json.Marshal(diagPayload{
-		Host:   host,
-		Count:  count,
-		Prefix: diagnosticsPrefix(d.DataModelRoot),
+		Host:      host,
+		Count:     count,
+		Prefix:    diagnosticsPrefix(d.DataModelRoot),
+		Interface: iface,
 	})
 	id, err := s.store.EnqueueTask(&store.Task{
 		DeviceID:   deviceID,
@@ -344,14 +391,15 @@ func (s *Server) EnqueueDiagnostics(deviceID int64, host string, count int) (int
 		CommandKey: newRPCID(),
 	})
 	if err == nil {
-		s.log.Info("已入队：ping 诊断", "device_id", deviceID, "host", host, "count", count)
+		s.log.Info("已入队：ping 诊断",
+			"device_id", deviceID, "host", host, "count", count, "interface", iface)
 	}
 	return id, err
 }
 
 // Diagnose 给外部（Web/REST）用。
-func (s *Server) Diagnose(deviceID int64, host string, count int) error {
-	_, err := s.EnqueueDiagnostics(deviceID, host, count)
+func (s *Server) Diagnose(deviceID int64, host string, count int, iface string) error {
+	_, err := s.EnqueueDiagnostics(deviceID, host, count, iface)
 	return err
 }
 
@@ -1195,11 +1243,11 @@ func (s *Server) handleDiagResult(sess *Session, diagTaskID int64, got []ParamVa
 		return ""
 	}
 
-	host := ""
+	host, iface := "", ""
 	if t, err := s.store.GetTask(diagTaskID); err == nil && t != nil {
 		var p diagPayload
 		if json.Unmarshal([]byte(t.Payload), &p) == nil {
-			host = p.Host
+			host, iface = p.Host, p.Interface
 		}
 	}
 
@@ -1214,6 +1262,18 @@ func (s *Server) handleDiagResult(sess *Session, diagTaskID int64, got []ParamVa
 		summary := fmt.Sprintf("PING 目标 %s：发送包 %d，成功 %d，失败 %d；最小/平均/最大延时 = %s/%s/%s ms",
 			host, okN+failN, okN, failN,
 			pick("MinimumResponseTime"), pick("AverageResponseTime"), pick("MaximumResponseTime"))
+		// 承载接口是这次诊断的可选条件，写进结果里 —— 否则「同一个目标，一会儿通一会儿不通」
+		// 以后没法复盘（用户可能刚在界面上换过出口）。
+		if iface != "" {
+			summary += "；承载接口 " + iface
+		}
+		// 一个包都没通、延时又全是 0：这是「没出去」的特征（设备自己的出口没有路由，
+		// 或者接口不可用）。真机上就是这样，提示一句省得被误判成 ACS 出问题。
+		if okN == 0 && failN > 0 {
+			if ms := pick("MinimumResponseTime") + pick("AverageResponseTime") + pick("MaximumResponseTime"); strings.Trim(ms, "0") == "" {
+				summary += "（全部失败且延时为 0：设备可能根本没有可用的出网路径，可试试指定承载接口）"
+			}
+		}
 		if err := s.store.SetTaskResult(diagTaskID, summary); err != nil {
 			s.log.Warn("写诊断结果失败", "task_id", diagTaskID, "err", err)
 		}
@@ -1658,10 +1718,17 @@ func buildTaskBody(t *store.Task) (string, error) {
 			key = newRPCID()
 		}
 		// 顺序很重要：DiagnosticsState=Requested 必须放在**最后**。
-		// 设备看到 Requested 就会开始跑 ping，所以 Host / 次数得先就位；
-		// 否则可能拿着空 Host 或默认次数去跑（本项目的模拟器就这么暴露了这个顺序问题，
+		// 设备看到 Requested 就会开始跑 ping，所以 Interface / Host / 次数得先就位；
+		// 否则可能拿着空 Host、错的接口或默认次数去跑（本项目的模拟器就这么暴露了这个顺序问题，
 		// 真机上有些设备也会这样）。
 		vals := []ParamValue{}
+		if p.Interface != "" {
+			vals = append(vals, ParamValue{
+				Name:  p.Prefix + "Interface",
+				Value: p.Interface,
+				Type:  "string",
+			})
+		}
 		if p.Count > 0 {
 			vals = append(vals, ParamValue{
 				Name:  p.Prefix + "NumberOfRepetitions",
