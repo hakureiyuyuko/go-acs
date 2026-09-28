@@ -130,12 +130,21 @@ func run(args []string) error {
 	defer stop()
 	srv.StartJanitor(ctx)
 
-	// CWMP 那套路由（设备侧）：用 "/acs" 精确匹配（末尾不带 / 时只匹配该路径本身），
-	// 这样别的路径不会被吞掉。
-	// 真机/运维常见做法是把 ACS URL 配成 http://host:port/（根路径，不带 /acs），
-	// 所以额外接受根路径上的 POST，免得因为少写一段路径就收不到上报。
-	cwmpMux := func() *http.ServeMux {
+	// CWMP 那套路由（设备侧）。
+	//
+	// dedicated = ACS 独享一个端口（面板在别的端口）：这时**任何路径都收**——
+	// 运营商定制设备的 ACS URL 五花八门，有的配 /、有的配 /tr069、有的还带随机路径，
+	// 我们没理由因为路径不同就把上报丢掉。反正这条端口只跑 CWMP，不会跟面板抢路由。
+	//
+	// 非 dedicated（面板共用同一个端口）时不能用兜底路由，否则面板页面会被 CWMP 抢走；
+	// 这时只认配置的路径 + 根路径的 POST（真机/运维常见做法是把 ACS URL 配成
+	// http://host:port/，不带 /acs）。
+	cwmpMux := func(dedicated bool) *http.ServeMux {
 		m := http.NewServeMux()
+		if dedicated {
+			m.Handle("/", srv)
+			return m
+		}
 		m.Handle(cfg.Path, srv)
 		if cfg.Path != "/" {
 			m.Handle("POST /{$}", srv)
@@ -146,7 +155,7 @@ func run(args []string) error {
 	var acsSrv, panelSrv *http.Server
 	if webAddr == "" || webAddr == acsAddr {
 		// 默认：一个端口既接设备上报、又开面板（一套路由两用）
-		mux := cwmpMux()
+		mux := cwmpMux(false)
 		if err := web.Register(mux, st, srv, webOpts); err != nil {
 			return err
 		}
@@ -162,7 +171,7 @@ func run(args []string) error {
 		}
 		acsSrv = &http.Server{
 			Addr:              acsAddr,
-			Handler:           requestLogger(log, cwmpMux()),
+			Handler:           requestLogger(log, cwmpMux(true)),
 			ReadHeaderTimeout: 15 * time.Second,
 		}
 		panelSrv = &http.Server{
@@ -198,6 +207,7 @@ func run(args []string) error {
 
 	if panelSrv != nil {
 		log.Info("面板单独监听一个端口", "panel_listen", webAddr)
+		log.Info("ACS 端口独享：设备向任何路径提交都会受理", "listen", acsAddr)
 		go func() {
 			if err := panelSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				// 面板端口起不来要让人看见（多半是端口被占或被面板设置写错了）
@@ -250,7 +260,7 @@ func requestLogger(log *slog.Logger, next http.Handler) http.Handler {
 
 		switch {
 		case sw.status == http.StatusNotFound || sw.status == http.StatusMethodNotAllowed:
-			log.Warn("=> 有请求打进来但没被处理（检查 ACS URL 的路径/方法是否写对）",
+			log.Warn("=> 有请求打进来但没被处理（多半是方法不对；共用端口时也可能是路径不在路由里）",
 				"method", r.Method, "path", r.URL.Path, "status", sw.status,
 				"from", r.RemoteAddr, "ua", r.UserAgent())
 		case r.URL.Path != "/static/style.css" && r.URL.Path != "/static/app.js":

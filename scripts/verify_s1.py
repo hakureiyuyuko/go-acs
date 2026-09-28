@@ -1283,6 +1283,29 @@ def main():
                 except urllib.error.HTTPError as ex:
                     acs_st = ex.code
                 check("面板端口上不服务 CWMP 端点", acs_st != 200, acs_st)
+
+                # 独享端口：运营商定制设备的 ACS URL 五花八门，任何路径都该受理
+                for path in ("/", "/tr069", "/cwmp/ACS", "/some/random/path?x=1"):
+                    body2 = envelope("urn:dslforum-org:cwmp-1-0", "dual3", "<cwmp:GetRPCMethods/>")
+                    req3 = urllib.request.Request("http://127.0.0.1:17561" + path,
+                                                  data=body2.encode(), method="POST")
+                    req3.add_header("Content-Type", 'text/xml; charset="utf-8"')
+                    try:
+                        with urllib.request.urlopen(req3, timeout=5) as r:
+                            pst, ptext = r.status, r.read().decode("utf-8", "replace")
+                    except urllib.error.HTTPError as ex:
+                        pst, ptext = ex.code, ""
+                    check(f"独享端口上 POST {path} 也受理（返回了 CWMP 响应）",
+                          pst == 200 and "GetRPCMethodsResponse" in ptext, (pst, ptext[:60]))
+
+                # 共用端口时不能吞掉陌生路径，否则面板路由会被 CWMP 抢走
+                try:
+                    req4 = panel_req(BASE + "/nope-not-a-route", data=b"<x/>", method="POST")
+                    with urllib.request.urlopen(req4, timeout=5) as r:
+                        nope_st = r.status
+                except urllib.error.HTTPError as ex:
+                    nope_st = ex.code
+                check("共用端口时不吞陌生路径（面板路由安全）", nope_st == 404, nope_st)
         finally:
             proc.terminate()
             try:

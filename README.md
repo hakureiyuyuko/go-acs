@@ -71,7 +71,7 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 | `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名（真机单次上限可能只有 256，见下文）|
 | `-task-history-limit` | `ACS_TASK_HISTORY_LIMIT` | `500` | **每台设备**保留多少条任务记录（`0` = 不限）。tasks 表只增不减，跑久了会把库撑大；只裁已结束的任务，排队/执行中的一条都不删 |
 | `-inform-history-limit` | `ACS_INFORM_HISTORY_LIMIT` | `500` | **每台设备**保留多少条上报记录（`0` = 不限）。上报记录增长最快（每 120 秒一条 Inform，一台设备一天 720 条）|
-| `-web-listen` | `ACS_WEB_LISTEN` | 空 | **面板**监听地址。留空（或与 ACS 相同）= 面板与 CWMP 共用一个端口；分开写就是两个端口 |
+| `-web-listen` | `ACS_WEB_LISTEN` | 空 | **面板**监听地址。留空（或与 ACS 相同）= 面板与 CWMP 共用一个端口；分开写就是两个端口。**ACS 独享端口时任何路径都受理设备上报**（见下文）|
 | `-web-user` / `-web-pass` | `ACS_WEB_USER` / `ACS_WEB_PASS` | 空 | 面板账号密码的**初始**值：只在库里还没设置过时种一次，之后以设置页上改的为准 |
 |  | `ACS_WEB_AUTH` | 空 | 设成 `off` / `0` / `false` 时**强制关闭面板鉴权**（救急用：忘了面板密码又不想动库）|
 
@@ -183,6 +183,12 @@ docs/               需求文档与笔记
   - 账号密码**保存后立即生效**（不用重启）；
   - 监听地址要**重启 ACS** 才生效 —— 端口没法在线安全切换（换了端口这条连接就断了，
     而且 CWMP 端口一断，在线设备立刻报连不上 ACS）。
+- **ACS 端口对路径不挑**：运营商定制设备的 ACS URL 五花八门 —— 有的配 `/`、有的配 `/tr069`、
+  有的还带一串随机路径。所以**当 ACS 独享一个端口**（面板在别的端口）时，
+  那条端口上**任何路径的 POST 都交给 CWMP 处理**，不会因为路径不同就丢掉上报
+  （会话身份靠 cookie + IP/UA 指纹，跟路径无关，cookie 的 Path 也是 /）。
+  与面板共用同一个端口时**不做兜底**：只认配置的路径（默认 `/acs`）与根路径的 POST，
+  否则面板页面会被 CWMP 抢走。
 - **面板账号密码保护**：HTTP Basic（浏览器弹登录框、脚本用 `curl -u 账号:密码`），
   密码只存 **PBKDF2-HMAC-SHA256 散列**（随机盐 + 12 万次迭代）。默认**关闭**（开箱即用），
   在设置页里打开。开了之后面板页面、`/api`、静态资源都要登录，**设备侧上报不受影响**（CPE 认证是另一套）。
