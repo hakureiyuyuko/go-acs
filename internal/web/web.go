@@ -123,7 +123,12 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 		return err
 	}
 	// 静态资源不鉴权：登录页本身要用 style.css，而且里面没有业务数据。
-	fsHandler := http.StripPrefix("/static/", http.FileServerFS(sub))
+	// 静态资源带 no-cache：每次回源确认。没做指纹/ETag 的话它等于每次重新拿，
+	// 好处是改了 app.js / style.css 之后刷新就能用上，不会拿着旧脚本跑。
+	fsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		http.StripPrefix("/static/", http.FileServerFS(sub)).ServeHTTP(w, r)
+	})
 	mux.Handle("GET /static/", fsHandler)
 
 	mux.HandleFunc("GET /{$}", guard(s.handleIndex))
@@ -161,6 +166,9 @@ func (s *Server) renderStatus(w http.ResponseWriter, r *http.Request, status int
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 面板页面是实时数据（在线状态、任务进度），禁掉浏览器缓存 —— 否则改了界面/参数，
+	// 打开还是旧的，很容易误判成「没生效」。
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }
@@ -272,6 +280,9 @@ func (s *Server) renderLang(w http.ResponseWriter, r *http.Request, name string,
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 面板页面是实时数据（在线状态、任务进度），禁掉浏览器缓存 —— 否则改了界面/参数，
+	// 打开还是旧的，很容易误判成「没生效」。
+	w.Header().Set("Cache-Control", "no-store")
 	if _, err := w.Write(buf.Bytes()); err != nil {
 		// 客户端断了，没什么可做的
 		_ = err

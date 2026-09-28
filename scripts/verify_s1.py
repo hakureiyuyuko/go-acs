@@ -1544,6 +1544,14 @@ def main():
             check("没有格式化错误标记：%s%s" % (path, lang or "（中文）"),
                   not bad, "｜".join(dict.fromkeys(bad))[:100])
 
+    print("== 37d. 缓存头：面板页面禁缓存、静态资源每次回源 ==")
+    with urllib.request.urlopen(panel_req(BASE + "/"), timeout=20) as r:
+        cc = r.headers.get("Cache-Control") or ""
+    check("面板页面禁掉了浏览器缓存（no-store）", cc == "no-store", cc)
+    with urllib.request.urlopen(panel_req(BASE + "/static/style.css"), timeout=20) as r:
+        cc2 = r.headers.get("Cache-Control") or ""
+    check("静态资源每次回源确认（no-cache）", "no-cache" in cc2, cc2)
+
     print("== 37. 离线判定：超期先主动探测，探不通才判离线 ==")
     acs_bin = os.path.join(workdir, "acs")
     sim_bin = os.path.join(workdir, "cpesim")
