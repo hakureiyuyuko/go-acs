@@ -18,7 +18,8 @@
   删除设备这类本地操作照旧可用
 - **在线状态按设备自己的周期判**：超过`上报周期×2`没上报，先主动发 Connection Request 探三次，
   探不通才判离线（设备断电时 TR-069 不会通知 ACS，只能这样确认）
-- **可运维**：任务队列持久化、一键唤醒设备、重启 / 删除设备、面板账号密码、任务与上报记录的保留上限
+- **可运维**：任务队列持久化、一键唤醒设备、重启 / 删除设备、面板独立登录页（会话 cookie、可退出）、
+  任务与上报记录的保留上限
 
 ## 截图
 
@@ -41,7 +42,7 @@ FTTR 子设备与网络诊断：子设备的型号、组网模式、光功率与
 
 ![终端列表](docs/images/clients.png)
 
-设置：ACS 与面板各自的监听地址、面板账号密码保护（端口改动重启生效，账号密码立即生效）
+设置：ACS 与面板各自的监听地址、面板登录账号密码（端口改动重启生效，账号密码立即生效）
 
 ![设置](docs/images/settings.png)
 
@@ -101,7 +102,7 @@ go build -o cpesim ./test/cpesim
 | `-path` | `ACS_PATH` | `/acs` | CWMP 端点路径（同端口时生效） |
 | `-db` | `ACS_DB` | `acs.db` | SQLite 文件路径 |
 | `-user` / `-password` | `ACS_USER` / `ACS_PASSWORD` | 空 | 设备侧 HTTP 认证（CPE 基本认证）|
-| `-web-user` / `-web-pass` | `ACS_WEB_USER` / `ACS_WEB_PASS` | 空 | 面板账号密码（首次启动种入，之后以设置页为准）|
+| `-web-user` / `-web-pass` | `ACS_WEB_USER` / `ACS_WEB_PASS` | 空 | 面板登录账号密码（首次启动种入，之后以设置页为准）|
 | `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名 |
 | `-task-history-limit` | `ACS_TASK_HISTORY_LIMIT` | `500` | 每台设备保留多少条任务记录（`0` = 不限）|
 | `-inform-history-limit` | `ACS_INFORM_HISTORY_LIMIT` | `500` | 每台设备保留多少条上报记录（`0` = 不限）|
@@ -117,6 +118,15 @@ go build -o cpesim ./test/cpesim
 | `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | 纳管时做一次能力探测（决定界面区块）|
 | `-log-level` | `ACS_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `-log-soap` | `ACS_LOG_SOAP` | `false` | 打印原始 SOAP 报文（排障用）|
+
+### 面板登录
+
+面板是**独立登录页 + 会话 cookie**（不是 HTTP Basic）：未登录访问任何页面都会跳到 `/login`，
+带登录态后 7 天内有效、用着会自动续期，顶栏有「退出」按钮。登录态是 HMAC 签名的 cookie
+（HttpOnly + SameSite=Lax，密钥存库、重启不掉线）；**改账号密码会把所有旧登录态立刻作废**。
+接口（`/api/*`）未登录时回 401 JSON，静态资源不需要登录。
+
+忘了密码：`ACS_WEB_AUTH=off` 起一次即可进去改，或清掉库里 `web_user`/`web_pass`。
 
 ### 在线状态怎么判
 

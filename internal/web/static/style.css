@@ -149,6 +149,23 @@ button.danger:hover { filter: brightness(1.12); }
 button:disabled, button:disabled:hover {
   opacity: .4; cursor: not-allowed; filter: none;
 }
+/* 登录页 */
+.login-wrap { min-height: 78vh; display: flex; align-items: center; justify-content: center; }
+.login-card {
+  width: 380px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; padding: 26px 26px 22px;
+}
+.login-card h1 { font-size: 18px; margin: 0 0 4px; }
+.login-card label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 4px; }
+.login-card input[type=text], .login-card input[type=password] {
+  width: 100%; padding: 9px 11px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--fg); font: inherit;
+}
+.login-card input:focus { outline: none; border-color: var(--accent); }
+.login-error { margin-top: 14px; border-color: var(--bad); color: var(--bad); }
+/* 顶栏里的退出按钮（表单包一层，别撑出多余间距） */
+header.top form { margin: 0; }
+
 /* 首页的在线 / 离线筛选 */
 .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .chip {

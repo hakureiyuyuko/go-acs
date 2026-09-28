@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 轻量 TR-069 ACS</title>
+<link rel="stylesheet" href="/static/style.css">
+<script>
+  // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
+  (function () {
+    try {
+      var t = localStorage.getItem("theme");
+      if (t !== "light" && t !== "dark") {
+        t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches)
+          ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
+</head>
+<body>
+<main class="login-wrap">
+  <form class="login-card" method="post" action="/login">
+    <h1>轻量 TR-069 ACS</h1>
+    <div class="hint" style="margin-bottom:18px">请登录后使用面板</div>
+
+    <label for="user">账号</label>
+    <input id="user" name="user" type="text" value="{{.User}}" autocomplete="username"
+           autofocus required>
+
+    <label for="pass" style="margin-top:14px">密码</label>
+    <input id="pass" name="pass" type="password" autocomplete="current-password" required>
+
+    <input type="hidden" name="next" value="{{.Next}}">
+
+    {{if .Error}}<div class="notice login-error">{{.Error}}</div>{{end}}
+
+    <button type="submit" style="width:100%;margin-top:20px">登录</button>
+    <div class="hint" style="margin-top:14px">
+      账号密码在「设置」页里改；忘了的话，用 <span class="mono">ACS_WEB_AUTH=off</span> 起一次就能进来。
+    </div>
+  </form>
+</main>
+</body>
+</html>

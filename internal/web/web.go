@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -50,6 +51,7 @@ type Server struct {
 	ctrl  Controller
 	tpl   *template.Template
 	opt   Options
+	log   *slog.Logger
 }
 
 // kv 是详情页里的一行「字段 - 值」。
@@ -66,6 +68,8 @@ type Options struct {
 	Auth *Creds
 	// Runtime 是**当前进程实际在用**的监听/账号值：设置页拿它跟“保存后使用”的值对照。
 	Runtime RuntimeSettings
+	// Log 用来记面板登录等安全事件（nil = 不记）。
+	Log *slog.Logger
 }
 
 // Register 把面板路由挂到 mux 上。
@@ -80,7 +84,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 		return fmt.Errorf("解析模板失败: %w", err)
 	}
 
-	s := &Server{store: st, ctrl: ctrl, tpl: tpl, opt: opt}
+	s := &Server{store: st, ctrl: ctrl, tpl: tpl, opt: opt, log: opt.Log}
 
 	// 面板这一套路由统一走鉴权（CWMP 那套在 main 里单独挂，不受影响）。
 	// Guard 每次请求都会读一遍当前凭据，所以设置页改完密码后立刻按新的校验。
@@ -92,14 +96,18 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 		return func(w http.ResponseWriter, r *http.Request) { g.ServeHTTP(w, r) }
 	}
 
+	// 登录页与退出登录不鉴权（否则进不去 / 出不来）
+	mux.HandleFunc("GET /login", s.handleLoginPage)
+	mux.HandleFunc("POST /login", s.handleLoginSubmit)
+	mux.HandleFunc("POST /logout", s.handleLogout)
+	mux.HandleFunc("GET /logout", s.handleLogout)
+
 	sub, err := fs.Sub(assets, "static")
 	if err != nil {
 		return err
 	}
+	// 静态资源不鉴权：登录页本身要用 style.css，而且里面没有业务数据。
 	fsHandler := http.StripPrefix("/static/", http.FileServerFS(sub))
-	if opt.Auth != nil {
-		fsHandler = opt.Auth.Guard(fsHandler)
-	}
 	mux.Handle("GET /static/", fsHandler)
 
 	mux.HandleFunc("GET /{$}", guard(s.handleIndex))
@@ -122,6 +130,18 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 	mux.HandleFunc("POST /api/devices/{id}/names", guard(s.apiFetchNames))
 	mux.HandleFunc("POST /api/devices/{id}/wifi", guard(s.apiWifi))
 	return nil
+}
+
+// renderStatus 同 render，但可以指定 HTTP 状态码（登录失败要回 401）。
+func (s *Server) renderStatus(w http.ResponseWriter, status int, name string, data any) {
+	var buf bytes.Buffer
+	if err := s.tpl.ExecuteTemplate(&buf, name, data); err != nil {
+		http.Error(w, "模板渲染失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(buf.Bytes())
 }
 
 // render 把模板先渲染到内存、成功后再写出。
@@ -205,6 +225,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"ClientCounts": clientCounts,
 		"Query":        q,
 		"State":        state,
+		"AuthOn":       s.authEnabled(),
 		"Total":        len(all),
 		// 筛选条上的数字（在线含探测中，探测中是它的子集）
 		"OnlineCount":  stats.Online,
@@ -496,6 +517,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		"SubClients":         subClientsBy,
 		"SubClientsList":     subClients,
 		"Path":               "/devices/" + strconv.FormatInt(id, 10),
+		"AuthOn":             s.authEnabled(),
 		// 表单默认值：按设备的数据模型根猜一个 WiFi 路径（只是默认值，用户可改）
 		"DefaultPath": defaultFetchPath(d),
 	}

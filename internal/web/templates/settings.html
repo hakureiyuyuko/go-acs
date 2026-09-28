@@ -27,6 +27,9 @@
   <div class="spacer"></div>
   <a class="ghost" href="/">设备列表</a>
   <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
+  {{if .AuthOn}}
+  <form method="post" action="/logout"><button type="submit" class="ghost" title="退出登录">退出</button></form>
+  {{end}}
 </header>
 
 <main>

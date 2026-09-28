@@ -123,9 +123,19 @@ func run(args []string) error {
 		// 救急：忘了面板密码又不想动库时，用环境变量强制关掉鉴权
 		authUser, authHash = "", ""
 	}
-	creds := web.NewCreds(authUser, authHash)
+	// 面板登录态 cookie 的签名密钥：放库里，重启不失效
+	//（否则每次重启都把所有人踢下线）。生成一次，之后一直用。
+	secretHex, _, err := st.GetOrCreateSetting("panel_secret", func() string {
+		return randomHex16() + randomHex16()
+	})
+	if err != nil {
+		return fmt.Errorf("准备面板登录密钥失败: %w", err)
+	}
+	secret, _ := hex.DecodeString(secretHex)
+	creds := web.NewCreds(authUser, authHash, secret)
 	webOpts := web.Options{
 		Auth: creds,
+		Log:  log,
 		Runtime: web.RuntimeSettings{
 			ACSListen: acsAddr,
 			WebListen: webAddr,

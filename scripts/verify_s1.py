@@ -20,13 +20,32 @@ BASE = sys.argv[1].rstrip("/")
 # 面板启用了账号密码保护时（verify-s1.sh 里用 ACS_WEB_USER/PASS 打开），
 # 除了 CWMP 报文以外的请求都要带上这份凭据。CWMP 那套（post()）用 CPE 自己的认证，不受影响。
 PANEL_AUTH = os.environ.get("ACS_VERIFY_AUTH", "")
+# 面板现在是**独立登录页 + 会话 cookie**（不再是 HTTP Basic）：
+# 这里存登录后拿到的 Cookie 头，后面所有面板请求都带上它。
+PANEL_COOKIE = None
+
+
+def panel_login(user, password, base=None):
+    """走登录页拿登录态 cookie。返回 (状态码, Set-Cookie 的 name=value)。"""
+    global PANEL_COOKIE
+    data = urllib.parse.urlencode({"user": user, "pass": password, "next": "/"}).encode()
+    req = urllib.request.Request((base or BASE) + "/login", data=data, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        r = _NO_REDIRECT.open(req, timeout=20)
+        status, headers = r.status, r.headers
+    except urllib.error.HTTPError as e:
+        status, headers = e.code, e.headers
+    val = (headers.get("Set-Cookie") or "").split(";")[0].strip()
+    if status == 303 and val.startswith("acs_panel="):
+        PANEL_COOKIE = val
+    return status, val
 
 
 def panel_req(url, data=None, method=None):
     req = urllib.request.Request(url, data=data, method=method)
-    if PANEL_AUTH:
-        tok = base64.b64encode(PANEL_AUTH.encode()).decode()
-        req.add_header("Authorization", "Basic " + tok)
+    if PANEL_COOKIE:
+        req.add_header("Cookie", PANEL_COOKIE)
     return req
 CWMP = BASE + "/acs"
 
@@ -131,6 +150,69 @@ def run_chrome_dom(chrome, url):
         return None
 
 
+def browser_dom_without_login(workdir, chrome):
+    """给「必须真跑 JS」的检查准备一个**不需要登录**的页面，并返回跑完 JS 的 DOM。
+
+    面板开了登录页之后，无头浏览器没有登录态（会被 303 送到 /login），
+    所以这里另起一台关掉鉴权的实例、用模拟器注册一台设备，抓它的详情页 DOM，
+    用完就把这台实例关掉。返回 None 表示环境不具备。
+    """
+    acs_bin = os.path.join(workdir, "acs")
+    sim_bin = os.path.join(workdir, "cpesim")
+    if not (os.path.exists(acs_bin) and os.path.exists(sim_bin)):
+        return None
+    port = 17590
+    base = "http://127.0.0.1:%d" % port
+    env = dict(os.environ)
+    env.update({
+        "ACS_LISTEN": ":%d" % port,
+        "ACS_DB": os.path.join(workdir, "browser.db"),
+        "ACS_WEB_AUTH": "off",     # 关键：这台不鉴权，浏览器才进得去
+        "ACS_LOG_LEVEL": "warn",
+    })
+    env.pop("ACS_WEB_USER", None)
+    env.pop("ACS_WEB_PASS", None)
+    logf = open(os.path.join(workdir, "browser.log"), "w", encoding="utf-8")
+    proc = subprocess.Popen([acs_bin], env=env, stdout=logf, stderr=subprocess.STDOUT)
+    try:
+        ready = False
+        for _ in range(60):
+            try:
+                with urllib.request.urlopen(base + "/", timeout=2) as r:
+                    if r.status == 200:
+                        ready = True
+                        break
+            except Exception:  # noqa: BLE001
+                time.sleep(0.2)
+        if not ready:
+            return None
+        # 注册一台设备（-extra-params 保证参数表超过 20 行，分页才有意义）
+        try:
+            subprocess.run([sim_bin, "-acs", base + "/acs", "-serial", "BROWSER01",
+                            "-once", "-extra-params", "60"],
+                           capture_output=True, timeout=60)
+        except Exception:  # noqa: BLE001
+            pass
+        did = None
+        with urllib.request.urlopen(base + "/api/devices", timeout=5) as r:
+            for d in json.loads(r.read().decode())["data"]:
+                if d.get("SerialNumber") == "BROWSER01":
+                    did = d["ID"]
+        if did is None:
+            return None
+        # 实例还活着的时候抓 DOM（Chrome 要真的去请求它）
+        return run_chrome_dom(chrome, "%s/devices/%d" % (base, did))
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+        logf.close()
+
+
 def run_sim_bg(workdir, seconds, *extra):
     """跑模拟器若干秒（不加 -once），用于需要**多轮会话**的场景。
 
@@ -211,6 +293,11 @@ def run_sim(workdir, *extra):
 
 def main():
     workdir = sys.argv[2] if len(sys.argv) > 2 else "."
+    # 面板开了保护就先登录拿 cookie，后面所有面板请求都带它
+    if PANEL_AUTH:
+        u, p = PANEL_AUTH.split(":", 1)
+        st, ck = panel_login(u, p)
+        check("面板登录拿到会话 cookie", st == 303 and bool(ck), "%s %s" % (st, ck))
 
     print("== 1. 服务与界面 ==")
     st, _ = get("/")
@@ -602,7 +689,11 @@ def main():
         if not chrome:
             skip("分页真的只显示 20 行", "本机没有 headless 浏览器")
         else:
-            dom = run_chrome_dom(chrome, f"{BASE}/devices/{did}")
+            if PANEL_AUTH:
+                # 面板开了登录页：无头浏览器没有登录态，换一台不鉴权的临时实例来验前端行为
+                dom = browser_dom_without_login(workdir, chrome)
+            else:
+                dom = run_chrome_dom(chrome, f"{BASE}/devices/{did}")
             if dom is None:
                 skip("分页真的只显示 20 行", "headless 浏览器执行失败")
             else:
@@ -1155,33 +1246,66 @@ def main():
         st, h = get(f"/devices/{did}")
         check("任务历史标题里写明了保留条数", f"最近 {limit} 条" in h, st)
         check("上报记录标题里也写明了保留条数", h.count(f"最近 {limit} 条") >= 2, h.count(f"最近 {limit} 条"))
-    print("== 35. 面板设置页（双端口 + 账号密码保护）==")
+    print("== 35. 面板设置页（双端口 + 登录页 / 账号密码保护）==")
     import sqlite3
     user = PANEL_AUTH.split(":", 1)[0] if PANEL_AUTH else ""
 
-    def raw_get(path, auth=None):
-        """不带（或只带指定）凭据的面板请求，用来验证鉴权本身。"""
+    def anon_get(path, cookie=None):
+        """不带（或只带指定 cookie 的）面板请求，用来验证登录态本身。
+
+        注意**不跟随重定向**：未登录时回的是 303 跳登录页，
+        urlopen 默认会跟到 /login 变成 200，看起来就像"放行了"。
+        """
         req = urllib.request.Request(BASE + path)
-        if auth:
-            tok = base64.b64encode(auth.encode()).decode()
-            req.add_header("Authorization", "Basic " + tok)
+        if cookie:
+            req.add_header("Cookie", cookie)
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                return r.status
+            return _NO_REDIRECT.open(req, timeout=20).status
         except urllib.error.HTTPError as e:
             return e.code
+
+    def logout_post(cookie):
+        req = urllib.request.Request(BASE + "/logout", method="POST")
+        if cookie:
+            req.add_header("Cookie", cookie)
+        try:
+            r = _NO_REDIRECT.open(req, timeout=20)
+            return r.status, r.headers.get("Location", ""), r.headers.get("Set-Cookie", "")
+        except urllib.error.HTTPError as e:
+            return e.code, e.headers.get("Location", ""), e.headers.get("Set-Cookie", "")
 
     if not PANEL_AUTH:
         skip("面板鉴权用例", "本次验收没开面板账号密码保护（ACS_WEB_USER/PASS 未设置）")
     else:
-        check("不带凭据访问面板 → 401", raw_get("/") == 401, raw_get("/"))
-        check("凭据错了 → 401", raw_get("/", "acsweb:wrong-pass") == 401, raw_get("/", "acsweb:wrong-pass"))
-        check("凭据对了 → 200", raw_get("/", PANEL_AUTH) == 200, raw_get("/", PANEL_AUTH))
-        check("接口（/api）也受保护", raw_get("/api/devices") == 401, raw_get("/api/devices"))
-        check("静态资源也受保护", raw_get("/static/style.css") == 401, raw_get("/static/style.css"))
-        # 面板鉴权不能挡住设备上报：CWMP 仍然是「能通就通」（CPE 认证是另一套）
+        pw = PANEL_AUTH.split(":", 1)[1]
+        # 登录页这套：页面请求未登录会被 303 送到 /login，接口请求回 401，静态资源不挡
+        check("登录页不用登录就能打开", anon_get("/login") == 200, anon_get("/login"))
+        check("不带登录态访问面板 → 303 跳登录页", anon_get("/") == 303, anon_get("/"))
+        check("不带登录态访问 /api → 401", anon_get("/api/devices") == 401, anon_get("/api/devices"))
+        check("静态资源（样式表）不挡（登录页要用）", anon_get("/static/style.css") == 200,
+              anon_get("/static/style.css"))
+        # 密码错了不给登录态
+        bad_st, bad_ck = panel_login(user, "wrong-pass")
+        check("密码错了 → 401 且不下发登录态", bad_st == 401 and bad_ck == "", "%s %s" % (bad_st, bad_ck))
+        # 对了就拿到 cookie
+        st, ck = panel_login(user, pw)
+        check("账号密码对了 → 303 且下发登录态 cookie", st == 303 and ck.startswith("acs_panel="),
+              "%s %s" % (st, ck))
+        check("带上登录态能打开面板", anon_get("/", ck) == 200, anon_get("/", ck))
+        check("伪造的登录态不认", anon_get("/", "acs_panel=v1.0.9999999999.deadbeef") == 303, "")
+        # 退出登录
+        out_st, out_loc, out_ck = logout_post(ck)
+        check("退出登录 → 跳回登录页", out_st == 303 and out_loc == "/login", "%s %s" % (out_st, out_loc))
+        check("退出登录清掉了登录态 cookie",
+              "acs_panel=" in out_ck and "Max-Age=0" in out_ck.replace("max-age=0", "Max-Age=0"),
+              out_ck[:80])
+        # 重新登录（后面还要用面板）
+        panel_login(user, pw)
+        check("重新登录后又能进", anon_get("/", PANEL_COOKIE) == 200, "")
+
+        # 面板鉴权不能挡住设备上报：CWMP 是另一套（CPE 认证）
         st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "auth1", "<cwmp:GetRPCMethods/>"))
-        check("CWMP 端点不受面板鉴权影响", st == 200, st)
+        check("CWMP 端点不受面板登录影响", st == 200, st)
 
         st, h = get("/settings")
         check("设置页能打开", st == 200 and "设置" in h, st)
@@ -1190,6 +1314,7 @@ def main():
         check("设置页有 ACS 监听 / 面板监听 / 账号 / 新密码各一栏",
               'name="acs_listen"' in h and 'name="web_listen"' in h
               and 'name="web_user"' in h and 'name="web_pass"' in h, st)
+        check("顶栏有「退出」按钮（登录页那套才有）", 'action="/logout"' in h, "")
         check("设置页只有标签/字段/按钮，没有说明性文档",
               "HTTP Basic" not in h and "反向代理" not in h and "忘记" not in h
               and "重启服务后生效" not in h, st)
@@ -1222,7 +1347,8 @@ def main():
         check("两次密码不一致被拒", st == 303 and "err=1" in (loc or ""),
               urllib.parse.unquote(loc or ""))
 
-        # 改密码：旧密码立刻失效（这条最关键 —— 设置页真的能改账号密码）
+        # 改密码：旧密码与旧登录态都立刻失效（这条最关键 —— 设置页真的能改账号密码）
+        old_cookie = PANEL_COOKIE
         st, loc = post_form("/settings", {"acs_listen": ":7547", "web_listen": "",
                                           "auth": "1", "web_user": user,
                                           "web_pass": "verify-new-pass", "web_pass2": "verify-new-pass"})
@@ -1230,10 +1356,13 @@ def main():
               urllib.parse.unquote(loc or ""))
         check("提示里说明了账号密码已生效", "账号密码已生效" in urllib.parse.unquote(loc or ""),
               urllib.parse.unquote(loc or ""))
-        check("旧密码立刻失效 → 401", raw_get("/", PANEL_AUTH) == 401, raw_get("/", PANEL_AUTH))
-        check("新密码能进 → 200", raw_get("/", f"{user}:verify-new-pass") == 200,
-              raw_get("/", f"{user}:verify-new-pass"))
-        # 后面还要用面板（改密码之后凭据变了）
+        check("旧登录态立刻失效 → 又跳登录页", anon_get("/", old_cookie) == 303, anon_get("/", old_cookie))
+        st, ck = panel_login(user, "verify-new-pass")
+        check("新密码能登进来", st == 303 and ck.startswith("acs_panel="), "%s %s" % (st, ck))
+        check("新登录态能用 → 200", anon_get("/", PANEL_COOKIE) == 200, "")
+        if not PANEL_COOKIE:
+            check("新登录态能用 → 200", False, "没拿到 cookie")
+        # 后面还要用面板（凭据变了）
         globals()["PANEL_AUTH"] = f"{user}:verify-new-pass"
         # 库里的密码是散列，不是明文
         con = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
@@ -1242,12 +1371,8 @@ def main():
         check("密码只存散列（PBKDF2）",
               str(stored.get("web_pass", "")).startswith("pbkdf2-sha256$")
               and "verify-new-pass" not in str(stored.get("web_pass")), stored.get("web_pass", "")[:32])
-
-        # 关掉保护：清空账号即可
-        st, loc = post_form("/settings", {"acs_listen": ":7547", "web_listen": "",
-                                          "auth": "0", "web_user": user})
-        check("可以关掉面板保护", st == 303 and "err=1" not in (loc or ""),
-              urllib.parse.unquote(loc or ""))
+        check("登录态签名密钥也存进了库（重启不掉线）",
+              str(stored.get("panel_secret", "")) != "", stored.get("panel_secret", "")[:8])
 
     print("== 36. 双端口：ACS 与面板分开监听 ==")
     acs_bin = os.path.join(workdir, "acs")

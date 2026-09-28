@@ -57,6 +57,9 @@ type settingsView struct {
 
 	Notice    string
 	NoticeErr bool
+
+	// AuthOn 决定顶栏显不显示「退出」。
+	AuthOn bool
 }
 
 // handleSettings 渲染设置页。
@@ -83,6 +86,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	v.PendingPorts = v.StoredListen != v.Runtime.ACSListen ||
 		v.StoredWebListen != v.Runtime.WebListen
+	v.AuthOn = s.authEnabled()
 	s.render(w, "settings.html", v)
 }
 
@@ -195,6 +199,11 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		default:
 			// 只改了账号、没改密码：散列保持库里那份
 			s.opt.Auth.Set(user, storedPass)
+		}
+		// Set() 会让 epoch 自增（旧登录态全部失效）——包括当前这一个浏览器，
+		// 所以这里给当前会话补发一张新票，免得管理员改完密码反而被踢去登录页。
+		if authOn {
+			s.opt.Auth.setCookie(w, r)
 		}
 	}
 

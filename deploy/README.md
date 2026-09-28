@@ -87,10 +87,12 @@ sudo ./uninstall.sh --purge  # 连数据库、配置、服务用户一起删
 配置全在 `/etc/default/acs`（环境变量），改完 `sudo systemctl restart acs`。
 变量名与命令行参数一一对应，完整列表见 README 的「配置」一节。
 
-面板的监听地址改动**重启生效**；面板账号密码保存后**立即生效**（其中密码以 PBKDF2 散列存在数据库里）。
+面板的监听地址改动**重启生效**；面板登录账号密码保存后**立即生效**（其中密码以 PBKDF2 散列存在数据库里）。
+面板走**独立登录页 + 会话 cookie**（不是 HTTP Basic），顶栏有「退出」；忘了密码用 `ACS_WEB_AUTH=off` 起一次即可。
 
 ## 两个提醒
 
 - 单元里开了 `ProtectSystem=strict`，服务只允许写数据目录；把数据库挪到别处时，记得把它加进 `ReadWritePaths`。
-- 面板是 HTTP Basic 认证、明文 HTTP。TR-069 那一侧基本只能用 HTTP（光猫普遍不支持 HTTPS），
-  所以**别把端口直接暴露到公网**：放内网，或前面挂 nginx 做 TLS 与来源限制。
+- 面板是登录页 + 会话 cookie，但整个面板走的是**明文 HTTP**（登录密码也是明文传输）。
+  TR-069 那一侧基本只能用 HTTP（光猫普遍不支持 HTTPS），所以**别把端口直接暴露到公网**：
+  放内网，或前面挂 nginx 做 TLS 与来源限制（走了 HTTPS 时登录 cookie 会自动带 Secure）。
