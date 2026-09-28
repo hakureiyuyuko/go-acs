@@ -192,6 +192,12 @@ func (s *Server) FetchSubtree(deviceID int64, path string, exclude []string, max
 	return err
 }
 
+// FetchNames 给外部（Web/REST）用：只枚举参数名，不取值（浏览参数树）。
+func (s *Server) FetchNames(deviceID int64, path string, nextLevel bool) error {
+	_, err := s.EnqueueFetchNames(deviceID, path, nextLevel)
+	return err
+}
+
 // FetchWiFi 给外部（Web/REST）用：采集无线概况（看板上的 2.4G/5G 那一栏）。
 func (s *Server) FetchWiFi(deviceID int64) error {
 	_, err := s.EnqueueFetchWiFi(deviceID)
@@ -253,6 +259,21 @@ func (s *Server) EnqueueFetchSubtree(deviceID int64, path string, exclude []stri
 		ThenFetch: true,
 		Exclude:   exclude,
 		Max:       max,
+	})
+}
+
+// EnqueueFetchNames 入队一条「只枚举参数名，不取值」的任务。
+//
+// 用途：**浏览参数树**。先把某层有哪些对象列出来（nextLevel=true 只看直接子节点），
+// 再决定往哪几个子树里钻 —— 比盲猜路径实用得多（真机上猜错一次就是一整轮上报周期）。
+func (s *Server) EnqueueFetchNames(deviceID int64, path string, nextLevel bool) (int64, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return 0, fmt.Errorf("参数路径不能为空（要列根下一层可以用 InternetGatewayDevice.）")
+	}
+	return s.enqueueSubtree(deviceID, gpnPayload{
+		Path:      path,
+		NextLevel: nextLevel,
 	})
 }
 

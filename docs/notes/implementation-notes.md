@@ -348,6 +348,49 @@ GetParameterNamesResponse (437)  → 200 GetParameterValues(<前 200 个名>)
 注意客户端 IP 是 `192.168.30.3`（光猫的 LAN 侧），而光猫自己对我们呈现的是 `192.168.10.22`
 （它作为 CPE 的 WAN/管理 IP）—— 两张网是由它 NAT 隔开的。
 
+### 浏览参数树：不猜路径，先让设备自己说出来
+
+接新设备（尤其是厂商私有对象一大堆的光猫、FTTR 主机）时，盲猜参数路径代价很高 ——
+真机上猜错一次就是一整轮上报周期（120 秒）。所以加了一个能力：
+
+```bash
+# 只枚举名字，不取值。next_level=true 表示只看直接子节点
+POST /api/devices/2/names {"path":"InternetGatewayDevice.","next_level":true}
+```
+
+### 实战：从 FTTR 主机里读出子光猫
+
+用户那台 V271-20 是 **FTTR 主机**，问能不能读到子光猫（从设备）信息。
+
+**第一轮**：`next_level` 枚举 `InternetGatewayDevice.` -> 拿到 **72 个顶层对象**，
+一眼就看到了几个可疑的：`X_HW_APDevice.`（AP 设备表）、`X_HW_SmartTopo.`（拓扑）、
+`X_HW_WifiCoverService.`、`X_HW_EasyMeshSwitch.`。
+
+**第二轮**：直接对 `X_HW_APDevice.` 做全量枚举 -> **337 个参数**，就是子光猫表。
+
+两轮就拿到了，一共没用几次猜测。读出来的东西（真机数据）：
+
+| 实例 | 型号 | 序列号 | MAC | 软件版本 | 硬件 | 在线 | 2.4G/5G 信道 | 在线时长 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | **K251e** | HWTCAA000001 | 02:73:E2:51:DA:EA | V5R023C10S326 | 3A17.A | 是 | 6 / 36 | 361:36:38 |
+| 2 | **K251-20** | 48575443AA000002 | 02:16:C8:61:F4:BC | V5R023C10S300 | 3B78.A | 是 | 1 / 36 | 361:36:42 |
+| 4 | **K251-20** | 48575443AA000003 | 02:40:08:CE:FB:7F | V5R023C10S300 | 3B78.A | 是 | 7 / 36 | 361:36:36 |
+
+每个子光猫 21 个顶层字段：`SerialNumber` / `DeviceType` / `SoftwareVersion` /
+`HardwareVersion` / `APMacAddr` / `ApOnlineFlag` / `DeviceStatus` / `UpTime` /
+`CurrentChannel`（2.4G,5G 两个） / `SupportedRFBand` / `TransmitPower` / `SignalIntensity` /
+`SyncStatus` / `WorkingMode` / `SupportedWorkingMode` / `InternetAccessMode` / `UUID` 等。
+
+三个值得记的点：
+
+1. **实例号又是 1 / 2 / 4**（缺 3）。加上之前无线实例是 1 和 5，可以确定：
+   厂商的实例号真的随时会不连续，一律得枚举，绝不能写死。
+2. **每个子光猫还带自己的 `WLANConfiguration.`（105 个参数）** —— 也就是说
+   **每个房间那个 AP 的 WiFi 也能单独读、单独改**。它跟主设备自己的
+   `LANDevice.1.WLANConfiguration.` 是两套路径，不要搞混。
+3. `X_HW_SmartTopo.` 对象存在（7 个参数：RSSI 阈值、丢包率阈值、测量时长等），
+   但**全是空的** —— 对象有不代表有数据，界面要能优雅地空着。
+
 ### 折叠与分页（界面细节）
 
 设备一多、参数一多，详情页不折叠就没人看了：一台设备现在能到 **923 个参数**、
@@ -573,7 +616,7 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
 | 项目 | 结果 |
 | --- | --- |
 | `go test ./...` | 全部通过（`internal/cwmp` 29 个用例、`internal/store` 7 个用例、`internal/web` 11 个用例）|
-| `scripts/verify-s1.sh` | **通过 109 / 失败 0** |
+| `scripts/verify-s1.sh` | **通过 115 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
 | 真机（华为 HN8145X6N + V271-20） | **两台不同型号均自动纳管成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |

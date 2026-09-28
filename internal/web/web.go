@@ -30,6 +30,8 @@ type Controller interface {
 	FetchSubtree(deviceID int64, path string, exclude []string, max int) error
 	// FetchWiFi 采集无线概况（看板上的 2.4G/5G 那一栏）。
 	FetchWiFi(deviceID int64) error
+	// FetchNames 只枚举参数名不取值（浏览参数树）。
+	FetchNames(deviceID int64, path string, nextLevel bool) error
 	// SetParameters 下发 SetParameterValues（改 WiFi 名字/密码/开关等）。
 	SetParameters(deviceID int64, params []store.Param) error
 }
@@ -78,6 +80,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	mux.HandleFunc("GET /api/devices", s.apiDevices)
 	mux.HandleFunc("GET /api/devices/{id}", s.apiDevice)
 	mux.HandleFunc("POST /api/devices/{id}/fetch", s.apiFetch)
+	mux.HandleFunc("POST /api/devices/{id}/names", s.apiFetchNames)
 	mux.HandleFunc("POST /api/devices/{id}/wifi", s.apiWifi)
 	return nil
 }
@@ -439,6 +442,46 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		_ = s.ctrl.FetchSubtree(id, path, exclude, max)
 	}
 	http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+// apiFetchNames 是给脚本用的：POST /api/devices/{id}/names，只枚举参数名不取值。
+//
+//	{"path":"InternetGatewayDevice.","next_level":true}
+//
+// 用途是浏览参数树：先把某层有哪些对象列出来，再决定往哪个子树里钻。
+// 真机上盲猜路径代价很高（猜错一次就是一整轮上报周期），所以这个能力很有用。
+func (s *Server) apiFetchNames(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSONError(w, fmt.Errorf("设备 ID 非法"), http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Path      string `json:"path"`
+		NextLevel bool   `json:"next_level"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, fmt.Errorf("请求体不是合法 JSON: %w", err), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" {
+		writeJSONError(w, fmt.Errorf("path 不能为空"), http.StatusBadRequest)
+		return
+	}
+	if s.ctrl == nil {
+		writeJSONError(w, fmt.Errorf("未接入控制接口"), http.StatusInternalServerError)
+		return
+	}
+	if err := s.ctrl.FetchNames(id, req.Path, req.NextLevel); err != nil {
+		writeJSONError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"queued":     true,
+		"path":       req.Path,
+		"next_level": req.NextLevel,
+		"note":       "只枚举名字不取值；任务会在设备下次 Inform 时下发",
+	})
 }
 
 // apiFetch 是给脚本用的：POST /api/devices/{id}/fetch

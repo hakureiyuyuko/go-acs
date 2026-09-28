@@ -134,6 +134,9 @@ docs/               需求文档与笔记
 - **读取任意参数子树**：界面上的「读取参数子树」表单，或
   `POST /api/devices/{id}/fetch` `{"path":"...","exclude":["..."],"max":200}` ——
   先 `GetParameterNames` 枚举再 `GetParameterValues` 取值，两步在**同一个会话**里完成
+- **浏览参数树**：`POST /api/devices/{id}/names` `{"path":"InternetGatewayDevice.","next_level":true}` ——
+  只枚举名字不取值。接新设备/找厂商私有对象时先用它把结构列出来，
+  比盲猜路径实用得多（真机上猜错一次就是一整轮上报周期）
 - **CPE 模拟器**：TR-098 / TR-181 两种数据模型，支持 Connection Request 触发
 
 ## 未实现（后续）

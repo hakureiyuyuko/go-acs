@@ -77,6 +77,18 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
 
 
+def post_json(path, obj):
+    """POST 一段 JSON，返回 (状态码, 响应体)。"""
+    data = json.dumps(obj).encode()
+    req = urllib.request.Request(BASE + path, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
 def post_form(path, fields):
     """提交一个表单，返回 (状态码, Location)。不跟随重定向。"""
     data = urllib.parse.urlencode(fields).encode()
@@ -540,7 +552,32 @@ def main():
                     vis = sum(1 for r in rows if "display: none" not in r) - 1
                     check("任务历史一页不超过 20 行", 0 <= vis <= 20, vis)
 
-    print("== 20. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 20. 浏览参数树（只枚举名字，不取值）==")
+    if did:
+        st, body = post_json(f"/api/devices/{did}/names",
+                             {"path": "InternetGatewayDevice.", "next_level": True})
+        check("names 接口返回 200", st == 200, st)
+        try:
+            check("names 接口回了 queued", json.loads(body).get("queued") is True, body[:80])
+        except Exception:
+            check("names 接口回了 JSON", False, body[:80])
+
+        ok, out = run_sim(workdir, "-serial", "VERIFY098", "-oui", "001122", "-once", "-event", "2 PERIODIC")
+        check("names 任务的会话成功", ok, out[-160:])
+        full = wait_tasks_done(did, kinds=("GetParameterNames", "GetParameterValues"))
+        gpn = [t for t in full["tasks"] if t["Kind"] == "GetParameterNames"]
+        check("确实入队了一条 next_level 枚举任务",
+              any('"next_level":true' in t["Payload"] for t in gpn),
+              [t["Payload"][:60] for t in gpn[:2]])
+        check("它跑完了",
+              any('"next_level":true' in t["Payload"] and t["Status"] == "done" for t in gpn))
+        # 只枚举名字的任务不应带 then_fetch（否则会多下发一轮取值）
+        nl = [t for t in gpn if '"next_level":true' in t["Payload"]]
+        check("只枚举名字的任务不带 then_fetch（不会多发一轮取值）",
+              len(nl) > 0 and all("then_fetch" not in t["Payload"] for t in nl),
+              [t["Payload"][:70] for t in nl[:2]])
+
+    print("== 21. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 
