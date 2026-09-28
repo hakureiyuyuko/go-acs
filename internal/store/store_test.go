@@ -523,3 +523,59 @@ func TestTaskHistoryLimit(t *testing.T) {
 		t.Errorf("上限为 0 时不该裁剪：n=%d err=%v", n, err)
 	}
 }
+
+// 上报记录保留上限：每台设备最多留 N 条，留最新的，不牵连别的设备。
+func TestInformHistoryLimit(t *testing.T) {
+	st := newTestStore(t)
+	dev, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "I1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "I2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st.SetInformHistoryLimit(5)
+	var ids []int64
+	for i := 0; i < 12; i++ {
+		if err := st.InsertInform(&InformRecord{DeviceID: dev, Events: "2 PERIODIC", ParamCount: 3}); err != nil {
+			t.Fatal(err)
+		}
+		infs, err := st.ListInforms(dev, 1)
+		if err != nil || len(infs) == 0 {
+			t.Fatalf("读上报记录失败: %v", err)
+		}
+		ids = append(ids, infs[0].ID)
+	}
+	if err := st.InsertInform(&InformRecord{DeviceID: other, Events: "0 BOOTSTRAP"}); err != nil {
+		t.Fatal(err)
+	}
+
+	infs, err := st.ListInforms(dev, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infs) != 5 {
+		t.Fatalf("上限 5，实际留下 %d 条", len(infs))
+	}
+	if infs[0].ID != ids[len(ids)-1] {
+		t.Errorf("最新一条应该留着：%d vs %d", infs[0].ID, ids[len(ids)-1])
+	}
+	for _, keep := range infs {
+		for _, old := range ids[:7] {
+			if keep.ID == old {
+				t.Errorf("最旧的 7 条应被裁掉，但 %d 还在", old)
+			}
+		}
+	}
+	if o, _ := st.ListInforms(other, 10); len(o) != 1 {
+		t.Errorf("别的设备不该被牵连：%d", len(o))
+	}
+
+	// 不限（0）时什么都不裁
+	st.SetInformHistoryLimit(0)
+	if n, err := st.PruneInforms(); err != nil || n != 0 {
+		t.Errorf("上限为 0 时不该裁剪：n=%d err=%v", n, err)
+	}
+}

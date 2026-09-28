@@ -1103,7 +1103,7 @@ def main():
         st, css = get("/static/style.css")
         check("终端条目样式仍在（标签 + 弹窗列表）", ".clik" in css and ".clilist" in css, st)
 
-    print("== 34. 任务历史只保留最近 N 条（控制库大小）==")
+    print("== 34. 任务历史 / 上报记录只保留最近 N 条（控制库大小）==")
     if did:
         import sqlite3
         con = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
@@ -1122,8 +1122,20 @@ def main():
         check("排队 / 执行中的任务一条都没少", db_open == api_open, (db_open, api_open))
         con.close()
 
+        # 上报记录同理（它是增长最快的：每 120 秒一条）
+        inrows = con2 = None
+        con2 = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
+        inrows = con2.execute("""
+            select device_id, count(*) from informs group by device_id""").fetchall()
+        check(f"每台设备保留的上报记录都不超过上限（{limit}）",
+              all(r[1] <= limit for r in inrows), inrows)
+        check("上报记录确实触发过裁剪（至少一台设备正好到上限）",
+              any(r[1] == limit for r in inrows), inrows)
+        con2.close()
+
         st, h = get(f"/devices/{did}")
         check("任务历史标题里写明了保留条数", f"最近 {limit} 条" in h, st)
+        check("上报记录标题里也写明了保留条数", h.count(f"最近 {limit} 条") >= 2, h.count(f"最近 {limit} 条"))
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")

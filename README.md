@@ -70,6 +70,7 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 | `-max-body` | `ACS_MAX_BODY` | `4MiB` | 单请求体上限 |
 | `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名（真机单次上限可能只有 256，见下文）|
 | `-task-history-limit` | `ACS_TASK_HISTORY_LIMIT` | `500` | **每台设备**保留多少条任务记录（`0` = 不限）。tasks 表只增不减，跑久了会把库撑大；只裁已结束的任务，排队/执行中的一条都不删 |
+| `-inform-history-limit` | `ACS_INFORM_HISTORY_LIMIT` | `500` | **每台设备**保留多少条上报记录（`0` = 不限）。上报记录增长最快（每 120 秒一条 Inform，一台设备一天 720 条）|
 
 ## 界面
 
@@ -122,7 +123,9 @@ docs/               需求文档与笔记
 - **自研会话管理**：cookie + 「IP/UA」指纹双层关联；同一设备串行化（并发请求排队而非交叉）
 - **任务队列**：DB 持久化、去重、`pending → running → done/failed`、重启后 `running` 自动退回待办；
   **每台设备最多保留 500 条任务历史**（`ACS_TASK_HISTORY_LIMIT`，0 = 不限）——
-  只裁已结束的任务，排队 / 执行中的一条都不会丢
+  只裁已结束的任务，排队 / 执行中的一条都不会丢；**上报记录同样每台设备留 500 条**
+  （`ACS_INFORM_HISTORY_LIMIT`）—— 它是增长最快的表（一天 720 条 / 台），
+  两个上限都在入队 / 写入时顺手裁剪，启动时再裁一次
 - **删除设备**：详情页「操作」里的红色按钮，二次确认后删掉**本地记录**（设备行 + 参数 + 任务 + 上报历史，
   外键级联，验收里直接查库确认无残留）。**只删本地记录**：不动设备本身，也不阻断再次纳管
   （设备还配着本 ACS 时下次上报就回来了，确认框里写明了这一点）

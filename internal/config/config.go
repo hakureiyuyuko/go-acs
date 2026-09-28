@@ -46,9 +46,11 @@ type Config struct {
 	// MaxParamsPerRequest: 单次 GetParameterValues 最多带多少个参数名。
 	// 真机实测（华为 HN8145X6N）单次最多只回 256 个，超出静默丢弃，所以必须分批。
 	MaxParamsPerRequest int
-	// TaskHistoryLimit: 每台设备保留多少条任务记录（0 = 不限）。
-	// tasks 表只增不减，跑久了会把库撑大；任务历史只有最近的才有用。
-	TaskHistoryLimit int
+	// TaskHistoryLimit / InformHistoryLimit: 每台设备保留多少条历史记录（0 = 不限）。
+	// tasks / informs 两张表只增不减，跑久了会把库撑大；历史只有最近的才有用。
+	// 其中上报记录是增长最快的（每 120 秒一条 Inform）。
+	TaskHistoryLimit   int
+	InformHistoryLimit int
 
 	LogLevel string
 	LogJSON  bool
@@ -68,6 +70,7 @@ func Load(args []string) (*Config, error) {
 		MaxBodyBytes:        4 << 20,
 		MaxParamsPerRequest: 200,
 		TaskHistoryLimit:    500,
+		InformHistoryLimit:  500,
 		AutoFetchInfo:       true,
 		AutoFetchWiFi:       true,
 		ProbeCapabilities:   true,
@@ -102,6 +105,8 @@ func Load(args []string) (*Config, error) {
 		"单次 GetParameterValues 最多带多少个参数名（真机单次上限可能只有 256）")
 	fs.IntVar(&c.TaskHistoryLimit, "task-history-limit", c.TaskHistoryLimit,
 		"每台设备保留多少条任务记录（0 = 不限；只裁已结束的任务）")
+	fs.IntVar(&c.InformHistoryLimit, "inform-history-limit", c.InformHistoryLimit,
+		"每台设备保留多少条上报记录（0 = 不限）")
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "日志级别 debug/info/warn/error")
 	fs.BoolVar(&c.LogJSON, "log-json", c.LogJSON, "日志用 JSON 格式")
 	if err := fs.Parse(args); err != nil {
@@ -185,6 +190,11 @@ func fromEnv(c *Config) {
 	if v := os.Getenv("ACS_TASK_HISTORY_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.TaskHistoryLimit = n
+		}
+	}
+	if v := os.Getenv("ACS_INFORM_HISTORY_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.InformHistoryLimit = n
 		}
 	}
 	if v := os.Getenv("ACS_MAX_BODY"); v != "" {

@@ -17,9 +17,10 @@ import (
 type Store struct {
 	db *sql.DB
 
-	// taskHistoryLimit 是「每台设备保留多少条任务记录」（0 = 不限）。
+	// taskHistoryLimit / informHistoryLimit 是「每台设备保留多少条历史记录」（0 = 不限）。
 	// 设成字段而不是常量：由配置决定，测试里也要能调小。
-	taskHistoryLimit int
+	taskHistoryLimit   int
+	informHistoryLimit int
 }
 
 // schema 是当前版本的建表语句。
