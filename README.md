@@ -1,372 +1,113 @@
-# 轻量 TR-069 (CWMP) ACS
+# 轻量 TR-069 ACS
 
-用 Go 写的**单二进制、无外部中间件**的 TR-069 Auto Configuration Server。
-目标是把一批 CPE（光猫 / 路由器 / 网关）管起来：**注册纳管 → 查看设备信息 → 参数下发/采集 → 远程升级 → 重启**。
+单二进制、零外部中间件的 TR-069/CWMP ACS（Go + SQLite），用来管一批光猫 / FTTR 主机：
+**纳管 → 看信息 → 改配置 → 诊断 → 子设备与终端管理**。
 
-需求文档见 [`docs/requirements.md`](docs/requirements.md)。
+![CI](https://github.com/hakureiyuyuko/go-acs/actions/workflows/ci.yml/badge.svg)
+![Go](https://img.shields.io/badge/Go-1.27-00ADD8)
+![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
-**当前进度：S1（最小可用：纳管 + 查看设备信息）** ✅
-已通过：端到端验收 42/42、独立实现互通验证 8/8、**真机（华为 OptiXstar HN8145X6N）纳管成功**。
+## 特点
 
----
+- **单文件部署**：一个静态二进制 + 一个 SQLite 文件，没有 Redis / MySQL / 消息队列
+- **只用标准协议**：Inform、GetParameterValues / Names、SetParameterValues、GetRPCMethods、Reboot、
+  IPPingDiagnostics、Connection Request（含 HTTP Digest）；不依赖任何厂商私有服务
+- **先探测再显示**：能力探测决定界面出现哪些区块（WAN、FTTR 子设备…），探测不到就整块不显示，不摆空壳
+- **如实呈现设备行为**：能改不能读的参数、异步生效的无线参数、设备没上报的字段（显示 `N/A`），不编数字
+- **可运维**：任务队列持久化、一键唤醒设备、重启 / 删除设备、面板账号密码、任务与上报记录的保留上限
+
+## 截图
+
+> 数据来自仓库自带的 CPE 模拟器，不含任何真实设备信息。
+
+概览：设备列表（状态 / 备注 / 数据模型 / 参数数 / 无线终端数）+ 无线概况
+
+![概览](docs/images/overview.png)
+
+设备详情：基本信息、WAN 连接、操作（唤醒 / 重启 / 删除）、备注
+
+![设备详情](docs/images/device.png)
+
+FTTR 子设备与网络诊断：子设备型号 / 组网模式 / 光功率 / 各自终端数，诊断由设备自己发 ICMP
+
+![FTTR 与诊断](docs/images/fttr.png)
+
+终端列表：按「主机 / 子机」分组，带信号强度、终端名与 IP（设备没上报就写 `N/A`）
+
+![终端列表](docs/images/clients.png)
+
+设置：ACS 与面板各自的监听地址、面板账号密码保护（端口改动重启生效，账号密码立即生效）
+
+![设置](docs/images/settings.png)
 
 ## 快速开始
 
 ```bash
-# 1) 准备 Go（本机放在 ~/.local/go，没装的话用官方 tarball）
-export PATH=$HOME/.local/go/bin:$PATH
-
-# 2) 编译
-CGO_ENABLED=0 go build -o acs ./cmd/acs
-CGO_ENABLED=0 go build -o cpesim ./test/cpesim
-
-# 3) 启动（默认监听 :7547，CWMP 端点 /acs，数据存 acs.db）
-./acs
-
-# 4) 打开界面
-#    http://127.0.0.1:7547/
+go build -o acs ./cmd/acs        # Go 1.27+；CGO_ENABLED=0 可得到静态二进制
+./acs -listen :9090 -db acs.db   # 面板 http://<IP>:9090/ ，CWMP http://<IP>:9090/acs
 ```
 
-长期联调（真机随时会上报，需要后台常驻）用这个脚本，带 pidfile 管理：
+设备侧的 ACS URL 填 `http://<IP>:9090/acs`；真机里也见过配成根路径 `/` 的，所以两者都收。
+面板挪到独立端口（`-web-listen :8080`）时，CWMP 那侧**任何路径都受理**，不用担心运营商定制设备的路径写法。
+
+没有设备也能玩：仓库自带模拟器（含 FTTR 子设备、能改不能读、异步诊断等开关）。
 
 ```bash
-scripts/dev-server.sh start     # 编译 + 后台启动，默认端口 9090
-scripts/dev-server.sh status    # 状态 + 最近日志
-scripts/dev-server.sh log       # 跟踪日志
-scripts/dev-server.sh stop
-
-# 排障时同时看「收到的报文」和「发出的报文」：
-ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
-```
-
-把 CPE 的 ACS URL 指到 `http://<本机IP>:端口/acs`，**也可以直接写 `http://<本机IP>:端口/`**
-（两个都接）。账号密码见下面的配置。设备下次 Inform 就会出现在界面里。
-
-> 真机实测：华为 OptiXstar HN8145X6N 配的就是**根路径 `/`** —— 只监听 `/acs` 会直接收不到上报。
-
-没有真机也能验证 —— 用自带的 CPE 模拟器：
-
-```bash
-# 模拟一台 TR-098 设备接入一次
-./cpesim -acs http://127.0.0.1:7547/acs -serial MYDEV001 -once
-
-# 模拟一台 TR-181 设备，每 30 秒上报一次
-./cpesim -acs http://127.0.0.1:7547/acs -serial MYDEV002 -dm 181 -interval 30s
+go build -o cpesim ./test/cpesim
+./cpesim -acs http://127.0.0.1:9090/acs -serial DEMO0123 -fttr 3 -fttr-optical
 ```
 
 ## 配置
 
-命令行参数与环境变量（环境变量优先，命令行参数优先级最高）：
+命令行参数与环境变量一一对应（环境变量名 = `ACS_` + 参数名大写、连字符换下划线）。
 
 | 参数 | 环境变量 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `-listen` | `ACS_LISTEN` | `:7547` | HTTP 监听地址 |
-| `-path` | `ACS_PATH` | `/acs` | CWMP 端点路径 |
-| `-db` | `ACS_DB` | `acs.db` | SQLite 文件 |
-| `-acs-url` | `ACS_URL` | — | 本机对外的 ACS URL（展示/写回 CPE 用） |
-| `-user` / `-password` | `ACS_USER` / `ACS_PASSWORD` | 空 | CPE→ACS 的 Basic 认证，留空则不校验 |
-| `-session-timeout` | `ACS_SESSION_TIMEOUT` | `60s` | 会话空闲超时 |
-| `-offline-after` | `ACS_OFFLINE_AFTER` | `10m` | 多久没上报算离线 |
-| `-max-body` | `ACS_MAX_BODY` | `4MiB` | 单请求体上限 |
-| `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名（真机单次上限可能只有 256，见下文）|
-| `-task-history-limit` | `ACS_TASK_HISTORY_LIMIT` | `500` | **每台设备**保留多少条任务记录（`0` = 不限）。tasks 表只增不减，跑久了会把库撑大；只裁已结束的任务，排队/执行中的一条都不删 |
-| `-inform-history-limit` | `ACS_INFORM_HISTORY_LIMIT` | `500` | **每台设备**保留多少条上报记录（`0` = 不限）。上报记录增长最快（每 120 秒一条 Inform，一台设备一天 720 条）|
-| `-web-listen` | `ACS_WEB_LISTEN` | 空 | **面板**监听地址。留空（或与 ACS 相同）= 面板与 CWMP 共用一个端口；分开写就是两个端口。**ACS 独享端口时任何路径都受理设备上报**（见下文）|
-| `-web-user` / `-web-pass` | `ACS_WEB_USER` / `ACS_WEB_PASS` | 空 | 面板账号密码的**初始**值：只在库里还没设置过时种一次，之后以设置页上改的为准 |
-|  | `ACS_WEB_AUTH` | 空 | 设成 `off` / `0` / `false` 时**强制关闭面板鉴权**（救急用：忘了面板密码又不想动库）|
-
-## 界面
-
-- 设备详情页的**参数 / 任务历史 / 上报记录**三个区块默认折叠，点击展开；
-  界面文案只写使用者要看的信息（实现理由在文档里，产品界面上不出现——见实现笔记）
-  （原生 `<details>`，不需要 JS，键盘与读屏也可用）
-- 三个表以及概览页的设备列表**默认 20 条/页**，可切换 20 / 50 / 100 / 全部；
-  浏览器端分页，和「参数名过滤」是配合关系（过滤后重新分页）；
-  行数本来不到一页时自动不显示分页条
-
-## 数据库迁移
-
-库里记着 `PRAGMA user_version`，`internal/store/store.go` 里有一个 `migrations` 列表。
-
-**约定：`baseSchema` 永远是「第 0 版」，新加字段一律走迁移。**
-不要直接改 `baseSchema` —— 那样已存在的库升不上来，而新建的库又会因为重复建列而报错。
-第一次加字段（设备备注）时就是这么做的，迁移是幂等的：重复启动不会出错，
-库版本比程序新时会明确报错而不是继续跑。
-| `-auto-fetch-info` | `ACS_AUTO_FETCH_INFO` | `true` | Inform 后自动取设备基本信息 |
-| `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | 首次纳管/BOOTSTRAP 时自动采集无线概况（看板用）|
-| `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | 首次纳管时探测设备能力（如有没有 FTTR 子设备）|
-| `-connection-request` | `ACS_CONNREQ` | `true` | 允许主动唤醒设备（发 Connection Request）|
-| `-connreq-user` | `ACS_CONNREQ_USER` | `acs` | 主动唤醒的用户名（会写进设备的 ConnectionRequestUsername）|
-| `-connreq-pass` | `ACS_CONNREQ_PASS` | 自动生成并存库 | 主动唤醒的密码（会写进设备的 ConnectionRequestPassword）|
-| `-log-level` / `-log-json` | `ACS_LOG_LEVEL` / `ACS_LOG_JSON` | `info` / 否 | 日志 |
-| `-log-soap` | `ACS_LOG_SOAP` | 否 | 打印原始 SOAP 报文（排障用） |
-
-所有跟运行环境绑定的值都是可配置的，代码里不写死「某台机器的事实」。
-
-## 仓库里有什么、没有什么
-
-- **有**：ACS 本体（`cmd/` `internal/`）、CPE 模拟器（`test/cpesim`）、验收脚本（`scripts/`）、
-  文档与真机抓包固化下来的回归样本（`internal/cwmp/testdata/`）。
-- **没有**：运行时数据库、日志、构建产物、第三方参考源码 —— 见 `.gitignore`。
-
-**样本与文档都做过脱敏**：来自真机的序列号、MAC、SSID、内网地址、终端主机名都换成了示例值
-（序列号形如 `48575443AA0000NN`，MAC 一律以 `02:` 开头即本地管理地址，SSID 为 `HomeWifi` / `LabWifi`）；
-设备**型号与固件版本保留**，因为那是兼容性记录，不属于个人信息。
-报文结构、参数名、状态码、错误码这些都原样保留，样本的回归价值不受影响。
-
-⚠️ 运行期的 `data/acs.db` 里有**真实设备信息与凭据**（面板密码散列、ConnectionRequest 密码、
-设备序列号与 MAC），它已被 `.gitignore` 排除；打包发布时也**不要**把它拷进发行物。
-
-## 目录结构
-
-```
-cmd/acs/            程序入口
-internal/config/    配置加载
-internal/cwmp/      CWMP 协议：XML 解析、SOAP 编解码、会话、HTTP 端点、任务下发
-internal/cwmp/testdata/  真机报文的回归样本（实际抓下来的，不是手写的）
-internal/store/     SQLite 持久化（devices / device_params / informs / tasks）
-internal/web/       Web 界面 + JSON API（模板内嵌，无前端构建链）
-test/cpesim/        用 Go 写的 CPE 模拟器（真机替代品）
-scripts/            验收脚本 + dev-server.sh（后台起 ACS 给真机联调）
-reference/          第三方参考实现（不进仓库，见 scripts/fetch-reference.sh）
-docs/               需求文档与笔记
-```
-
-## 已实现（S1）
-
-- **CWMP 端点** `/acs`：容忍各种脏报文（非标准前缀、未知厂商扩展节点、gzip/deflate、iso-8859-1、标签不闭合时优雅报错）
-- **SOAP 编解码**：命名空间按 CPE 声明的版本回填（1.0~1.3），`cwmp:ID` 原样回填
-- **Inform 处理**：设备自动登记（身份 = OUI + ProductClass + SerialNumber）、事件码解析、参数落库、Inform 流水
-- **自研会话管理**：cookie + 「IP/UA」指纹双层关联；同一设备串行化（并发请求排队而非交叉）
-- **任务队列**：DB 持久化、去重、`pending → running → done/failed`、重启后 `running` 自动退回待办；
-  **每台设备最多保留 500 条任务历史**（`ACS_TASK_HISTORY_LIMIT`，0 = 不限）——
-  只裁已结束的任务，排队 / 执行中的一条都不会丢；**上报记录同样每台设备留 500 条**
-  （`ACS_INFORM_HISTORY_LIMIT`）—— 它是增长最快的表（一天 720 条 / 台），
-  两个上限都在入队 / 写入时顺手裁剪，启动时再裁一次
-- **删除设备**：详情页「操作」里的红色按钮，二次确认后删掉**本地记录**（设备行 + 参数 + 任务 + 上报历史，
-  外键级联，验收里直接查库确认无残留）。**只删本地记录**：不动设备本身，也不阻断再次纳管
-  （设备还配着本 ACS 时下次上报就回来了，确认框里写明了这一点）
-- **ACS→CPE 下发**：`GetParameterValues` / `GetParameterNames` / `SetParameterValues` / `Reboot` / `GetRPCMethods`
-- **CPE→ACS 接收**：`Inform` / `Fault` / 各类 `*Response` / `TransferComplete`（先记录）
-- **Web 界面**：设备列表 + 设备详情（基本信息 / 参数表带过滤 / 任务历史 / 上报记录）+ 一键「重新获取设备信息」
-- **修改无线设置**：看板或详情页点 SSID（或频段）进入编辑表单，提交后下发 `SetParameterValues`。
-  字段是否出现、写向哪个参数、下拉候选值（信道/功率来自设备的 `PossibleChannels`、
-  `TransmitPowerSupported`）**全部从设备实报参数推导**，不写死；只下发真正改动过的字段；
-  下发成功后自动把参数读回来核对（写入成功不等于真的生效，而且设备可能**异步生效**，
-  所以同会话对不上先不判错、到下一轮会话再定性）；写入无线参数后会**自动重采一次无线概况**，
-  避免界面上的状态/信道停在写入前
-- **设备备注**：设备详情页可写备注（不会下发给设备、也不会被 Inform 冲掉），概览页展示并参与搜索
-- **概览页搜索**：按 序列号 / 备注 / 名称 / 产品类 / OUI / SSID 搜索（服务端过滤，
-  结果 URL 可分享；输入后自动搜索，不依赖 JS 也能用搜索按钮）
-- **WAN 连接**：详情页展示每一条 WAN 连接（名称、状态、IP/掩码、网关、MAC、寻址、NAT、业务模式、VLAN、
-  上行时长）—— 没这类参数就整块不显示
-- **主时唤醒（Connection Request）**：给设备发一个 HTTP GET 让它**立刻**回连开一次会话，
-  排队的任务不用再等周期上报（真机实测：从点「诊断」到任务下发 **77 毫秒**，
-  到诊断出结果 4.2 秒；原来是等最多 120 秒）。详情页有「立即唤醒设备」按钮，
-  点「诊断」时也会自动试一次
-- **FTTR 子设备**：详情页展示子光猫 / 子 AP（型号、序列号、MAC、在线、**终端数**、版本、信道、**组网**、信号、时长）。
-  **先探测能力，没有就整块不显示** —— 不给用户看空区块（详见下文「探测」一节）。
-  「组网」以设备自报的 `WorkingMode` / `SignalIntensity` 为准，**归不了一类就原样显示**
-  （悬停可看原始字段）；若子设备确实上报了光功率，会多出一列「光功率」，
-  但**无线 / 有线组网的子设备不显示光功率**（它没光口）。实测两台真机的 TR-069 模型里都没光功率
-  （全树 4484 / 3315 个参数名里搜不到），所以真机上目前看不到那一列 —— 探测到才显示
-- **关联终端（谁连主机、谁连子机）**：无线概况与子设备表里的「终端数」都是**主机 + 子光猫的合计**
-  （实测那台 FTTR 主机：主机自己的 WLAN 5 台，子光猫另有 3 / 4 / 0 台，全网 11 台）；
-  点数字弹出终端列表（跟商用 ACS 一样：MAC + **主机名** + IP 地址 + 信号/速率小字；
-  主机名来自终端行自带的描述或设备的「主机列表」按 MAC 对齐，**拿不到就显示 N/A**），
-  分组写明「主机 · SSID」还是「子机 1（K251e） · SSID」。条目数以设备的
-  `AssociatedDeviceNumberOfEntries` 为准（残留行不当终端）；设备不回 IP 就显示「设备未上报」，不编。
-  每条右侧有**信号图标（四格小柱 + 百分比）**：优先用设备自报的质量，
-  没有才按 RSSI 换算（-50 dBm 及以上满格、-100 为 0），两者都没有就不画图标
-- **重启设备（Reboot）**：详情页「操作」卡里的**红色按钮**，二次确认后才下发标准的 `Reboot`
-  （带 CommandKey，设备回 `RebootResponse` 即算接受）。后端不依赖前端的确认框：
-  同一台设备上有重启在排队/进行中时直接拒绝，不会堆出多次重启；
-  点完会顺手发一次 Connection Request，设备立刻回连把指令领走
-- **网络诊断（Ping）**：详情页填 IP/域名与包数，下发标准的 `IPPingDiagnostics`，
-  等设备自己跑完回报结果（支持同步与「事件 8 DIAGNOSTICS COMPLETE」异步两种节奏）。
-  还可以选填**承载接口**（标准的 `Interface`，留空＝设备自选）：真机上有的设备自己选的出口
-  根本没有路由（实测华为 FTTR 主机的 INTERNET WAN 是桥接，于是「成功 0、延时 0/0/0」秒失败），
-  这时指定从哪条 WAN 出去就能通 —— 比如选那条 TR069 管理连接去 Ping 管理网/内网。
-  下拉备选来自这台设备已采集的 WAN 连接，也可手填
-- **日间 / 夜间模式**：右上角一键切换，选择记在 localStorage；
-  没选过时跟随系统的 `prefers-color-scheme`；主题在样式生效前就定好，刷新不闪
-- **JSON API**：`/api/devices`、`/api/devices/{id}`
-- **设置页**（右上角「设置」）：在线改 **ACS 监听地址**、**面板监听地址**（留空 = 与 ACS 同端口，
-  也可以分开两个端口），以及**面板账号密码**。「当前生效」与「保存后使用」两栏并排，
-  免得改完不知道为什么不生效：
-  - 账号密码**保存后立即生效**（不用重启）；
-  - 监听地址要**重启 ACS** 才生效 —— 端口没法在线安全切换（换了端口这条连接就断了，
-    而且 CWMP 端口一断，在线设备立刻报连不上 ACS）。
-- **ACS 端口对路径不挑**：运营商定制设备的 ACS URL 五花八门 —— 有的配 `/`、有的配 `/tr069`、
-  有的还带一串随机路径。所以**当 ACS 独享一个端口**（面板在别的端口）时，
-  那条端口上**任何路径的 POST 都交给 CWMP 处理**，不会因为路径不同就丢掉上报
-  （会话身份靠 cookie + IP/UA 指纹，跟路径无关，cookie 的 Path 也是 /）。
-  与面板共用同一个端口时**不做兜底**：只认配置的路径（默认 `/acs`）与根路径的 POST，
-  否则面板页面会被 CWMP 抢走。
-- **面板账号密码保护**：HTTP Basic（浏览器弹登录框、脚本用 `curl -u 账号:密码`），
-  密码只存 **PBKDF2-HMAC-SHA256 散列**（随机盐 + 12 万次迭代）。默认**关闭**（开箱即用），
-  在设置页里打开。开了之后面板页面、`/api`、静态资源都要登录，**设备侧上报不受影响**（CPE 认证是另一套）。
-  忘了密码：用 `ACS_WEB_AUTH=off` 启动一次，或清掉库里 `settings` 表的 `web_*` 再重启。
-- **看板 WiFi 概览**：首页按设备分频段展示 2.4G/5G 的 SSID、射频开关、信道、标准、加密与**已连终端数**；
-  设备列表里的「无线终端」列是**主机 + 子光猫**上的终端之和（跟详情页同一口径）。
-  首次纳管 / `0 BOOTSTRAP` 时**自动采集**（先枚举子树圈出真实实例号，
-  再按后缀白名单只取摘要字段 + 关联终端；同时采一次设备的主机列表，终端名靠它）。
-  顶部统计卡只留「已纳管设备」「在线」两个 —— 看板只看有多少台、在线几台
-- **读取任意参数子树**：界面上的「读取参数子树」表单，或
-  `POST /api/devices/{id}/fetch` `{"path":"...","exclude":["..."],"max":200}` ——
-  先 `GetParameterNames` 枚举再 `GetParameterValues` 取值，两步在**同一个会话**里完成
-- **浏览参数树**：`POST /api/devices/{id}/names` `{"path":"InternetGatewayDevice.","next_level":true}` ——
-  只枚举名字不取值。接新设备/找厂商私有对象时先用它把结构列出来，
-  比盲猜路径实用得多（真机上猜错一次就是一整轮上报周期）
-- **CPE 模拟器**：TR-098 / TR-181 两种数据模型，支持 Connection Request 触发
-
-## 未实现（后续）
-
-`AddObject` / `DeleteObject`、参数属性（Get/SetParameterAttributes）、Connection Request（**发送**侧）、预设/策略、固件 Download/Upload、ScheduleInform、FactoryReset、mTLS、PG 后端、指标。
-详见 `docs/requirements.md` §3 的优先级表。
+| `-listen` | `ACS_LISTEN` | `:7547` | CWMP 监听地址 |
+| `-web-listen` | `ACS_WEB_LISTEN` | 空 | 面板监听地址；留空 = 与 CWMP 同端口 |
+| `-path` | `ACS_PATH` | `/acs` | CWMP 端点路径（同端口时生效） |
+| `-db` | `ACS_DB` | `acs.db` | SQLite 文件路径 |
+| `-user` / `-password` | `ACS_USER` / `ACS_PASSWORD` | 空 | 设备侧 HTTP 认证（CPE 基本认证）|
+| `-web-user` / `-web-pass` | `ACS_WEB_USER` / `ACS_WEB_PASS` | 空 | 面板账号密码（首次启动种入，之后以设置页为准）|
+| `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名 |
+| `-task-history-limit` | `ACS_TASK_HISTORY_LIMIT` | `500` | 每台设备保留多少条任务记录（`0` = 不限）|
+| `-inform-history-limit` | `ACS_INFORM_HISTORY_LIMIT` | `500` | 每台设备保留多少条上报记录（`0` = 不限）|
+| `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | 纳管时自动采集无线概况与主机列表 |
+| `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | 纳管时做一次能力探测（决定界面区块）|
+| `-log-level` | `ACS_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `-log-soap` | `ACS_LOG_SOAP` | `false` | 打印原始 SOAP 报文（排障用）|
 
 ## 验收
 
 ```bash
-# 单元测试
-go test ./...
-
-# 端到端验收（编译真二进制、起真 HTTP + 真 SQLite、发真报文，42 条断言）
-scripts/verify-s1.sh
-
-# 与独立实现的互通性验证（需要 node）
-scripts/fetch-reference.sh      # 先拉参考项目
-scripts/verify-interop.sh
+go test ./...                   # 单元测试：协议解析 / 存储 / Web
+bash scripts/verify-s1.sh       # 端到端 293 项：模拟器打真实 HTTP + SOAP，逐条断言
+bash scripts/verify-interop.sh  # 与 GenieACS 官方 JS 模拟器互通 8 项
 ```
 
-`verify-s1.sh` 覆盖：服务存活、空 POST/204 语义、坏报文容错、未知 RPC 报错码、命名空间回填、
-TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生重复设备、周期上报不重复入队、
-手工刷新、界面渲染。
+## 目录
 
-真机报文已固化为回归样本（`internal/cwmp/testdata/`，不是手写的，是实际抓下来的字节），
-对应 `internal/cwmp/realdevice_test.go` 里的 4 个用例 —— 以后重构解析逻辑时，
-真机的那些怪癖（大写前缀、自闭合空元素、根节点名大小写写错）会被测到。
+```
+cmd/acs/            程序入口（监听、优雅退出、双端口路由）
+internal/cwmp/      协议核心：SOAP 编解码、会话、任务、诊断、Connection Request
+internal/store/     SQLite：设备 / 参数 / 任务 / 上报记录（迁移走 user_version）
+internal/web/       Web UI 与 JSON API（模板 + 少量原生 JS，无前端框架）
+test/cpesim/        自研 CPE 模拟器（大量开关，验收靠它）
+scripts/            验收脚本、参考实现拉取、开发用起停脚本
+docs/               需求文档与实现笔记
+```
 
-## 实现过程中踩到/修掉的十个真问题
+## 更多
 
-1. **CWMP 命名空间回填写成了版本号**（单测抓到）
-   `ParseEnvelope` 一度把 `env.CWMPNS` 设成 `"1.0"` 而不是完整的 `urn:dslforum-org:cwmp-1-0`，
-   回给 CPE 的信封就成了 `xmlns:cwmp="1.0"`。因为本地模拟器是按本地名匹配的，端到端测试
-   完全没暴露它。**教训：只跟自己的模拟器对打会掩盖错误。**
+- `docs/requirements.md` —— 需求与实现进度
+- `docs/notes/implementation-notes.md` —— **真机踩坑与实测记录**：协议边界（单次 GetParameterValues 上限、
+  写回类型大小写、诊断要最后置 `Requested`）、设备怪癖（能改不能读、异步生效、身份键被元数据改写）、
+  运维坑（挂载掉了不能乱删、任务别卡在 running）……修法与验证都在里面
 
-2. **不要指望 CPE 支持子树路径的 GetParameterValues**（交叉验证抓到）
-   最初我们下发 `InternetGatewayDevice.DeviceInfo.`（`.` 结尾 = 子树）去取信息，
-   结果 GenieACS 官方的 genieacs-sim 直接崩 —— 它的 `GetParameterValues` 只按完整参数名
-   做 map 查表，不支持部分路径（虽然它的 `GetParameterNames` 支持）。
-   真机大多支持子树，但既然有实现会栽在这里，就改成**下发显式参数名**（GenieACS 自己也这么做）：
-   根未知时把 TR-098 与 TR-181 两种命名的同一批参数都发过去，CPE 只回它有的那些 ——
-   这本身就把「数据模型根」探测出来了，而且一轮 RPC 搞定。
-
-3. **真机的 ACS URL 配的是根路径 `/`，不是 `/acs`**（真机联调抓到）
-   华为这台光猫把上报 POST 到了 `http://192.168.10.158:9090/`。我们当时只监听 `/acs`，
-   结果就是回 404、设备永远上不来，而日志里又什么都不会显示。
-   现在 `POST /{$}` 也接；并且新增的请求日志中间件会把这类「打进来了但没被处理」的 404/405
-   在 **WARN** 级别记下来 —— 以后接新设备时一眼就能看出是路径配错了。
-
-4. **CPE 单次只回 256 个参数，超出静默丢弃**（真机联调 + 读 WiFi 时抓到）
-   我们请求 376 个参数名，华为这台只回了 **256 个（正好 2^8）**，不报错、不告知。
-   旧代码会把「回了一批」当成任务成功 → **默默少采集 120 个参数，没有任何错误信号**。
-   这比协议报错危险得多。
-   → 新增 `MaxParamsPerRequest`（默认 200）自动分批（`enqueueGPVDivided`）；分批不会变慢，
-   因为各批还是同一个会话里依次下发。修完后 376 个参数拆成 200+176 两批，**一条不丢**。
-   另加 `warnIfPartialResponse` 防御：发现「回的比请求的少」就记 WARN。
-   > 这个坑自研模拟器永远发现不了（它会老老实实全返回）—— 又一次说明必须拿真机验收。
-
-5. **写回参数时类型名的大小写必须规范**（做「修改 WiFi」时想到并修掉）
-   我们原来把 CPE 报的类型名一律转小写存（`unsignedInt` -> `unsignedint`），
-   于是写回去就变成 `xsi:type="xsd:unsignedint"`。XML Schema 类型是**大小写敏感**的，
-   `xsd:unsignedint` 不合法，严格的 CPE 会直接拒收（9008 invalid parameter type）。
-   因为只影响写入路径，读/展示一直看不出来。
-   → 新增 `canonicalType()`：归一化成规范写法（`string` / `int` / `unsignedInt` /
-   `boolean` / `dateTime` / `base64`…），解析时和**写出去时**都过一遍（后者能顺便
-   修正库里已有的旧值），不认识的类型原样保留不瞎改。
-
-6. **无线参数是异步生效的，写完立即读回会误报**（真机写入时抓到）
-   改 5GHz 的 `RadioEnabled`：设备回 `Status=0`（接受了），但同一会话里读回来还是 `0`；
-   几分钟后再查已经是 `1` —— **真的生效了，只是晚**。
-   第一版的「读回对不上就判失败」会因此误报。
-   → 改成两级核对：同会话读回对得上就直接结案；对不上先不判错，把核对任务排到
-   **设备下一轮会话**再跑；那时还对不上才算真没生效。
-   （不用加延时列：`ClaimNextTask` 支持一个 `exclude` 列表，会话记住「本轮跳过的任务」，
-   会话结束时清空，任务自然落到下一轮。）
-
-7. **密码写错了参数**（真机报错告诉我们的）
-   往 `WLANConfiguration.{i}.KeyPassphrase` 写 WPA2 密码，设备回
-   `9003 Invalid arguments` + `...KeyPassphrase -> 9007 Invalid parameter value`。
-   因为 WPA/WPA2-PSK 的密码在 `PreSharedKey.1.KeyPassphrase` 下，前者是给 WEP 的。
-   （两个参数的叶子名都是 `KeyPassphrase`，原来靠叶子名索引永远选不到对的那个。）
-   → 字段候选改成支持**多段尾部路径**，密码优先选 `presharedkey.1.keypassphrase`。
-   > 顺带印证：把设备的逐参数错误完整记进任务结果是值得的 —— 它直接指路了。
-
-8. **只回读改动的参数，会让「相关字段」停在写入前**（被用户当场发现）
-   改完 5GHz 射频开关后，我看库里 `Status=Disabled` 就说「5GHz 没起来」；
-   实际上设备**已经起来了、能搜到信号**。看时间戳才发现：`Status/Channel`
-   最后一次采集是 23 分钟前（写入只回读了 `RadioEnabled` 一个参数）。
-   > 教训：**别拿库里的值下结论** —— 先看它的更新时间（或者重新采一次）。
-   → 两个改动：① 写入无线参数后自动重采一份无线概况（延后一轮，拿生效后的值）；
-   ② 界面上把**每个参数的更新时间**和**每个频段的采集时间**显示出来，
-   让「这是新的还是旧的」一眼可见，不再靠人记得。
-
-9. **「写 only」参数不能被读回核对当成失败**（你真机上改 5G 密码时抓到）
-   往 `WLANConfiguration.5.PreSharedKey.1.KeyPassphrase` 写密码，设备回 `Status=0`，
-   但读回永远是**空串** —— 因为它跟 `KeyPassphrase` 一样属于**能改不能读**。
-   上一版的核对只看「期望值 vs 读回值」，就会把一次成功的改密码报成「未生效」。
-   → 核对时多比一个东西：**写入前的值**。
-   - 写前非空、写后变了 → 未生效（真没生效）
-   - 写前写后**都是空** → 设备不回读该参数，归为「无法核对」，**不判失败**，
-     但会在任务结果里写明哪几个参数没核对上
-   为此写入任务里多存一份 `prev`（写入前的值）。
-
-10. **`DiagnosticsState=Requested` 必须放在 SetParameterValues 的最后**（做 ping 诊断时模拟器暴露的）
-    第一次把 `DiagnosticsState=Requested` 放在了列表**最前面**，结果设备看到它就开始跑 ping，
-    而此刻 `Host` 与 `NumberOfRepetitions` 还没写进去 —— 实际拿到的是**空 Host + 默认次数**，
-    结果是「发送包 4，成功 0，失败 4」。
-    真机上有些设备也会这么干（TR-069 虽然要求一次写入原子生效，但不能指望）。
-    → 顺序改成：次数、Host、**最后**才置 Requested。改完立刻变成「发送包 3，成功 3，失败 0」。
-    同理，可选的承载接口 `Interface` 也要排在 `Host` 之前。
-
-11. **「0 成功 + 延时全 0 + 秒回」= 包根本没出去**，不是「出去被丢了」
-    设备 2（华为 V271-20 FTTR 主机）上 ping 一律全失败、延时 0/0/0，且 4 秒就报 Complete
-    （`Timeout` 是 10000ms，真发包超时不可能这么快）。查下来是设备自己没出口：
-    `1_INTERNET_B_VID_` 是桥接、系统路由表里**没有默认路由**，唯一有 IP 的只有 TR069 那条管理连接。
-    → 看**延时**就能把「没出去」和「出去被丢」分开；排障时先把「另一台设备同代码能不能通」
-    当对照，再去看设备的路由表 / WAN 列表。详见 `docs/notes/implementation-notes.md`。
-
-12. **「只枚举名字」（浏览参数树 / 能力探测）不能把参数的值改掉**
-    名字枚举（GetParameterNames）只告诉你“有什么参数、可不可写”，**它不返回值**。
-    踩过的坑：用根级枚举浏览参数树之后，整个设备的参数值全变成了空串，
-    详情页看起来“设备没数据了”（设备其实好好的）。
-    → `source='getnames'` 的行不改 value / value_type / 采集时间；
-    而设备**真回了一个空值**（比如 Host 读回来就是空）仍然如实落库 —— 二者必须分得开。
-
-13. **任务一旦下发就变 running，只有收到 CPE 应答才结束** ——
-    CPE 掉线、会话被打断、进程被杀，任务就会**永远卡在 running**（界面显示进行中、也不重发）。
-    → 会话结束时把「在途且仍未应答」的任务退回待办（`RequeueTask`，上限 3 次，超了判失败）。
-    注意「故意留在 running 等下一轮会话回报」的任务（如诊断）不受影响：那时 `pendingTask`
-    已经指向下一层的读回任务。这是联调时发现的坑，真机一样会踩。
-
-14. **子设备也有 `WLANConfiguration`，实例号还从 1 开始**
-    FTTR 子光猫各带一套 `WLANConfiguration.`，而无线参数是一条
-    `LIKE '%WLANConfiguration.%'` 捞出来的 —— 不过滤的话，
-    **主机的「2.4G」那一行会显示成子光猫的 SSID / 信道**（真机上真的会这么误导人）。
-    → 主机的无线概况 / 编辑表单要跳过子设备自己的 WLAN；子设备的终端在「FTTR 子设备」区块里单独看。
-
-## 相关笔记
-
-- `docs/requirements.md` —— 需求与设计（含协议时序、数据模型、里程碑）
-- `docs/notes/implementation-notes.md` —— 实现笔记与实测记录
+仓库里的真机样本与文档**均已脱敏**（序列号、MAC、SSID、内网地址、终端名换成示例值）；
+运行时数据库 `data/` 与日志不进仓库。
 
 ## 许可证
 
-以 **GNU Affero General Public License v3.0（AGPL-3.0）** 发布，全文见 [`LICENSE`](LICENSE)。
-
-Copyright (C) 2026 hakureiyuyuko
-
-可以自由使用、修改、分发（含商用）；但如果把**修改后**的版本作为网络服务提供给别人使用，
-必须把对应的源码也以同样的许可开放 —— 这是 AGPL 与 GPL 的关键区别，对「把 ACS 部署成云端服务」
-这种用法尤其要注意。
+[AGPL-3.0](LICENSE)。可以自由使用、修改、分发（含商用）；但把**修改后**的版本作为网络服务提供给别人用时，
+需要把对应源码以同样许可开放。
