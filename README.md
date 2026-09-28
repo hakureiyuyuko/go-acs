@@ -119,6 +119,9 @@ docs/               需求文档与笔记
 - **Inform 处理**：设备自动登记（身份 = OUI + ProductClass + SerialNumber）、事件码解析、参数落库、Inform 流水
 - **自研会话管理**：cookie + 「IP/UA」指纹双层关联；同一设备串行化（并发请求排队而非交叉）
 - **任务队列**：DB 持久化、去重、`pending → running → done/failed`、重启后 `running` 自动退回待办
+- **删除设备**：详情页「操作」里的红色按钮，二次确认后删掉**本地记录**（设备行 + 参数 + 任务 + 上报历史，
+  外键级联，验收里直接查库确认无残留）。**只删本地记录**：不动设备本身，也不阻断再次纳管
+  （设备还配着本 ACS 时下次上报就回来了，确认框里写明了这一点）
 - **ACS→CPE 下发**：`GetParameterValues` / `GetParameterNames` / `SetParameterValues` / `Reboot` / `GetRPCMethods`
 - **CPE→ACS 接收**：`Inform` / `Fault` / 各类 `*Response` / `TransferComplete`（先记录）
 - **Web 界面**：设备列表 + 设备详情（基本信息 / 参数表带过滤 / 任务历史 / Inform 记录）+ 一键「重新获取设备信息」

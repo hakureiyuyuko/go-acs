@@ -55,6 +55,11 @@
         <button type="submit" class="danger"
                 title="下发标准的 Reboot 指令，让设备自己重启（破坏性操作）">重启设备</button>
       </form>
+      <form method="post" action="/devices/{{.Device.ID}}/delete" style="margin-top:8px"
+            data-confirm="确定要从本 ACS 删除「{{.Device.DisplayName}}」吗？只会删掉这里的记录（参数、任务、上报历史），不会动设备本身；如果设备还配着本 ACS 地址，下次上报会重新纳管。">
+        <button type="submit" class="danger"
+                title="删掉本 ACS 里的记录（不重置设备、不阻断再次纳管）">删除设备</button>
+      </form>
     </div>
   </div>
   <div class="hint" style="margin:-8px 0 4px">

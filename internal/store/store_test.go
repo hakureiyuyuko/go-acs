@@ -153,6 +153,68 @@ func TestParamsUpsertNamesDoesNotWipeValue(t *testing.T) {
 	}
 }
 
+// 删除设备：本地记录（参数 / 任务 / 上报历史）要一并清掉，不能留下孤儿数据。
+func TestDeleteDeviceCascades(t *testing.T) {
+	st := newTestStore(t)
+	id, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "DEL-ME"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "KEEP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 被删设备的关联数据
+	if err := st.UpsertParams(id, []Param{{Name: "X.Y", Value: "1"}}, "getvalues"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.EnqueueTask(&Task{DeviceID: id, Kind: "GetParameterValues", Payload: `{"names":["X.Y"]}`}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertInform(&InformRecord{DeviceID: id, Events: "2 PERIODIC", ParamCount: 3}); err != nil {
+		t.Fatal(err)
+	}
+	// 另一台设备的数据，删完后必须还在
+	if err := st.UpsertParams(keep, []Param{{Name: "X.Y", Value: "2"}}, "getvalues"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.EnqueueTask(&Task{DeviceID: keep, Kind: "GetParameterValues", Payload: `{"names":["X.Y"]}`}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.DeleteDevice(id); err != nil {
+		t.Fatalf("删除失败: %v", err)
+	}
+	if _, err := st.GetDevice(id); err == nil {
+		t.Error("设备还在库里")
+	}
+	if n, _ := st.CountParams(id); n != 0 {
+		t.Errorf("参数没级联删除：%d 条", n)
+	}
+	if tasks, _ := st.ListTasks(id, 10); len(tasks) != 0 {
+		t.Errorf("任务没级联删除：%d 条", len(tasks))
+	}
+	if infs, _ := st.ListInforms(id, 10); len(infs) != 0 {
+		t.Errorf("上报记录没级联删除：%d 条", len(infs))
+	}
+
+	// 其它设备不受影响
+	if d, err := st.GetDevice(keep); err != nil || d.SerialNumber != "KEEP" {
+		t.Errorf("另一台设备被误删了: %v %+v", err, d)
+	}
+	if n, _ := st.CountParams(keep); n != 1 {
+		t.Errorf("另一台设备的参数被连累了：%d 条", n)
+	}
+	if tasks, _ := st.ListTasks(keep, 10); len(tasks) != 1 {
+		t.Errorf("另一台设备的任务被连累了：%d 条", len(tasks))
+	}
+
+	// 重复删：得报错（界面上要能给“设备不存在”的提示）
+	if err := st.DeleteDevice(id); err == nil {
+		t.Error("删不存在的设备应报错")
+	}
+}
+
 func TestTaskLifecycle(t *testing.T) {
 	st := newTestStore(t)
 	id, _, _ := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S"})

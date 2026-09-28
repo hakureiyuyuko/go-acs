@@ -83,6 +83,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	mux.HandleFunc("POST /devices/{id}/diagnose", s.handleDiagnose)
 	mux.HandleFunc("POST /devices/{id}/wake", s.handleWake)
 	mux.HandleFunc("POST /devices/{id}/reboot", s.handleReboot)
+	mux.HandleFunc("POST /devices/{id}/delete", s.handleDeviceDelete)
 	mux.HandleFunc("POST /devices/{id}/fetch", s.handleFetch)
 	mux.HandleFunc("POST /devices/{id}/wifi", s.handleWifi)
 	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", s.handleWifiEdit)
@@ -138,6 +139,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"Query":        q,
 		"Total":        len(all),
 		"Path":         r.URL.Path,
+		// 删除设备等操作会带着提示回到首页
+		"Notice":    strings.TrimSpace(r.URL.Query().Get("msg")),
+		"NoticeErr": r.URL.Query().Get("err") == "1",
 	}
 	if err := s.tpl.ExecuteTemplate(w, "index.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -255,6 +259,32 @@ func (s *Server) handleReboot(w http.ResponseWriter, r *http.Request) {
 		msg += "（主动唤醒没成功：" + werr.Error() + "）"
 	}
 	http.Redirect(w, r, back+"?msg="+url.QueryEscape(msg), http.StatusSeeOther)
+}
+
+// handleDeviceDelete 删掉一台设备的本地记录（详情页上的红色按钮 + 二次确认）。
+//
+// 删完回首页：设备详情页已经不存在了，留在原地会变成 404。
+// 提示里必须说清“只删本地记录”：设备如果还配着本 ACS 的地址，下次上报会重新纳管。
+func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	d, err := s.store.GetDevice(id)
+	if err != nil {
+		http.Redirect(w, r, "/?msg="+url.QueryEscape("设备不存在，可能已经被删了")+"&err=1", http.StatusSeeOther)
+		return
+	}
+	name := d.DisplayName()
+	if err := s.store.DeleteDevice(id); err != nil {
+		http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10)+"?msg="+
+			url.QueryEscape("删除失败："+err.Error())+"&err=1", http.StatusSeeOther)
+		return
+	}
+	msg := "已删除「" + name + "」（只删本地记录：参数 / 任务 / 上报历史）。" +
+		"设备若还配着本 ACS 地址，下次上报会重新纳管。"
+	http.Redirect(w, r, "/?msg="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 // handleDeviceNote 保存设备备注。

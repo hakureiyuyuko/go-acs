@@ -40,6 +40,9 @@
   </div>
 
   <h2>设备列表</h2>
+  {{if .Notice}}
+  <div class="notice {{if not .NoticeErr}}ok{{end}}">{{.Notice}}</div>
+  {{end}}
   <form method="get" action="/" class="searchbar">
     <input id="dev-search" class="filter" type="text" name="q" value="{{.Query}}"
            placeholder="搜索：序列号 / 备注 / 名称 / 产品类 / OUI / SSID">

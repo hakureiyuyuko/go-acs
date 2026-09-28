@@ -952,6 +952,52 @@ def main():
               "data-modal" in js and "modal-mask" in js and "Escape" in js, st)
         st, css = get("/static/style.css")
         check("样式里有弹窗与终端列表", ".modal-mask" in css and ".clilist" in css, st)
+
+    print("== 31. 删除设备（只删本地记录，级联清理干净）==")
+    ok, out = run_sim(workdir, "-serial", "VERIFY-DEL", "-oui", "001122", "-fttr", "1",
+                      "-once", "-event", "0 BOOTSTRAP")
+    check("待删设备注册会话成功", ok, out[-160:])
+    before = len(api_devices())
+    ds = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-DEL"]
+    check("待删设备已纳管", len(ds) == 1, len(ds))
+    if ds:
+        delid = ds[0]["ID"]
+        full = api_device(delid)
+        check("待删设备有参数、任务与上报记录",
+              len(full["params"]) > 0 and len(full["tasks"]) > 0 and len(full["informs"]) > 0,
+              (len(full["params"]), len(full["tasks"]), len(full["informs"])))
+        st, h = get(f"/devices/{delid}")
+        check("详情页有删除按钮", f'action="/devices/{delid}/delete"' in h, st)
+        check("删除按钮是红色的（与重启同级 danger）", h.count('class="danger"') >= 2, h.count('class="danger"'))
+        check("删除按钮带二次确认", "data-confirm=" in h, st)
+        check("说明里写清了「只删本地记录」与「会重新纳管」",
+              "不会动设备本身" in h and "重新纳管" in h, st)
+
+        st, loc = post_form(f"/devices/{delid}/delete", {})
+        check("删除返回 303", st == 303, st)
+        check("删完带着成功提示回到首页",
+              (loc or "").startswith("/?msg=") and "err=1" not in (loc or ""),
+              urllib.parse.unquote(loc or ""))
+
+        check("设备详情页已 404", get_code(f"/devices/{delid}") == 404, get_code(f"/devices/{delid}"))
+        check("设备从列表里消失", all(d["ID"] != delid for d in api_devices()))
+        check("设备总数少了一台", len(api_devices()) == before - 1, (before, len(api_devices())))
+
+        # 级联清理：直接看库文件，确认没有留下孤儿数据
+        import sqlite3
+        con = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
+        for tbl in ("device_params", "tasks", "informs"):
+            n = con.execute(f"select count(*) from {tbl} where device_id = ?", (delid,)).fetchone()[0]
+            check(f"删除后 {tbl} 没有残留", n == 0, n)
+        con.close()
+
+        # 重复删：给提示，不 500
+        st, loc = post_form(f"/devices/{delid}/delete", {})
+        check("重复删除给了提示而不是崩", st == 303 and "err=1" in (loc or ""),
+              urllib.parse.unquote(loc or ""))
+
+        # 其它设备必须还在（真机/别的模拟设备不能被连累）
+        check("其它设备仍在列表里", len(api_devices()) == before - 1, len(api_devices()))
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")

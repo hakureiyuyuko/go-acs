@@ -173,6 +173,26 @@ func (s *Store) GetDevice(id int64) (*Device, error) {
 	return d, nil
 }
 
+// DeleteDevice 从库里彻底删掉一台设备：它的参数、任务、上报记录一并删（外键 ON DELETE CASCADE）。
+//
+// 这是**只删本地记录**，不碰设备本身。设备那边还配着我们的 ACS 地址时，
+// 下次上报会重新纳管（身份键是 OUI/ProductClass/SerialNumber）—— 界面上要写清楚，
+// 否则用户会以为“删了就再也不来了”。
+func (s *Store) DeleteDevice(id int64) error {
+	res, err := s.db.Exec(`DELETE FROM devices WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("设备不存在（id=%d）", id)
+	}
+	return nil
+}
+
 // ListDevices 返回全部设备，最近上报的在前。
 func (s *Store) ListDevices() ([]*Device, error) {
 	rows, err := s.db.Query(`SELECT ` + devCols + ` FROM devices
