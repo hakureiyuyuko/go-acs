@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -118,5 +119,96 @@ func TestFttrOverviewCaseInsensitive(t *testing.T) {
 	nodes, ok := FttrOverview(params)
 	if !ok || len(nodes) != 1 || nodes[0].Serial != "S" {
 		t.Errorf("大小写差异不该影响识别: ok=%v nodes=%+v", ok, nodes)
+	}
+}
+
+// 光功率 / 组网模式：样本是各家常见的几种写法（华为 X_HW_RxPower、标准 OpticalRxPower）。
+func TestFttrOverviewOpticalAndMode(t *testing.T) {
+	b := "InternetGatewayDevice.X_HW_APDevice."
+	mk := func(name, val string) store.Param {
+		return store.Param{Name: b + name, Value: val, Source: "getvalues", UpdatedAt: time.Now()}
+	}
+	params := []store.Param{
+		{Name: b, Value: "", Source: "getnames"},
+		// 实例 1：光纤组网 + 光功率（华为写法）
+		mk("1.SerialNumber", "SN-FIBER"),
+		mk("1.WorkingMode", "fttr"),
+		mk("1.SignalIntensity", "0"),
+		mk("1.X_HW_RxPower", "-19.2"),
+		mk("1.X_HW_TxPower", "2.5"),
+		// 实例 2：无线组网 —— 即使设备也报了光功率，也不该显示（无线没有光口）
+		mk("2.SerialNumber", "SN-WIFI"),
+		mk("2.WorkingMode", "wifi"),
+		mk("2.SignalIntensity", "-45"),
+		mk("2.X_HW_RxPower", "0"),
+		// 实例 3：有线（以太网）组网，同样不显示光功率
+		mk("3.SerialNumber", "SN-ETH"),
+		mk("3.WorkingMode", "eth"),
+		mk("3.X_HW_RxPower", "-20.1"),
+		// 实例 4：组网模式归不了一类（真机上就是 repeater）→ 原样显示，光功率照常给
+		mk("4.SerialNumber", "SN-UNKNOWN"),
+		mk("4.WorkingMode", "repeater"),
+		mk("4.SupportedWorkingMode", "repeater"),
+		mk("4.SignalIntensity", "0"),
+		mk("4.Optical.RxPower", "-21.7"), // 嵌套写法也要认
+		// 无线发射功率不是光功率，别认错
+		mk("4.TransmitPower", "100,100"),
+	}
+	nodes, ok := FttrOverview(params)
+	if !ok || len(nodes) != 4 {
+		t.Fatalf("应解析出 4 台子设备，ok=%v nodes=%d", ok, len(nodes))
+	}
+	n := map[int]FttrNode{}
+	for _, x := range nodes {
+		n[x.Instance] = x
+	}
+
+	if got := n[1].OpticalPower(); got != "Rx -19.2 dBm / Tx 2.5 dBm" {
+		t.Errorf("光纤组网的光功率显示不对：%q", got)
+	}
+	if got := n[1].ModeText(); got != "光纤组网" {
+		t.Errorf("WorkingMode=fttr 应显示光纤组网，得到 %q", got)
+	}
+
+	if got := n[2].OpticalPower(); got != "" {
+		t.Errorf("无线组网不该显示光功率，却得到 %q", got)
+	}
+	if got := n[2].ModeText(); got != "无线组网（信号 -45）" {
+		t.Errorf("无线组网的文字不对：%q", got)
+	}
+
+	if got := n[3].OpticalPower(); got != "" {
+		t.Errorf("有线组网不该显示光功率，却得到 %q", got)
+	}
+	if got := n[3].ModeText(); got != "有线组网" {
+		t.Errorf("WorkingMode=eth 应显示有线组网，得到 %q", got)
+	}
+
+	// 归不了一类时：显示设备自报的原值，不美化；光功率仍显示（没有证据说是无线/有线）
+	if got := n[4].ModeText(); got != "repeater" {
+		t.Errorf("判不出组网模式时应显示原值，得到 %q", got)
+	}
+	if got := n[4].OpticalPower(); got != "Rx -21.7 dBm" {
+		t.Errorf("嵌套写法的光功率没认出来：%q", got)
+	}
+	if n[4].TxPower != "" {
+		t.Errorf("TransmitPower 不该被当成光发射功率：%q", n[4].TxPower)
+	}
+	// SupportedWorkingMode 不能被当成 WorkingMode（后缀匹配很容易踩）
+	if n[4].Mode != "repeater" || n[4].ModesSupported != "repeater" {
+		t.Errorf("WorkingMode / SupportedWorkingMode 串了：%+v", n[4])
+	}
+	// 悬停提示里要能看到原始字段
+	if h := n[4].ModeHint(); !strings.Contains(h, "WorkingMode=repeater") || !strings.Contains(h, "SignalIntensity=0") {
+		t.Errorf("组网悬停提示不完整：%q", h)
+	}
+
+	if !fttrHasOptical(nodes) {
+		t.Error("有光功率时整列应当渲染")
+	}
+	onlyRepeater := []FttrNode{n[4]}
+	onlyRepeater[0].RxPower = ""
+	if fttrHasOptical(onlyRepeater) {
+		t.Error("一台都没读到光功率时不该渲染那一列")
 	}
 }

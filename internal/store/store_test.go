@@ -111,6 +111,48 @@ func TestParamsUpsertKeepsWritable(t *testing.T) {
 	}
 }
 
+func TestParamsUpsertNamesDoesNotWipeValue(t *testing.T) {
+	st := newTestStore(t)
+	id, _, _ := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S"})
+
+	// 先正经读到值（GetParameterValues）
+	if err := st.UpsertParams(id, []Param{{Name: "X.Y", Value: "192.168.1.1", ValueType: "string"}}, "getvalues"); err != nil {
+		t.Fatal(err)
+	}
+	before, _, _ := st.GetParam(id, "X.Y")
+
+	// 再浏览参数树（名字枚举不带值）—— 不能把值刷成空串，也不该刷采集时间
+	time.Sleep(10 * time.Millisecond)
+	if err := st.UpsertParams(id, []Param{{Name: "X.Y", Writable: true}}, "getnames"); err != nil {
+		t.Fatal(err)
+	}
+
+	p, ok, err := st.GetParam(id, "X.Y")
+	if err != nil || !ok {
+		t.Fatalf("参数没找到: %v", err)
+	}
+	if p.Value != "192.168.1.1" {
+		t.Errorf("名字枚举把值改掉了：%q（这会让整个参数表看起来“没数据”）", p.Value)
+	}
+	if p.ValueType != "string" {
+		t.Errorf("名字枚举把类型改掉了：%q", p.ValueType)
+	}
+	if !p.Writable {
+		t.Error("名字枚举带来的“可写”信息应当保留")
+	}
+	if !p.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("名字枚举不该刷采集时间：%v → %v", before.UpdatedAt, p.UpdatedAt)
+	}
+
+	// 真正取到的空值（设备就这么回的）仍然要如实落库
+	if err := st.UpsertParams(id, []Param{{Name: "X.Y", Value: "", ValueType: "string"}}, "getvalues"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := st.GetParam(id, "X.Y"); p.Value != "" {
+		t.Errorf("真读到空值时应如实记录，得到 %q", p.Value)
+	}
+}
+
 func TestTaskLifecycle(t *testing.T) {
 	st := newTestStore(t)
 	id, _, _ := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S"})

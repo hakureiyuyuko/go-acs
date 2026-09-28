@@ -124,11 +124,16 @@
     实例号由枚举得到（同一型号不同实例号可能不连续，例如 1 / 2 / 4）。
     每个子设备还带自己的无线配置，可单独下发修改。
   </div>
+  <div class="hint" style="margin-bottom:10px">
+    「组网」以设备自报的 <span class="mono">WorkingMode</span> / <span class="mono">SignalIntensity</span> 为准
+    （悬停看原始字段）；判不出来就原样显示，不替设备下结论。
+    光功率只在子设备确实上报了它、且不是无线/有线组网时显示。
+  </div>
   {{if .Fttr}}
   <table>
     <thead>
       <tr><th>实例</th><th>型号</th><th>序列号</th><th>MAC</th><th>在线</th>
-          <th>软件版本</th><th>信道</th><th>信号</th><th>时长</th><th>采集</th></tr>
+          <th>软件版本</th><th>信道</th><th>组网</th><th>信号</th>{{if .FttrHasOptical}}<th>光功率</th>{{end}}<th>时长</th><th>采集</th></tr>
     </thead>
     <tbody>
       {{range .Fttr}}
@@ -144,7 +149,11 @@
         </td>
         <td class="mono">{{if .Firmware}}{{.Firmware}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Channel}}{{.Channel}}{{else}}-{{end}}{{if .Band}} <span class="hint">{{.Band}}</span>{{end}}</td>
+        <td {{if .ModeHint}}title="{{.ModeHint}}"{{end}}>{{if .ModeText}}{{.ModeText}}{{else}}<span class="hint">-</span>{{end}}</td>
         <td class="mono">{{if .Signal}}{{.Signal}}{{else}}-{{end}}</td>
+        {{if $.FttrHasOptical}}
+        <td class="mono">{{if .OpticalPower}}{{.OpticalPower}}{{else}}<span class="hint" title="没有光功率：不是光纤组网（或设备没上报）">-</span>{{end}}</td>
+        {{end}}
         <td class="mono">{{if .Uptime}}{{.Uptime}}{{else}}-{{end}}</td>
         <td class="mono hint">{{fmtTimeShort .Updated}}</td>
       </tr>

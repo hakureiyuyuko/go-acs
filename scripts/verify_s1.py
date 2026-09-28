@@ -864,6 +864,37 @@ def main():
         st, loc = post_form("/devices/99999/reboot", {})
         check("不存在的设备重启返回提示而不是崩", st == 303 and "err=1" in (loc or ""), loc)
 
+    print("== 29. FTTR 子设备的组网模式与光功率 ==")
+    # 子设备序号 1..3 → 实例 1/4/7；1=光纤（有光功率）、2=无线、3=有线
+    ok, out = run_sim(workdir, "-serial", "VERIFY-OPT", "-oui", "001122",
+                      "-fttr", "3", "-fttr-optical", "-fttr-wifi", "2", "-fttr-eth", "3",
+                      "-once", "-event", "0 BOOTSTRAP")
+    check("带光功率的 FTTR 设备注册会话成功", ok, out[-200:])
+    ds = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-OPT"]
+    check("带光功率的 FTTR 设备已纳管", len(ds) == 1, len(ds))
+    if ds:
+        oid = ds[0]["ID"]
+        st, h = get(f"/devices/{oid}")
+        # 只看 FTTR 子设备这一块：下面还有一个「参数」表会把该设备所有参数都列出来，
+        # 拿整页做断言会误判（光功率参数就存在库里）。
+        sec = h.split("FTTR 子设备", 1)[1].split("<h2>", 1)[0] if "FTTR 子设备" in h else ""
+        check("子设备表有「组网」列", "<th>组网</th>" in sec, st)
+        check("子设备确实上报了光功率时，才出现「光功率」列", "<th>光功率</th>" in sec, st)
+        check("光纤组网那台显示收 / 发光功率", "Rx -19.0 dBm / Tx 2.5 dBm" in sec, sec[-200:])
+        check("无线组网那台显示组网方式与信号", "无线组网（信号 -45）" in sec, st)
+        check("有线组网那台显示组网方式", "有线组网" in sec, st)
+        check("判不出组网模式时原样显示设备自报值", "repeater" in sec, st)
+        # 无线 / 有线组网的两台：**设备回了光功率也不显示**（它们没有光口）
+        check("无线 / 有线组网不显示光功率", "-20.0" not in sec and "-21.0" not in sec, sec[-300:])
+        check("组网列带原始字段的悬停提示",
+              "WorkingMode=wifi" in sec and "SignalIntensity=-45" in sec, st)
+
+    # 对照：子设备没上报光功率时，整列不渲染（探测不到就不显示）
+    vf = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-FTTR"]
+    if vf:
+        st, h = get(f"/devices/{vf[0]['ID']}")
+        check("没读到光功率就没有光功率列", "<th>光功率</th>" not in h, st)
+        check("组网列仍然有（设备自报了 WorkingMode）", "<th>组网</th>" in h, st)
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")

@@ -574,6 +574,53 @@ TR-069 虽然要求一次 SetParameterValues 里的参数原子生效，但不�
 
 > 这个坑是自写模拟器先暴露出来的（它按顺序处理），真机上有些设备也会这样。
 
+### FTTR 子设备的「组网模式」与「光功率」：先探测，别硬做
+
+需求：子光猫那里想看**组网模式**和**光功率**（无线 / 有线组网就不显示光功率）。
+
+**先说结论（真机探测，2026-09-28）**：
+
+- **组网模式能看**（间接的）：子设备表里跟组网有关的字段就这几个 ——
+  `WorkingMode` / `SupportedWorkingMode` / `InternetAccessMode` / `SignalIntensity` / `SyncStatus`。
+  真机三台子光猫都是 `WorkingMode=repeater`、`SignalIntensity=0`。
+- **光功率拿不到**：把两台真机的**全树参数名**拉下来扫了一遍（根级 GetParameterNames：
+  V271-20 **4484** 个名字、HN8145X6N **3315** 个），搜 `optic|rxpower|txpower|pon|olt|wavelength`
+  全部落空；主网关上 `X_HW_PonQualityMonitor.` 只有 `BERThreshold/Enable/MonitorInterval`
+  三个**配置项**，没有测量值。子设备 `X_HW_APDevice.{i}.` 的直属字段一共 20 个，也没有光功率。
+
+怎么探测的（可复用）：把 `ACS_LOG_SOAP=1` 打开（debug 级别会把收到的报文全打日志），
+发一条 `POST /api/devices/{id}/names {"path":"InternetGatewayDevice."}`（只枚举名字不取值），
+然后在日志里正则抠 `<Name>`。比盲猜路径靠谱得多。
+
+**界面上的做法**（按上面的现实来设计）：
+
+- 新增「组网」列。判定顺序：`SignalIntensity` 非 0 → 无线（带信号值）；
+  再看 `WorkingMode` 里明确的写法（`wifi/wireless` → 无线，`eth/wire/bridge/lan` → 有线，
+  `fttr/fiber/optical/pon` → 光纤）。**归不了一类就原样显示设备自报的值**（真机就是这样，显示 `repeater`），
+  并把 `WorkingMode / SupportedWorkingMode / InternetAccessMode / SignalIntensity / SyncStatus`
+  放在悬停提示里 —— 我们归一化后的字样不能被当成设备事实。
+- 新增「光功率」列，两个条件同时满足才显示值：① 这台子设备确实上报了光功率；
+  ② 组网不是无线 / 有线（没光口，有些固件反而会回 0 或无效值）。
+- 整列是否渲染看「有没有任何一台子设备真的读到光功率」—— 没读到就整列不出现（跟 WAN / FTTR 一个规矩）。
+  所以**当前两台真机都不会看到这一列**，哪天固件/型号给出了就自动出现。
+- 参数名按**叶子名后缀**认，容忍各家的不同写法：`RxPower / RxPowerDbm / OpticalRxPower /
+  X_HW_RxPower`…，并且允许中间多一层（`…{i}.Optical.RxPower`）。
+  注意 `TransmitPower` 是**无线**发射功率，不能当成光发射功率（真机上子设备就有 `TransmitPower=100,100`）。
+- 顺带修了个静默串位：`SupportedWorkingMode` 以前也会被当成 `WorkingMode`（后缀匹配的坑）。
+
+**踩了一个大坑（已修，记在这里）**：搞探测时用根级 `GetParameterNames` 浏览参数树，
+结果**把设备已有的参数值全刷成了空串** —— 详情页瞬间“没数据了”（设备那边好好的）。
+原因是 `UpsertParams` 一律 `value = excluded.value`，而名字枚举根本不带值。
+现在改了：`source='getnames'` 的行**不改动 value / value_type，也不刷采集时间**，
+只用来记录“这个参数存在、可不可写”；而真正取到的空值（设备就是这么回的）仍然如实落库 ——
+这两种情况必须分得开（前者是“没问”，后者是“问了是空”）。补了单测
+`TestParamsUpsertNamesDoesNotWipeValue`。本机真机库用**只读全树重采**恢复，
+顺带把两台设备的参数采全了（V271-20 4522 个、HN8145X6N 3347 个）。
+
+验证靠模拟器新增的三个开关（真机没有这些参数，不这么做就没法验收）：
+`-fttr-optical`（子设备带光功率）、`-fttr-wifi 1,3` / `-fttr-eth 1,3`（做成无线 / 有线组网）。
+注意模拟器给**所有**子设备都加了光功率参数 —— 这样才能验证「无线组网即使有参数也不显示光功率」。
+
 ### 重启设备（Reboot）：把护栏写在后端，而不是只靠前端的确认框
 
 `Reboot` 很早就在 `buildTaskBody` 里构造好了报文，但一直没接界面 —— 因为它和别的任务不同，
@@ -888,8 +935,8 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
 
 | 项目 | 结果 |
 | --- | --- |
-| `go test ./...` | 全部通过（`internal/cwmp` 41 个用例、`internal/store` 7 个用例、`internal/web` 18 个用例）|
-| `scripts/verify-s1.sh` | **通过 190 / 失败 0** |
+| `go test ./...` | 全部通过（`internal/cwmp` 41 个用例、`internal/store` 8 个用例、`internal/web` 19 个用例）|
+| `scripts/verify-s1.sh` | **通过 202 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
 | 真机（华为 HN8145X6N + V271-20） | **两台不同型号均自动纳管成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |

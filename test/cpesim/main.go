@@ -72,6 +72,13 @@ type simulator struct {
 	// ACS 不指定 Interface 时设备一发包就 no route。
 	pingNeedIface string
 
+	// fttrOptical：给 FTTR 子设备加上光功率参数（模拟光纤组网子机）。
+	fttrOptical bool
+	// fttrWireless / fttrWired：把这些实例（1-based 子设备序号）做成无线 / 有线组网，
+	// 用来验证「无线、有线组网不显示光功率」那条规则。
+	fttrWireless map[int]bool
+	fttrWired    map[int]bool
+
 	// pendingDiag 记录“已经开始跑、等着下次会话报结果”的诊断
 	pendingDiag string
 
@@ -121,6 +128,11 @@ func main() {
 	flag.BoolVar(&diagDelay, "diag-delay", false, "ping 诊断改为异步：下次会话才出结果并带事件 8 DIAGNOSTICS COMPLETE")
 	var pingNeedIface string
 	flag.StringVar(&pingNeedIface, "ping-need-iface", "", "模拟「必须指定承载接口才出得去」：诊断时 Interface 不含该子串就全失败（留空则不启用）")
+	var fttrOptical bool
+	var fttrWireless, fttrWired string
+	flag.BoolVar(&fttrOptical, "fttr-optical", false, "给 FTTR 子设备加光功率参数（模拟光纤组网子机）")
+	flag.StringVar(&fttrWireless, "fttr-wifi", "", "把哪些 FTTR 子设备做成无线组网（子设备序号，逗号分隔，如 1,3）")
+	flag.StringVar(&fttrWired, "fttr-eth", "", "把哪些 FTTR 子设备做成有线组网（子设备序号，逗号分隔）")
 	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
 	flag.BoolVar(&noWAN, "no-wan", false, "不模拟 WAN 连接对象（用于验证“没有就不显示”）")
 	flag.StringVar(&crUser, "cr-user", "", "Connection Request 监听要求的用户名（留空则用设备参数里的）")
@@ -128,6 +140,9 @@ func main() {
 	flag.Parse()
 	s.diagDelay = diagDelay
 	s.pingNeedIface = pingNeedIface
+	s.fttrOptical = fttrOptical
+	s.fttrWireless = parseIntSet(fttrWireless)
+	s.fttrWired = parseIntSet(fttrWired)
 	s.noWAN = noWAN
 	s.crUser, s.crPass = crUser, crPass
 
@@ -329,6 +344,29 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(ap+"SyncStatus", "3", "string")
 		set(ap+"UpTime", "361:36:38", "string")
 		set(ap+"WorkingMode", "repeater", "string")
+
+		// 组网方式（验证「无线/有线组网不显示光功率」）：
+		// 无线 → WorkingMode 写成 wifi、SignalIntensity 给个真实信号强度；
+		// 有线 → WorkingMode 写成 eth。默认（repeater + 信号 0）留给真机那种
+		// “设备自报的取值我们归不了一类”的情形。
+		if s.fttrWireless[i] {
+			set(ap+"WorkingMode", "wifi", "string")
+			set(ap+"SignalIntensity", "-45", "string")
+			set(ap+"SupportedWorkingMode", "wifi,eth", "string")
+		} else if s.fttrWired[i] {
+			set(ap+"WorkingMode", "eth", "string")
+			set(ap+"SupportedWorkingMode", "eth,wifi", "string")
+		} else {
+			set(ap+"SupportedWorkingMode", "repeater", "string")
+		}
+		set(ap+"InternetAccessMode", "DHCP", "string")
+
+		// 光功率（可选）：注意**无论哪种组网都加上**，这样才能验证
+		// “无线组网即使有参数也不显示光功率”那条规则。
+		if s.fttrOptical {
+			set(ap+"X_HW_RxPower", fmt.Sprintf("-%.1f", 18.0+float64(i)), "string")
+			set(ap+"X_HW_TxPower", "2.5", "string")
+		}
 	}
 }
 
@@ -708,6 +746,24 @@ func (s *simulator) finishDiagnostic(prefix string, n int) {
 
 func (s *simulator) shouldIgnore(name string) bool {
 	return s.matchAny(s.ignoreSet, name)
+}
+
+// parseIntSet 把 "1,3" 这种列表转成集合（空串就是空集合）。
+func parseIntSet(v string) map[int]bool {
+	out := map[int]bool{}
+	for _, part := range strings.Split(v, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			log.Printf("忽略看不懂的子设备序号: %q", part)
+			continue
+		}
+		out[n] = true
+	}
+	return out
 }
 
 func (s *simulator) matchAny(subs []string, name string) bool {
