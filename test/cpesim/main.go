@@ -22,8 +22,10 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hakureiyuyuko/go-acs/internal/cwmp"
@@ -102,6 +104,31 @@ type simulator struct {
 	// crUser/crPass 非空时，Connection Request 监听强制要求这套凭据
 	// （不依赖设备参数，测试里可以确定性地验证 Digest 实现）
 	crUser, crPass string
+
+	// specVersion 是数据模型的 Spec 版本（TR-098 = 1.0，TR-181 = 2.0）。
+	specVersion string
+
+	// srcIP 是本设备发起连接时绑定的**源 IP**（留空 = 系统默认）。
+	//
+	// 为什么压测要用它：ACS 用「来源 IP + User-Agent + 账号」做会话兜底指纹
+	// （CPE 还没拿到 cookie 时的第一次 Inform 只能靠它）。一个进程里跑 N 台模拟设备
+	// 时它们共用 127.0.0.1 和同一个 UA，会被 ACS 当成**同一个会话**，
+	// 于是任务被串到别的设备上、大部分设备直接被 204 结束 —— 压出来的数字全是假的。
+	// 真机各有各的管理 IP，所以压测里给每台设备绑一个 127.0.0.0/8 里的不同地址。
+	srcIP string
+
+	// cookie 是 ACS 回给我们的 session cookie（形如 session=xxx）。
+	//
+	// 真机（以及 TR-069 规范）的 CPE 会把 Set-Cookie 回传，ACS 靠它把一次会话里的
+	// 多个 POST 串起来；不回传时 ACS 只能退回「来源 IP + User-Agent」指纹，
+	// 于是同一台机器上并发的多台模拟设备会被当成**同一个会话**（压测时踩到过：
+	// 10 台设备共用一个会话，大部分拿不到任务直接被 204 结束）。
+	cookie string
+
+	// extraParams > 0 时，在 X_HW_APDevice 子树下再合成这么多参数 ——
+	// 用来mock 真机（华为 V271-20）那种「子设备子树有几千个参数」的负载：
+	// 压测时要看的正是 ACS 枚举 + 写库的规模效应。
+	extraParams int
 }
 
 func main() {
@@ -109,6 +136,7 @@ func main() {
 
 	var root string
 	var crPort int
+	var count, extraParams int
 	var ignoreSet string
 	var writeOnly string
 	var diagDelay bool
@@ -141,6 +169,9 @@ func main() {
 	flag.StringVar(&fttrWireless, "fttr-wifi", "", "把哪些 FTTR 子设备做成无线组网（子设备序号，逗号分隔，如 1,3）")
 	flag.StringVar(&fttrWired, "fttr-eth", "", "把哪些 FTTR 子设备做成有线组网（子设备序号，逗号分隔）")
 	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
+	flag.IntVar(&count, "count", 1, "压测：一个进程模拟多少台设备（>1 时全部同时上报，序列号自动加序号）")
+	flag.IntVar(&extraParams, "extra-params", 0,
+		"压测：在 X_HW_APDevice 子树下再合成这么多参数（真机 V271-20 这里是 4484 个）")
 	flag.BoolVar(&noWAN, "no-wan", false, "不模拟 WAN 连接对象（用于验证“没有就不显示”）")
 	flag.StringVar(&crUser, "cr-user", "", "Connection Request 监听要求的用户名（留空则用设备参数里的）")
 	flag.StringVar(&crPass, "cr-pass", "", "Connection Request 监听要求的密码")
@@ -152,6 +183,7 @@ func main() {
 	s.fttrWired = parseIntSet(fttrWired)
 	s.noWAN = noWAN
 	s.crUser, s.crPass = crUser, crPass
+	s.extraParams = extraParams
 
 	for _, part := range strings.Split(ignoreSet, ",") {
 		if p := strings.TrimSpace(part); p != "" {
@@ -164,16 +196,33 @@ func main() {
 		}
 	}
 
-	rootPrefix := "InternetGatewayDevice."
-	specVersion := "1.0"
-	if strings.Contains(root, "181") {
-		rootPrefix = "Device."
-		specVersion = "2.0"
+	rootPrefix := s.prepare(root, crPort)
+
+	// 多设备模式：一个进程模拟 N 台设备（压测用）
+	if count > 1 {
+		runMany(s, count, crPort)
+		return
 	}
 
+	log.Printf("CPE 模拟器启动 serial=%s dm=%s acs=%s 参数=%d 条",
+		s.serial, rootPrefix, s.acsURL, len(s.params))
+	s.runLoop()
+}
+
+// prepare 把数据模型根、参数表、ConnectionRequest 监听都准备好。
+// 单设备与多设备模式共用（多设备模式里每台设备都会走一遍）。
+func (s *simulator) prepare(root string, crPort int) string {
+	rootPrefix := "InternetGatewayDevice."
+	s.specVersion = "1.0"
+	if strings.Contains(root, "181") {
+		rootPrefix = "Device."
+		s.specVersion = "2.0"
+	}
 	s.rootPrefix = rootPrefix
-	s.crNonce = fmt.Sprintf("%016x", time.Now().UnixNano())
-	s.buildParams(rootPrefix, specVersion)
+	if s.crNonce == "" {
+		s.crNonce = fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	s.buildParams(rootPrefix, s.specVersion)
 
 	// 起一个本地 HTTP 服务当 ConnectionRequestURL，并把它写进参数表
 	crURL, err := s.startConnectionRequestServer(crPort)
@@ -184,10 +233,29 @@ func main() {
 		s.params[rootPrefix+"ManagementServer.ConnectionRequestURL"] = crURL
 		s.types[rootPrefix+"ManagementServer.ConnectionRequestURL"] = "string"
 	}
+	return rootPrefix
+}
 
-	log.Printf("CPE 模拟器启动 serial=%s dm=%s acs=%s 参数=%d 条",
-		s.serial, rootPrefix, s.acsURL, len(s.params))
+// cloneDevice 复制一份设备：只换序列号，参数表重建（每台设备一份，互不干扰）。
+// 其他配置（型号、数据模型、FTTR 子设备数…）原样继承。
+func cloneDevice(tmpl *simulator, serial string) *simulator {
+	dev := *tmpl
+	dev.serial = serial
+	dev.params = map[string]string{}
+	dev.types = map[string]string{}
+	dev.crCh = make(chan struct{}, 1)
+	dev.stalled = false
+	dev.pendingDiag = ""
+	dev.cookie = "" // 每台设备一份会话 cookie
+	dev.crNonce = fmt.Sprintf("%016x", time.Now().UnixNano()+int64(len(serial)))
+	dev.buildParams(dev.rootPrefix, dev.specVersion)
+	dev.addExtraParams()
+	return &dev
+}
 
+// runLoop 是单设备的主循环（周期上报 + 响应 Connection Request），
+// 与多设备模式里的单台设备共用。
+func (s *simulator) runLoop() {
 	startedAt := time.Now()
 	event := s.event
 	for round := 0; ; round++ {
@@ -220,9 +288,117 @@ func main() {
 				// 停报状态：不推进运行时长、也不上报，只挂着等 Connection Request
 				continue
 			}
-			s.tick(rootPrefix)
+			s.tick(s.rootPrefix)
 			event = "2 PERIODIC"
 		}
+	}
+}
+
+// runMany 是压测模式：一个进程里并发跑 count 台设备。
+//
+// 「大规模断电恢复」的场景就是所有设备**同时**发 1 BOOT：这里 N 台设备在同一瞬间
+// 起步（只在起 goroutine 上有一点调度抖动），跑完各自统计耗时分布，
+// 用来观察 ACS 的并发上限在哪。
+//
+// -once / interval<=0 时每台只跑一次会话（上电报文）；否则按周期一直跑（持续负载），
+// 由外部脚本控制跑多久。
+func runMany(tmpl *simulator, count, crPort int) {
+	log.Printf("压测模式：%d 台设备同时上报（事件 %q，dm=%s，FTTR 子设备 %d，额外参数 %d）",
+		count, tmpl.event, tmpl.rootPrefix, tmpl.fttr, tmpl.extraParams)
+	if crPort != 0 {
+		log.Printf("注意：多设备模式不为每台设备起 ConnectionRequest 监听（%d 个监听没必要），"+
+			"压测里设备是主动上报的", count)
+	}
+
+	durs := make([]time.Duration, count)
+	errs := make([]error, count)
+	devices := make([]*simulator, count)
+	for i := 0; i < count; i++ {
+		devices[i] = cloneDevice(tmpl, fmt.Sprintf("%s%05d", tmpl.serial, i+1))
+		// 每台设备一个不同的源 IP（127.0.0.1 起，够用 6 万多台）
+		devices[i].srcIP = fmt.Sprintf("127.0.%d.%d", (i/254)%256, i%254+1)
+		// 多设备模式不起 ConnectionRequest 监听，但真机一定会报 ConnectionRequestURL；
+		// 补一个（指向它自己的源 IP，没人监听）—— 压测里设备是主动上报的，用不到它
+		if _, ok := devices[i].params[devices[i].rootPrefix+"ManagementServer.ConnectionRequestURL"]; !ok {
+			devices[i].params[devices[i].rootPrefix+"ManagementServer.ConnectionRequestURL"] =
+				fmt.Sprintf("http://%s:7547/", devices[i].srcIP)
+			devices[i].types[devices[i].rootPrefix+"ManagementServer.ConnectionRequestURL"] = "string"
+		}
+	}
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			dev := devices[idx]
+			t0 := time.Now()
+			if tmpl.once || tmpl.interval <= 0 {
+				errs[idx] = dev.runSession(dev.event)
+			} else {
+				dev.runLoop()
+			}
+			durs[idx] = time.Since(t0)
+		}(i)
+	}
+	wg.Wait()
+
+	ok := 0
+	var sum, worst, best time.Duration
+	best = time.Hour
+	for i := range durs {
+		if errs[i] == nil {
+			ok++
+		}
+		sum += durs[i]
+		if durs[i] > worst {
+			worst = durs[i]
+		}
+		if durs[i] < best {
+			best = durs[i]
+		}
+	}
+	sorted := append([]time.Duration(nil), durs...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	median := sorted[len(sorted)/2]
+	log.Printf("压测结果：%d/%d 台成功｜总耗时 %s｜单台 最快 %s / 中位 %s / 最慢 %s｜平均 %s",
+		ok, count, time.Since(start).Round(time.Millisecond),
+		best.Round(time.Millisecond), median.Round(time.Millisecond), worst.Round(time.Millisecond),
+		(sum / time.Duration(count)).Round(time.Millisecond))
+
+	failed := 0
+	for i, err := range errs {
+		if err != nil {
+			if failed < 5 {
+				log.Printf("  失败样例：%s → %v", devices[i].serial, err)
+			}
+			failed++
+		}
+	}
+	if failed > 0 {
+		log.Printf("  失败合计 %d 台", failed)
+	}
+}
+
+// addExtraParams 在 X_HW_APDevice 子树下合成 extraParams 个参数。
+//
+// 为什么要这个：真机 V271-20（FTTR 主机）的 X_HW_APDevice 子树里有 4484 个参数，
+// ACS 纳管时要枚举+取值+写库。默认的模拟器只有几十个参数，
+// 压不出「几千参数 × N 台设备同时上报」这种真实负载。
+func (s *simulator) addExtraParams() {
+	if s.extraParams <= 0 {
+		return
+	}
+	root := s.rootPrefix + "X_HW_APDevice."
+	// 名字形状照真机那套（子设备 → 下面的对象 → 参数），让 ACS 的枚举走同样的层级
+	perSub := 600
+	for i := 0; i < s.extraParams; i++ {
+		sub := (i / perSub) + 1
+		k := i % perSub
+		name := fmt.Sprintf("%s%d.SubDevice.%d.Param%04d", root, sub, sub, k)
+		s.params[name] = fmt.Sprintf("v%d", i)
+		s.types[name] = "string"
 	}
 }
 
@@ -265,6 +441,8 @@ func (s *simulator) buildParams(root, specVersion string) {
 	set(ms+"PeriodicInformEnable", "1", "boolean")
 	set(ms+"PeriodicInformInterval", strconv.Itoa(int(s.interval.Seconds())), "unsignedInt")
 	set(ms+"ConnectionRequestUsername", "cpe-cr", "string")
+	// 真机上这个参数存在、但设备不回读（返回空串），所以留空
+	set(ms+"ConnectionRequestPassword", "", "string")
 	set(ms+"ParameterKey", "", "string")
 
 	if !s.noWAN {
@@ -629,6 +807,9 @@ func (s *simulator) post(body string) ([]byte, int, error) {
 		rd = strings.NewReader(body)
 	}
 	req, err := http.NewRequest(http.MethodPost, s.acsURL, rd)
+	if s != nil && s.cookie != "" {
+		req.Header.Set("Cookie", s.cookie)
+	}
 	if err != nil {
 		return nil, 0, err
 	}
@@ -644,11 +825,30 @@ func (s *simulator) post(body string) ([]byte, int, error) {
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
+	if s != nil && s.srcIP != "" {
+		if ip := net.ParseIP(s.srcIP); ip != nil {
+			client = &http.Client{
+				Timeout: 30 * time.Second,
+				Transport: &http.Transport{
+					DialContext: (&net.Dialer{
+						Timeout:   10 * time.Second,
+						LocalAddr: &net.TCPAddr{IP: ip},
+					}).DialContext,
+				},
+			}
+		}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
+	// 记下会话 cookie，下一次 POST 带上（真机就是这么做的）
+	if c := resp.Header.Get("Set-Cookie"); c != "" {
+		if kv := strings.SplitN(strings.TrimSpace(strings.Split(c, ";")[0]), "=", 2); len(kv) == 2 && kv[1] != "" {
+			s.cookie = kv[0] + "=" + kv[1]
+		}
+	}
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, err

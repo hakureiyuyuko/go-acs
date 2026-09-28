@@ -141,6 +141,21 @@ bash scripts/verify-s1.sh       # 端到端 309 项：模拟器打真实 HTTP + 
 bash scripts/verify-interop.sh  # 与 GenieACS 官方 JS 模拟器互通 8 项
 ```
 
+## 压测
+
+```bash
+scripts/loadtest.sh                     # 阶梯 10/50/100/200/400，每个档位都用全新的库
+scripts/loadtest.sh -n 200 -e 4484      # 只跑一档（-e = 每台 X_HW_APDevice 子树参数个数）
+```
+
+设备模板默认照真机华为 V271-20（TR-098、3 台 FTTR 子设备、`X_HW_APDevice` 子树 4484 个参数，
+每台约 4700 个参数），全部设备同时发 `1 BOOT`，模拟**大规模断电恢复**。
+
+本机（4 核）实测：吞吐约 **4 台设备/秒**（1.6–1.8 万参数行/秒）—— 100 台同时上电 26 秒完成，
+200 台约 1 分钟、400 台约 2 分钟；数据都是全量入库，只是超过 CPE 30 秒超时的设备会在下一次
+周期上报收尾。瓶颈是 SQLite 单连接串行写（**别调大连接池**，实测会丢写入）。
+方法与完整数据见 `docs/notes/loadtest.md`。
+
 ## 目录
 
 ```
@@ -150,7 +165,7 @@ internal/store/     SQLite：设备 / 参数 / 任务 / 上报记录（迁移走
 internal/web/       Web UI 与 JSON API（模板 + 少量原生 JS，无前端框架）
 test/cpesim/        自研 CPE 模拟器（大量开关，验收靠它）
 deploy/             发布包里的安装 / 升级 / 卸载脚本与 systemd 单元模板
-scripts/            打包、验收、参考实现拉取、开发用起停脚本
+scripts/            打包、验收、压测、参考实现拉取、开发用起停脚本
 docs/               需求文档、发布说明与实现笔记
 ```
 
@@ -158,6 +173,7 @@ docs/               需求文档、发布说明与实现笔记
 
 - `docs/requirements.md` —— 需求与实现进度
 - `docs/notes/deploy.md` —— 安装包与部署脚本的实现笔记（systemd 加固、升级回滚、怎么验的）
+- `docs/notes/loadtest.md` —— **压测记录**：集体上电的并发上限、瓶颈（SQLite 单连接）与实测数据
 - `docs/notes/implementation-notes.md` —— **真机踩坑与实测记录**：协议边界（单次 GetParameterValues 上限、
   写回类型大小写、诊断要最后置 `Requested`）、设备怪癖（能改不能读、异步生效、身份键被元数据改写）、
   运维坑（挂载掉了不能乱删、任务别卡在 running）……修法与验证都在里面
