@@ -63,7 +63,6 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 		"fmtTime":      formatTime,
 		"fmtTimeShort": formatTimeShort,
 		"uptime":       formatUptime,
-		"wifiCount":    wifiCount,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return fmt.Errorf("解析模板失败: %w", err)
@@ -139,13 +138,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	devices := make([]*store.Device, 0, len(all))
 	wifiByDevice := map[int64][]WifiBand{}
-	totalClients := 0
+	// 「无线终端」列跟详情页用同一套口径：主机 + 子光猫上的已连终端之和
+	// （条目数之外残留的行不算，见 BuildClientTree）。
+	clientCounts := map[int64]int{}
 	for _, d := range all {
 		bands := WifiOverview(wifiParams[d.ID])
 		if len(bands) > 0 {
 			wifiByDevice[d.ID] = bands
 		}
-		totalClients += wifiCount(bands)
+		tree := BuildClientTree(wifiParams[d.ID], nil)
+		n := 0
+		for _, g := range tree.Groups() {
+			n += len(g.Clients)
+		}
+		clientCounts[d.ID] = n
 		if deviceMatches(d, bands, q) {
 			devices = append(devices, d)
 		}
@@ -155,7 +161,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"Devices":      devices,
 		"Stats":        stats,
 		"WiFi":         wifiByDevice,
-		"TotalClients": totalClients,
+		"ClientCounts": clientCounts,
 		"Query":        q,
 		"Total":        len(all),
 		"Path":         r.URL.Path,

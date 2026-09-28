@@ -313,7 +313,13 @@ def main():
     check("看板有「WiFi 概览」区块", "WiFi 概览" in html)
     check("看板出现 2.4G 的 SSID", "SimWiFi" in html)
     check("看板出现 5G 的 SSID", "SimWiFi-5G" in html)
-    check("看板有无线终端统计", "无线终端" in html)
+    # 顶部统计卡只留两个（用户要求）：已纳管设备 / 在线
+    cards = html.split('<div class="cards">', 1)[1].split("<h2>", 1)[0]
+    check("看板统计卡只留「已纳管设备」「在线」",
+          "已纳管设备" in cards and ">在线<" in cards
+          and "已采集参数" not in cards and "无线终端" not in cards
+          and "待办任务" not in cards and "失败任务" not in cards,
+          re.sub(r"\s+", " ", cards)[:200])
     check("看板有频段/射频列", "频段" in html and "射频" in html)
 
     print("== 13. 无线概况是自动采集的（不用手工点）==")
@@ -952,6 +958,11 @@ def main():
               "data-modal" in js and "modal-mask" in js and "Escape" in js, st)
         st, css = get("/static/style.css")
         check("样式里有弹窗与终端列表", ".modal-mask" in css and ".clilist" in css, st)
+
+        # 首页列表里的「无线终端」要跟详情页同一口径：主机 3 台 + 子机 4 台 = 7
+        st, idx = get("/")
+        row = idx.split(f'<a href="/devices/{cid}">', 1)[1].split("</tr>", 1)[0]
+        check("列表页的「无线终端」= 主机 + 子机（3+4=7）", ">7</td>" in row, row[-160:])
 
     print("== 31. 删除设备（只删本地记录，级联清理干净）==")
     ok, out = run_sim(workdir, "-serial", "VERIFY-DEL", "-oui", "001122", "-fttr", "1",

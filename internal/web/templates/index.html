@@ -33,10 +33,6 @@
   <div class="cards">
     <div class="card"><div class="n">{{.Stats.Devices}}</div><div class="l">已纳管设备</div></div>
     <div class="card"><div class="n">{{.Stats.Online}}</div><div class="l">在线</div></div>
-    <div class="card"><div class="n">{{.Stats.Params}}</div><div class="l">已采集参数</div></div>
-    <div class="card"><div class="n">{{.TotalClients}}</div><div class="l">无线终端</div></div>
-    <div class="card"><div class="n">{{.Stats.PendingTask}}</div><div class="l">待办任务</div></div>
-    <div class="card"><div class="n">{{.Stats.FailedTask}}</div><div class="l">失败任务</div></div>
   </div>
 
   <h2>设备列表</h2>
@@ -71,7 +67,7 @@
         <td class="mono">{{if $d.DataModelRoot}}{{$d.DataModelRoot}}{{else}}<span class="hint">未知</span>{{end}}</td>
         <td class="mono">{{fmtTime $d.LastInformAt}}</td>
         <td class="mono">{{$d.ParamCount}}</td>
-        <td class="mono">{{if $bands}}{{wifiCount $bands}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td class="mono">{{index $.ClientCounts $d.ID}}</td>
         <td>
           <form method="post" action="/devices/{{$d.ID}}/wifi">
             <button type="submit" class="ghost">{{if $bands}}重新采集{{else}}采集 WiFi{{end}}</button>
@@ -95,7 +91,7 @@
   <h2>WiFi 概览</h2>
   <div class="hint" style="margin:-4px 0 10px">
     频段按设备自报的值显示；实例号由枚举得到（同一型号不同频段的实例号不连续，例如 2.4G=1、5G=5）。
-    列表里的「无线终端」是各频段已连终端数之和。<b>点 SSID 或频段可以修改该频段的无线设置。</b>
+    列表里的「无线终端」是 <b>主机 + 子光猫</b> 上的已连终端数之和（跟详情页口径一致）。<b>点 SSID 或频段可以修改该频段的无线设置。</b>
     {{if .Query}}（当前只显示匹配「{{.Query}}」的设备）{{end}}
   </div>
   {{if .WiFi}}
