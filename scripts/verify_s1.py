@@ -1531,6 +1531,19 @@ def main():
         notice = m.group(1) if m else ""
         check("动作提示语在英文界面上是英文：%s" % en, en in notice, notice[:60])
 
+    print("== 37c. 渲染结果里不许出现 Go 的格式化错误标记 ==")
+    # 起因：模板里把 int 值喂给 %s，中文界面直接显示成「主机 %!s(int=5) 台」。
+    # 这类错只有在真渲染时才现形，所以逐个页面（中/英）扫一遍。
+    for path in ("/", "/devices/%d" % did, "/settings", "/devices/%d/wifi/1" % did):
+        for lang in ("", "?lang=en"):
+            try:
+                _st, body = get(path + lang)
+            except urllib.error.HTTPError:
+                continue
+            bad = re.findall(r'%![a-zA-Z]?\([^)]*\)', body)
+            check("没有格式化错误标记：%s%s" % (path, lang or "（中文）"),
+                  not bad, "｜".join(dict.fromkeys(bad))[:100])
+
     print("== 37. 离线判定：超期先主动探测，探不通才判离线 ==")
     acs_bin = os.path.join(workdir, "acs")
     sim_bin = os.path.join(workdir, "cpesim")

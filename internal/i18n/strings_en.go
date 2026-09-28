@@ -14,6 +14,7 @@ func init() {
 		"共 %d 台终端":           "%d clients in total",
 		"%d 台":               "%d clients",
 		"主机 %s 台 · 子设备 %s 台": "%s host clients · %s sub-device clients",
+		"主机 %d 台 · 子设备 %d 台": "%d host clients · %d sub-device clients",
 		"参数（%d）":             "Parameters (%d)",
 		"最近 %d 条":            "last %d",
 		"采集 %s":              "collected %s",

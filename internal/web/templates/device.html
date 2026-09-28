@@ -345,7 +345,7 @@
       <button class="modal-close" type="button" data-modal-close title='{{T "关闭"}}'>✕</button>
       <h3>{{T "终端 ·"}} {{TS .Label}}</h3>
       <div class="hint" style="margin-bottom:6px">
-        {{if .SubCount}}{{T "主机 %s 台 · 子设备 %s 台" .HostCount .SubCount}} · {{end}}{{T "共 %d 台" .Total}}
+        {{if .SubCount}}{{T "主机 %d 台 · 子设备 %d 台" .HostCount .SubCount}} · {{end}}{{T "共 %d 台" .Total}}
       </div>
       {{range .Groups}}
       <div class="cli-group">
