@@ -401,7 +401,43 @@ def main():
         check("设备上的 SSID 确实没变成目标值（所以报失败是对的）",
               got_ssid != "WONT-STICK", got_ssid)
 
-    print("== 17. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 17. 设备备注与概览页搜索 ==")
+    if did:
+        note = "3 楼会议室 / 张工负责"
+        st, loc = post_form(f"/devices/{did}/note", {"note": note})
+        check("保存备注返回 303", st == 303, st)
+        dev = api_device(did)["device"]
+        check("备注已保存到设备", dev.get("Note") == note, dev.get("Note"))
+
+        st, dhtml = get(f"/devices/{did}")
+        check("详情页备注框里能看到已保存的值", 'name="note"' in dhtml and note in dhtml)
+
+        marker = f"/devices/{did}"
+        st, html = get("/")
+        check("概览页显示了备注", note in html)
+        check("概览页有搜索框", 'name="q"' in html)
+
+        # 按备注搜
+        st, html = get("/?q=" + urllib.parse.quote("会议室"))
+        check("按备注能搜到该设备", marker in html)
+        check("搜索后显示匹配数量", "匹配 1" in html, html[html.find("匹配"):html.find("匹配") + 20])
+
+        # 按序列号（大小写不敏感）搜
+        st, html = get("/?q=verify098")
+        check("按序列号（小写）能搜到", marker in html)
+
+        # 搜不到的词
+        st, html = get("/?q=" + urllib.parse.quote("绝对不存在的词"))
+        check("搜不到时给出提示", "没有匹配" in html)
+        check("搜不到时不列出任何设备", marker not in html)
+
+        # 清空备注后不再能按备注搜到
+        st, _ = post_form(f"/devices/{did}/note", {"note": ""})
+        check("清空备注返回 303", st == 303, st)
+        st, html = get("/?q=" + urllib.parse.quote("会议室"))
+        check("清掉备注后按备注搜不到了", marker not in html)
+
+    print("== 18. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 

@@ -161,6 +161,67 @@ func TestTaskLifecycle(t *testing.T) {
 	}
 }
 
+// 备注：默认空、可设置、设备上报不会把它冲掉，而且**重复打开同一个库**（迁移幂等）不能出错。
+func TestDeviceNoteAndMigrationIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.db")
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("首次打开失败: %v", err)
+	}
+	id, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := st.GetDevice(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Note != "" {
+		t.Errorf("备注默认应为空，实际 %q", d.Note)
+	}
+
+	if err := st.SetDeviceNote(id, "3 楼会议室"); err != nil {
+		t.Fatal(err)
+	}
+	// 设备再上报一次，人工写的备注不能被冲掉
+	if _, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S", Manufacturer: "ACME"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MergeDeviceFields(id, &Device{SoftwareVersion: "1.0"}); err != nil {
+		t.Fatal(err)
+	}
+	d, _ = st.GetDevice(id)
+	if d.Note != "3 楼会议室" {
+		t.Errorf("设备上报不应冲掉备注，实际 %q", d.Note)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 关键：重新打开同一个库 —— 迁移必须幂等，不能因为列已存在而失败
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("重复打开应成功（迁移必须幂等）: %v", err)
+	}
+	defer st2.Close()
+	d, err = st2.GetDevice(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Note != "3 楼会议室" {
+		t.Errorf("重新打开后备注丢了: %q", d.Note)
+	}
+
+	// 再打开一次，确保不会反复尝试建列
+	st3, err := Open(path)
+	if err != nil {
+		t.Fatalf("第三次打开应成功: %v", err)
+	}
+	st3.Close()
+}
+
 func TestListDevicesAndStats(t *testing.T) {
 	st := newTestStore(t)
 	for _, s := range []string{"S1", "S2", "S3"} {

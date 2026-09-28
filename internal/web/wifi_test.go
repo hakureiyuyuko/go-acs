@@ -275,6 +275,50 @@ func TestMatchCandidate(t *testing.T) {
 	}
 }
 
+// 概览页搜索：序列号 / 备注 / 名称 / 产品类 / OUI / SSID 都能搜。
+func TestDeviceMatches(t *testing.T) {
+	d := &store.Device{
+		SerialNumber: "48575443AA000001",
+		Manufacturer: "Huawei Technologies Co., Ltd",
+		ModelName:    "HN8145X6N",
+		ProductClass: "HN8145X6N",
+		OUI:          "00259E",
+		Note:         "3 楼会议室",
+	}
+	bands := []WifiBand{{SSID: "LabWifi"}}
+
+	yes := []string{"", "48575443AA00", "0001", "3 楼", "会议室", "huawei", "8145x6n", "00259e", "LabWifi"}
+	for _, q := range yes {
+		if !deviceMatches(d, bands, q) {
+			t.Errorf("应命中: %q", q)
+		}
+	}
+	no := []string{"不存在的序列号", "zzz", "小米"}
+	for _, q := range no {
+		if deviceMatches(d, bands, q) {
+			t.Errorf("不应命中: %q", q)
+		}
+	}
+
+	// 空备注不应把空串当成“命中一切”
+	d2 := &store.Device{SerialNumber: "X"}
+	if deviceMatches(d2, nil, "abc") {
+		t.Error("无关搜索词不该命中")
+	}
+}
+
+// 备注变更后要能搜到（模拟实际流程：写库 -> 列表过滤）。
+func TestDeviceMatchesAfterNoteUpdate(t *testing.T) {
+	d := &store.Device{SerialNumber: "SN1"}
+	if deviceMatches(d, nil, "会议室") {
+		t.Fatal("设置备注前不该命中")
+	}
+	d.Note = "会议室"
+	if !deviceMatches(d, nil, "会议室") {
+		t.Error("设置备注后应能搜到")
+	}
+}
+
 func TestWifiOverviewEmpty(t *testing.T) {
 	if got := WifiOverview(nil); len(got) != 0 {
 		t.Errorf("没有无线参数时应返回空，实际 %+v", got)

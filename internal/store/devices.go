@@ -32,6 +32,10 @@ type Device struct {
 	LastBootAt       time.Time
 	Online           bool
 	ParamCount       int
+
+	// Note 是人工写的备注（如「3 楼会议室」「张工负责」）。
+	// 设备上报不会动它。
+	Note string
 }
 
 // DisplayName 给界面用的人类可读名字。
@@ -51,7 +55,7 @@ func (d *Device) DisplayName() string {
 const devCols = `id, oui, product_class, serial_number, manufacturer, model_name, data_model_root,
 	software_version, hardware_version, spec_version, provisioning_code, external_ip,
 	conn_request_url, periodic_interval, user_agent, source_ip, last_events,
-	first_seen_at, last_inform_at, last_boot_at, online`
+	first_seen_at, last_inform_at, last_boot_at, online, note`
 
 func scanDevice(sc interface{ Scan(...any) error }) (*Device, error) {
 	var d Device
@@ -60,7 +64,7 @@ func scanDevice(sc interface{ Scan(...any) error }) (*Device, error) {
 	err := sc.Scan(&d.ID, &d.OUI, &d.ProductClass, &d.SerialNumber, &d.Manufacturer, &d.ModelName,
 		&d.DataModelRoot, &d.SoftwareVersion, &d.HardwareVersion, &d.SpecVersion, &d.ProvisioningCode,
 		&d.ExternalIP, &d.ConnRequestURL, &d.PeriodicInterval, &d.UserAgent, &d.SourceIP, &d.LastEvents,
-		&first, &lastInform, &lastBoot, &online)
+		&first, &lastInform, &lastBoot, &online, &d.Note)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +215,12 @@ func (s *Store) MarkStaleOffline(maxAge time.Duration) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// SetDeviceNote 设置设备备注（人工写的，设备上报不会动它）。
+func (s *Store) SetDeviceNote(id int64, note string) error {
+	_, err := s.db.Exec(`UPDATE devices SET note = ? WHERE id = ?`, note, id)
+	return err
 }
 
 // FindDeviceBySerial 按序列号找设备（Connection Request 等场景用）。

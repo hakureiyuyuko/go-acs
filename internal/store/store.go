@@ -88,6 +88,35 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_device_status ON tasks(device_id, status, id);
 `
 
+// migrations 是增量迁移，按顺序执行；执行到哪一步记在 PRAGMA user_version 里。
+//
+// 约定：baseSchema 永远是「第 0 版」，**新加字段一律走迁移**，不要直接改 baseSchema ——
+// 否则已存在的库升不上来，而新建的库又会因为重复建列而报错。
+var migrations = []string{
+	// 1：设备备注（概览页要展示、要能搜索）
+	`ALTER TABLE devices ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
+}
+
+// migrate 把库升到当前版本。幂等：已升过的直接跳过。
+func (s *Store) migrate() error {
+	var v int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return fmt.Errorf("读取数据库版本失败: %w", err)
+	}
+	if v > len(migrations) {
+		return fmt.Errorf("数据库版本 %d 高于本程序支持的 %d，请升级程序", v, len(migrations))
+	}
+	for i := v; i < len(migrations); i++ {
+		if _, err := s.db.Exec(migrations[i]); err != nil {
+			return fmt.Errorf("数据库迁移 #%d 失败: %w", i+1, err)
+		}
+		if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, i+1)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Open 打开（必要时创建）数据库并建表。
 func Open(path string) (*Store, error) {
 	dsn := "file:" + path +
@@ -114,6 +143,10 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("建表失败: %w", err)
+	}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return s, nil
 }

@@ -34,6 +34,16 @@
     任务会在设备下次 Inform（或主动连接）时下发；设备离线时任务会一直排队等待。
   </div>
 
+  <h2>备注</h2>
+  <form method="post" action="/devices/{{.Device.ID}}/note" class="searchbar">
+    <input class="filter" style="width:560px" type="text" name="note" value="{{.Device.Note}}"
+           placeholder="例如：3 楼会议室 / 张工负责 / 测试机">
+    <button type="submit">保存备注</button>
+  </form>
+  <div class="hint" style="margin-top:-4px">
+    备注只存在本地，不会下发给设备；概览页会显示它，也参与搜索。
+  </div>
+
   <h2>基本信息</h2>
   <div class="kvs">
     {{range .Basic}}

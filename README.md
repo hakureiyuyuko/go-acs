@@ -69,6 +69,15 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 | `-offline-after` | `ACS_OFFLINE_AFTER` | `10m` | 多久没上报算离线 |
 | `-max-body` | `ACS_MAX_BODY` | `4MiB` | 单请求体上限 |
 | `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名（真机单次上限可能只有 256，见下文）|
+
+## 数据库迁移
+
+库里记着 `PRAGMA user_version`，`internal/store/store.go` 里有一个 `migrations` 列表。
+
+**约定：`baseSchema` 永远是「第 0 版」，新加字段一律走迁移。**
+不要直接改 `baseSchema` —— 那样已存在的库升不上来，而新建的库又会因为重复建列而报错。
+第一次加字段（设备备注）时就是这么做的，迁移是幂等的：重复启动不会出错，
+库版本比程序新时会明确报错而不是继续跑。
 | `-auto-fetch-info` | `ACS_AUTO_FETCH_INFO` | `true` | Inform 后自动取设备基本信息 |
 | `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | 首次纳管/BOOTSTRAP 时自动采集无线概况（看板用）|
 | `-log-level` / `-log-json` | `ACS_LOG_LEVEL` / `ACS_LOG_JSON` | `info` / 否 | 日志 |
@@ -107,6 +116,9 @@ docs/               需求文档与笔记
   下发成功后自动把参数读回来核对（写入成功不等于真的生效，而且设备可能**异步生效**，
   所以同会话对不上先不判错、到下一轮会话再定性）；写入无线参数后会**自动重采一次无线概况**，
   避免界面上的状态/信道停在写入前
+- **设备备注**：设备详情页可写备注（不会下发给设备、也不会被 Inform 冲掉），概览页展示并参与搜索
+- **概览页搜索**：按 序列号 / 备注 / 名称 / 产品类 / OUI / SSID 搜索（服务端过滤，
+  结果 URL 可分享；输入后自动搜索，不依赖 JS 也能用搜索按钮）
 - **JSON API**：`/api/devices`、`/api/devices/{id}`
 - **看板 WiFi 概览**：首页按设备分频段展示 2.4G/5G 的 SSID、射频开关、信道、标准、加密与**已连终端数**，
   并给出终端总数；首次纳管 / `0 BOOTSTRAP` 时**自动采集**（先枚举子树圈出真实实例号，

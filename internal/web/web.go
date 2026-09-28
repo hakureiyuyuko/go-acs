@@ -70,6 +70,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /devices/{id}", s.handleDevice)
 	mux.HandleFunc("POST /devices/{id}/refresh", s.handleRefresh)
+	mux.HandleFunc("POST /devices/{id}/note", s.handleDeviceNote)
 	mux.HandleFunc("POST /devices/{id}/fetch", s.handleFetch)
 	mux.HandleFunc("POST /devices/{id}/wifi", s.handleWifi)
 	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", s.handleWifiEdit)
@@ -82,7 +83,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	devices, err := s.store.ListDevices()
+	all, err := s.store.ListDevices()
 	if err != nil {
 		http.Error(w, "读取设备列表失败: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -98,13 +99,21 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		wifiParams = map[int64][]store.Param{}
 	}
+
+	// 搜索：服务端过滤（结果可以分享 URL，也不依赖 JS）。
+	// 搜序列号 / 备注 / 名称 / 产品类 / OUI / SSID。
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	devices := make([]*store.Device, 0, len(all))
 	wifiByDevice := map[int64][]WifiBand{}
 	totalClients := 0
-	for _, d := range devices {
+	for _, d := range all {
 		bands := WifiOverview(wifiParams[d.ID])
 		if len(bands) > 0 {
 			wifiByDevice[d.ID] = bands
-			totalClients += wifiCount(bands)
+		}
+		totalClients += wifiCount(bands)
+		if deviceMatches(d, bands, q) {
+			devices = append(devices, d)
 		}
 	}
 
@@ -113,11 +122,64 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"Stats":        stats,
 		"WiFi":         wifiByDevice,
 		"TotalClients": totalClients,
+		"Query":        q,
+		"Total":        len(all),
 		"Path":         r.URL.Path,
 	}
 	if err := s.tpl.ExecuteTemplate(w, "index.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// deviceMatches 判断设备是否命中搜索词。q 为空则全部命中。
+//
+// 搜的是「人能一眼看到的那些」：序列号、备注、名称/型号/厂商、产品类、OUI，
+// 以及它广播的 SSID（按 SSID 找设备很常用）。
+func deviceMatches(d *store.Device, bands []WifiBand, q string) bool {
+	if q == "" {
+		return true
+	}
+	q = strings.ToLower(q)
+	hay := []string{
+		d.SerialNumber, d.Note, d.DisplayName(), d.Manufacturer,
+		d.ModelName, d.ProductClass, d.OUI,
+	}
+	for _, b := range bands {
+		hay = append(hay, b.SSID, b.Band)
+	}
+	for _, h := range hay {
+		if h != "" && strings.Contains(strings.ToLower(h), q) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleDeviceNote 保存设备备注。
+func (s *Server) handleDeviceNote(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := s.store.GetDevice(id); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "表单解析失败", http.StatusBadRequest)
+		return
+	}
+	note := strings.TrimSpace(r.FormValue("note"))
+	// 备注是给人看的，限长主要是防止把整篇文章塞进来
+	if runes := []rune(note); len(runes) > 200 {
+		note = string(runes[:200])
+	}
+	if err := s.store.SetDeviceNote(id, note); err != nil {
+		http.Error(w, "保存备注失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
