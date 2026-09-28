@@ -32,7 +32,8 @@
 <main>
   <div class="cards">
     <div class="card"><div class="n">{{.Stats.Devices}}</div><div class="l">已纳管设备</div></div>
-    <div class="card"><div class="n">{{.Stats.Online}}</div><div class="l">在线</div></div>
+    <div class="card"><div class="n">{{.Stats.Online}}</div><div class="l">在线</div>
+      {{if .Stats.Probing}}<div class="hint">{{.Stats.Probing}} 台正在探测</div>{{end}}</div>
   </div>
 
   <h2>设备列表</h2>
@@ -59,7 +60,7 @@
       {{range $d := .Devices}}
       {{$bands := index $.WiFi $d.ID}}
       <tr>
-        <td>{{if $d.Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</td>
+        <td>{{if $d.Probing}}<span class="badge probing" title="超过 {{$d.PeriodicInterval}} 秒周期的 2 倍没上报，已主动探测 {{$d.ProbeCount}} 次">探测中</span>{{else if $d.Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</td>
         <td><a href="/devices/{{$d.ID}}">{{$d.DisplayName}}</a></td>
         <td class="note" title="{{$d.Note}}">{{if $d.Note}}{{$d.Note}}{{else}}<span class="hint">-</span>{{end}}</td>
         <td class="mono">{{$d.SerialNumber}}</td>

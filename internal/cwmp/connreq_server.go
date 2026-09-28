@@ -92,20 +92,41 @@ func (s *Server) EnsureConnReqCredentials(deviceID int64) {
 // 设备收到之后会立刻回连 ACS 开一次会话（Inform 事件码 6 CONNECTION REQUEST），
 // 排队中的任务就会被马上下发 —— 这就是「不用等下一次周期上报」的关键。
 func (s *Server) WakeDevice(deviceID int64) (string, error) {
-	if !s.cfg.ConnReqEnabled {
-		return "", fmt.Errorf("主动唤醒功能已关闭（用 -connection-request 打开）")
-	}
 	d, err := s.store.GetDevice(deviceID)
 	if err != nil {
 		return "", fmt.Errorf("读设备失败: %w", err)
 	}
-	params, err := s.store.ListParams(deviceID)
-	if err != nil {
-		return "", fmt.Errorf("读参数失败: %w", err)
+	if err := s.connectionRequest(d); err != nil {
+		s.log.Warn("主动唤醒失败", "device_id", deviceID, "url", d.ConnRequestURL, "err", err)
+		return "", fmt.Errorf("唤醒失败：%w", err)
 	}
-	target := lookupMgmt(params, pConnReqURL)
+	s.log.Info("主动唤醒成功（设备会立刻回连开一次会话）",
+		"device_id", deviceID, "serial", d.SerialNumber, "url", d.ConnRequestURL)
+	return "已主动唤醒设备，它应该马上回连（几秒内任务就会下发）", nil
+}
+
+// connectionRequest 给一台设备发一次 Connection Request（解析地址与凭据 → HTTP GET）。
+//
+// 两种场景共用：用户在界面上点「立即唤醒」，以及离线巡检里主动探测
+// （见 offline.go：超期没上报时先探几次，探不通才判离线）。
+// 调用方决定怎么记日志 —— 这里的同一个错误，在人工唤醒时是「唤醒失败」，
+// 在离线巡检里是「探测无响应」。
+func (s *Server) connectionRequest(d *store.Device) error {
+	if !s.cfg.ConnReqEnabled {
+		return fmt.Errorf("主动唤醒功能已关闭（用 -connection-request 打开）")
+	}
+	// 设备上报的 URL 落在 devices 表里；库里没有就从已采集参数里再找一次
+	// （有些设备把 ConnectionRequestURL 放在 Inform 的参数列表里带上来）
+	target := d.ConnRequestURL
+	var params []store.Param
+	if p, err := s.store.ListParams(d.ID); err == nil {
+		params = p
+		if target == "" {
+			target = lookupMgmt(params, pConnReqURL)
+		}
+	}
 	if target == "" {
-		return "", fmt.Errorf("这台设备还没上报 ConnectionRequestURL（在它上报之前无法主动唤醒）")
+		return fmt.Errorf("这台设备还没上报 ConnectionRequestURL（在它上报之前无法主动唤醒）")
 	}
 
 	user, pass := s.cfg.ConnReqUser, s.cfg.ConnReqPass
@@ -113,14 +134,7 @@ func (s *Server) WakeDevice(deviceID int64) (string, error) {
 		// 没配置就试试设备上已有的（说不定是别的 ACS 配的）
 		user, pass = lookupMgmt(params, pConnReqUser), lookupMgmt(params, pConnReqPass)
 	}
-
-	if err := SendConnectionRequest(target, user, pass, s.cfg.ConnReqTimeout); err != nil {
-		s.log.Warn("主动唤醒失败", "device_id", deviceID, "url", target, "err", err)
-		return "", fmt.Errorf("唤醒失败：%w", err)
-	}
-	s.log.Info("主动唤醒成功（设备会立刻回连开一次会话）",
-		"device_id", deviceID, "serial", d.SerialNumber, "url", target)
-	return "已主动唤醒设备，它应该马上回连（几秒内任务就会下发）", nil
+	return SendConnectionRequest(target, user, pass, s.cfg.ConnReqTimeout)
 }
 
 // WakeDeviceQuiet 是给「顺手试一下唤醒」的场景用的：不关心结果，只记日志。

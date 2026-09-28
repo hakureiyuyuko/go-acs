@@ -350,25 +350,52 @@ func TestListDevicesAndStats(t *testing.T) {
 	}
 }
 
-func TestMarkStaleOffline(t *testing.T) {
+// 离线判定相关的存取：探测计数加一、清零、标离线（判定规则本身在 cwmp 包里测）。
+func TestProbeStateAndOffline(t *testing.T) {
 	st := newTestStore(t)
 	id, _, _ := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S"})
 
-	// 时间倒推久一点，模拟长时间没上报
-	if _, err := st.db.Exec(`UPDATE devices SET last_inform_at = ? WHERE id = ?`,
-		ts(time.Now().Add(-2*time.Hour)), id); err != nil {
+	now := time.Now()
+	if err := st.RecordProbe(id, now); err != nil {
 		t.Fatal(err)
 	}
-	n, err := st.MarkStaleOffline(10 * time.Minute)
+	if err := st.RecordProbe(id, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	d, err := st.GetDevice(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("应标记 1 台离线，实际 %d", n)
+	if d.ProbeCount != 2 || d.ProbeAt.IsZero() {
+		t.Errorf("探测进度 = %d @ %v，期望 2 次且有时间", d.ProbeCount, d.ProbeAt)
 	}
-	d, _ := st.GetDevice(id)
+	if !d.Probing() {
+		t.Error("在线且探过 → 应该算「探测中」")
+	}
+	stats, _ := st.Stats()
+	if stats.Probing != 1 {
+		t.Errorf("统计里的探测中 = %d，期望 1", stats.Probing)
+	}
+
+	if err := st.MarkOffline(id); err != nil {
+		t.Fatal(err)
+	}
+	d, _ = st.GetDevice(id)
 	if d.Online {
 		t.Error("应该已经离线")
+	}
+	if d.Probing() {
+		t.Error("离线后不该再显示「探测中」")
+	}
+
+	// 设备再上报：在线 + 探测进度清零（UpsertDevice 里做）
+	if _, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S"}); err != nil {
+		t.Fatal(err)
+	}
+	d, _ = st.GetDevice(id)
+	if !d.Online || d.ProbeCount != 0 || !d.ProbeAt.IsZero() {
+		t.Errorf("重新上报后应在线且清零，实际 online=%v count=%d at=%v",
+			d.Online, d.ProbeCount, d.ProbeAt)
 	}
 }
 

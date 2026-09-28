@@ -14,6 +14,8 @@
   --hover: #1b2027;
   --ok-line: #23503a;
   --ok-bg: #12241b;
+  --warn-line: #6a4c14;
+  --warn-bg: #241d0e;
   --ghost-line: #2b4a7d;
   --ghost-hover: #16233a;
   --on-accent: #fff;
@@ -35,6 +37,8 @@
   --hover: #eef1f6;
   --ok-line: #a9dcbd;
   --ok-bg: #e9f7ef;
+  --warn-line: #e6c583;
+  --warn-bg: #fdf4e0;
   --ghost-line: #bcd0ee;
   --ghost-hover: #e8f0fe;
   --on-accent: #fff;
@@ -70,6 +74,7 @@ td.mono, .mono { font-family: ui-monospace, "SFMono-Regular", Consolas, monospac
 .badge { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 12px; border: 1px solid var(--line); }
 .badge.on { color: var(--ok); border-color: var(--ok-line); background: var(--ok-bg); }
 .badge.off { color: var(--dim); }
+.badge.probing { color: var(--warn); border-color: var(--warn-line); background: var(--warn-bg); }
 .badge.done { color: var(--ok); }
 .badge.pending, .badge.running { color: var(--warn); }
 .badge.failed { color: var(--bad); }

@@ -35,7 +35,8 @@
   <div class="cards">
     <div class="card">
       <div class="l">状态</div>
-      <div>{{if .Device.Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</div>
+      <div>{{if .Device.Probing}}<span class="badge probing">探测中</span>{{else if .Device.Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}</div>
+      {{if .Device.Probing}}<div class="hint">超期未上报，已主动探测 {{.Device.ProbeCount}} 次<br>最近一次 {{fmtTime .Device.ProbeAt}}</div>{{end}}
     </div>
     <div class="card"><div class="n">{{len .Params}}</div><div class="l">已采集参数</div></div>
     <div class="card"><div class="n">{{.Pending}}</div><div class="l">待办任务</div></div>

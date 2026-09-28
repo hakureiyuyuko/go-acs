@@ -146,6 +146,24 @@ def run_sim_bg(workdir, seconds, *extra):
         return True, out + "\n（按预期超时结束）"
 
 
+def open_log(path):
+    return open(path, "w", encoding="utf-8")
+
+
+def read_log(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def start_sim(sim_bin, base_url, serial, *extra):
+    """起一个常驻的模拟 CPE（验收里要「设备一直活着」这种场景）。"""
+    cmd = [sim_bin, "-acs", base_url + "/acs", "-serial", serial] + list(extra)
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def wait_tasks_done(device_id, kinds=("SetParameterValues",), timeout=150):
     """等某类任务全部结束（或超时）。"""
     deadline = time.time() + timeout
@@ -1315,6 +1333,126 @@ def main():
                 proc.wait(timeout=5)
             except Exception:  # noqa: BLE001
                 proc.kill()
+
+    print("== 37. 离线判定：超期先主动探测，探不通才判离线 ==")
+    acs_bin = os.path.join(workdir, "acs")
+    sim_bin = os.path.join(workdir, "cpesim")
+    if not (os.path.exists(acs_bin) and os.path.exists(sim_bin)):
+        skip("离线判定用例", "没找到 $WORK/acs 或 $WORK/cpesim")
+    else:
+        port = 17571
+        base2 = "http://127.0.0.1:%d" % port
+        log_path = os.path.join(workdir, "offline.log")
+        env = dict(os.environ)
+        env.update({
+            "ACS_LISTEN": ":%d" % port,
+            "ACS_DB": os.path.join(workdir, "offline.db"),
+            "ACS_LOG_LEVEL": "info",
+            # 验收要等得起：先把探测节奏压到秒级（周期 3 秒 → 6 秒超期）
+            "ACS_OFFLINE_PROBE_FACTOR": "2",
+            "ACS_OFFLINE_PROBE_ATTEMPTS": "3",
+            "ACS_OFFLINE_PROBE_INTERVAL": "1s",
+            "ACS_OFFLINE_PROBE_GRACE": "1s",
+            "ACS_OFFLINE_CHECK_INTERVAL": "1s",
+        })
+        env.pop("ACS_WEB_USER", None)   # 这一节不测鉴权
+        env.pop("ACS_WEB_PASS", None)
+        logf = open_log(log_path)
+        proc = subprocess.Popen([acs_bin], env=env, stdout=logf, stderr=subprocess.STDOUT)
+        sims = []
+
+        def off_dev(serial):
+            try:
+                with urllib.request.urlopen(base2 + "/api/devices", timeout=5) as r:
+                    for d in json.loads(r.read().decode())["data"]:
+                        if d.get("SerialNumber") == serial:
+                            return d
+            except Exception:  # noqa: BLE001
+                return None
+            return None
+
+        def off_wait(serial, pred, timeout):
+            end = time.time() + timeout
+            seen_probing = False
+            while time.time() < end:
+                d = off_dev(serial)
+                if d and pred(d):
+                    return d, seen_probing
+                # 顺手看一眼界面上有没有出现过「探测中」
+                try:
+                    with urllib.request.urlopen(base2 + "/", timeout=5) as r:
+                        if "badge probing" in r.read().decode("utf-8", "replace"):
+                            seen_probing = True
+                except Exception:  # noqa: BLE001
+                    pass
+                time.sleep(0.25)
+            return off_dev(serial), seen_probing
+
+        try:
+            ready = False
+            for _ in range(60):
+                try:
+                    with urllib.request.urlopen(base2 + "/", timeout=2) as r:
+                        if r.status == 200:
+                            ready = True
+                            break
+                except Exception:  # noqa: BLE001
+                    time.sleep(0.2)
+            check("离线判定实例起来了", ready, "")
+            if ready:
+                # --- 场景 A：设备断电（进程被杀，ConnectionRequestURL 也没人听）---
+                a = start_sim(sim_bin, base2, "OFFLINE-A", "-interval", "3s")
+                sims.append(a)
+                d, _ = off_wait("OFFLINE-A", lambda x: x["Online"], 30)
+                check("模拟设备已纳管（上报周期 3 秒）", bool(d and d["Online"]), d and d.get("SerialNumber"))
+
+                a.terminate()
+                a.wait(timeout=5)
+                sims.remove(a)
+
+                # 6 秒超期 + 最多 3 次探测（间隔 1 秒）+ 1 秒宽限，留足余量
+                final, seen_probing = off_wait("OFFLINE-A", lambda x: not x["Online"], 40)
+                check("断电设备最终被判离线", bool(final) and not final["Online"],
+                      final and final.get("Online"))
+                check("判离线前界面上出现过「探测中」", seen_probing, "")
+
+                log = read_log(log_path)
+                probed = log.count("离线探测无响应")
+                check("超期后主动探测了 3 次（不多不少）", probed == 3, "实际 %d 次" % probed)
+                check("日志写明判离线与探测次数",
+                      "设备已标记离线" in log and "probes=3" in log, "")
+
+                # --- 场景 B：设备还活着，只是不按周期上报了（Connection Request 能连上）---
+                # -stall-after 4s：上报两轮之后停报，但保持 Connection Request 监听。
+                b = start_sim(sim_bin, base2, "OFFLINE-B", "-interval", "3s",
+                              "-stall-after", "4s", "-cr-port", "17881")
+                sims.append(b)
+                d, _ = off_wait("OFFLINE-B", lambda x: x["Online"], 30)
+                check("场景 B：模拟设备已纳管", bool(d and d["Online"]), d and d.get("SerialNumber"))
+
+                # 等它超期 → 被探测 → 探测成功、设备回连上报 → 不应该判离线
+                time.sleep(18)
+                final = off_dev("OFFLINE-B")
+                check("停报但能被唤醒的设备：保持在线，不误判离线",
+                      bool(final and final["Online"]), final and final.get("Online"))
+                blog = [ln for ln in read_log(log_path).splitlines() if "serial=OFFLINE-B" in ln]
+                check("对它有探测记录（说明走的是探测而不是直接判离线）",
+                      any("离线探测" in ln for ln in blog), "\n".join(blog[-3:]))
+                check("从没把它标记离线",
+                      not any("设备已标记离线" in ln for ln in blog), "")
+        finally:
+            for p in sims:
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except Exception:  # noqa: BLE001
+                    p.kill()
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                proc.kill()
+            logf.close()
 
     print()
     total = _n["pass"] + _n["fail"]

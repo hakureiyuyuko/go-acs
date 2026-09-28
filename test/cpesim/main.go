@@ -37,6 +37,11 @@ type simulator struct {
 	event       string
 	once        bool
 	interval    time.Duration
+	// stallAfter > 0 时：启动这么多秒之后**不再**做周期上报，但仍然响应
+	// Connection Request 与任务。用来验「设备没按周期报但还活着」这条路径
+	// （ACS 应该探测成功、不判离线）。
+	stallAfter time.Duration
+	stalled    bool
 
 	// 设备身份
 	manufacturer string
@@ -116,6 +121,8 @@ func main() {
 	flag.StringVar(&s.event, "event", "0 BOOTSTRAP", "首次上报的事件码")
 	flag.BoolVar(&s.once, "once", false, "跑完一次会话就退出（适合脚本验收）")
 	flag.DurationVar(&s.interval, "interval", 30*time.Second, "周期上报间隔（0 表示会话结束就退出）")
+	flag.DurationVar(&s.stallAfter, "stall-after", 0,
+		"启动这么多秒后停止周期上报（但仍响应 Connection Request），模拟「周期上报坏了但设备还在」")
 	flag.StringVar(&s.manufacturer, "manufacturer", "SimVendor", "厂商")
 	flag.StringVar(&s.oui, "oui", "001122", "OUI（6 位十六进制）")
 	flag.StringVar(&s.productClass, "product-class", "SimRouter", "产品类")
@@ -181,6 +188,7 @@ func main() {
 	log.Printf("CPE 模拟器启动 serial=%s dm=%s acs=%s 参数=%d 条",
 		s.serial, rootPrefix, s.acsURL, len(s.params))
 
+	startedAt := time.Now()
 	event := s.event
 	for round := 0; ; round++ {
 		if err := s.runSession(event); err != nil {
@@ -191,12 +199,27 @@ func main() {
 			return
 		}
 		// 等下一个周期，或者被 Connection Request 唤醒
+		// -stall-after：到点后不再做周期上报（只等 Connection Request），
+		// 用来验证 ACS 的离线探测确实能区分「设备死了」和「只是不按周期报了」
+		if s.stallAfter > 0 && !s.stalled && time.Since(startedAt) >= s.stallAfter {
+			s.stalled = true
+			log.Printf("到达 -stall-after（%s）：停止周期上报，但仍会响应 Connection Request",
+				s.stallAfter)
+		}
+		wait := s.interval
+		if s.stalled {
+			wait = 24 * time.Hour // 相当于不再周期上报
+		}
 		select {
 		case <-s.crCh:
 			event = "6 CONNECTION REQUEST"
 			log.Printf("收到连接请求，立刻回连（event=%s）", event)
 			time.Sleep(200 * time.Millisecond)
-		case <-time.After(s.interval):
+		case <-time.After(wait):
+			if s.stalled {
+				// 停报状态：不推进运行时长、也不上报，只挂着等 Connection Request
+				continue
+			}
 			s.tick(rootPrefix)
 			event = "2 PERIODIC"
 		}

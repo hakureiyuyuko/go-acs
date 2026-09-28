@@ -129,7 +129,19 @@ type Config struct {
 	ProbeCapabilities   bool          // 首次纳管时是否探测设备能力（如有没有 FTTR 子设备）
 	MaxBodyBytes        int64
 	LogRawSOAP          bool
-	OfflineAfter        time.Duration // 超过多久没上报就算离线
+
+	// 离线判定（见 offline.go）：
+	//   设备没上报周期信息时用 OfflineAfter 兜底；
+	//   上报了周期就按 周期×OfflineProbeFactor 判「没按周期上报」，
+	//   然后主动探测 OfflineProbeAttempts 次，还是没回音才标离线。
+	OfflineAfter         time.Duration
+	OfflineProbe         bool
+	OfflineProbeFactor   int
+	OfflineProbeAttempts int
+	OfflineProbeInterval time.Duration
+	OfflineProbeGrace    time.Duration
+	OfflineProbeMax      time.Duration
+	OfflineCheckInterval time.Duration
 
 	// 主时唤醒（Connection Request）：给设备发一个 HTTP GET，让它立刻回连开一次会话，
 	// 于是排队的任务不用等下一次周期上报。
@@ -177,6 +189,18 @@ func NewServer(st *store.Store, cfg Config, log *slog.Logger) *Server {
 	if cfg.LockWait <= 0 {
 		cfg.LockWait = 30 * time.Second
 	}
+	if cfg.OfflineCheckInterval <= 0 {
+		cfg.OfflineCheckInterval = 30 * time.Second
+	}
+	if cfg.OfflineProbeFactor < 1 {
+		cfg.OfflineProbeFactor = 2
+	}
+	if cfg.OfflineProbeInterval <= 0 {
+		cfg.OfflineProbeInterval = 15 * time.Second
+	}
+	if cfg.OfflineAfter <= 0 {
+		cfg.OfflineAfter = 10 * time.Minute
+	}
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = 4 << 20
 	}
@@ -195,16 +219,16 @@ func NewServer(st *store.Store, cfg Config, log *slog.Logger) *Server {
 func (s *Server) StartJanitor(ctx context.Context) {
 	go s.sess.janitor(ctx, 30*time.Second)
 	go func() {
-		t := time.NewTicker(30 * time.Second)
+		t := time.NewTicker(s.cfg.OfflineCheckInterval)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if n, err := s.store.MarkStaleOffline(s.cfg.OfflineAfter); err == nil && n > 0 {
-					s.log.Info("设备超时未上报，已标记离线", "count", n)
-				}
+				// 在线状态：按设备自己上报的周期判定，超期先主动探测几次，
+				// 还是没回音才标离线（规则与边界见 offline.go）
+				s.SweepOffline(ctx)
 				// 诊断收尾：设备不支持 ping、或者干脆没回报时，
 				// 不能让任务永远挂着 running。
 				if n, err := s.store.FailStaleTasks(TaskDiagnostics, 5*time.Minute,

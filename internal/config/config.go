@@ -36,13 +36,26 @@ type Config struct {
 	Password string
 	Realm    string
 
-	SessionTimeout    time.Duration
-	OfflineAfter      time.Duration
-	MaxBodyBytes      int64
-	LogRawSOAP        bool
-	AutoFetchInfo     bool
-	AutoFetchWiFi     bool
-	ProbeCapabilities bool
+	SessionTimeout time.Duration
+	// OfflineAfter 是「没有周期信息时」的兜底：多久没上报算离线。
+	OfflineAfter time.Duration
+
+	// 离线判定：设备周期上报是它自己说的（PeriodicInformInterval），
+	// 所以「多久没上报算不正常」应该按周期算，而不是拍一个固定分钟数。
+	// 规则：超过 周期×OfflineProbeFactor 没上报 → 主动发 Connection Request 探测，
+	// 最多探测 OfflineProbeAttempts 次；还是没回音 → 标记离线（见 internal/cwmp/offline.go）。
+	OfflineProbe         bool          // 关掉就退回「纯超时」判定
+	OfflineProbeFactor   int           // 周期倍数，默认 2
+	OfflineProbeAttempts int           // 最多探测几次，默认 3
+	OfflineProbeInterval time.Duration // 两次探测的最小间隔
+	OfflineProbeGrace    time.Duration // 最后一次探测后再等多久才判离线
+	OfflineProbeMax      time.Duration // 周期×倍数 的上限（0 = 不设）
+	OfflineCheckInterval time.Duration // 后台多久巡检一次
+	MaxBodyBytes         int64
+	LogRawSOAP           bool
+	AutoFetchInfo        bool
+	AutoFetchWiFi        bool
+	ProbeCapabilities    bool
 
 	// 主动唤醒（Connection Request）：给设备发一个 HTTP GET，让它立刻回连开一次会话，
 	// 于是排队的任务不用等下一次周期上报。
@@ -73,25 +86,32 @@ type Config struct {
 // Load 按「默认值 -> 环境变量 -> 命令行参数」的顺序装配配置。
 func Load(args []string) (*Config, error) {
 	c := &Config{
-		Listen:              ":7547",
-		WebListen:           "",
-		Path:                "/acs",
-		DBPath:              "acs.db",
-		Realm:               "acs",
-		SessionTimeout:      60 * time.Second,
-		OfflineAfter:        10 * time.Minute,
-		MaxBodyBytes:        4 << 20,
-		MaxParamsPerRequest: 200,
-		TaskHistoryLimit:    500,
-		InformHistoryLimit:  500,
-		AutoFetchInfo:       true,
-		AutoFetchWiFi:       true,
-		ProbeCapabilities:   true,
-		ConnReqEnabled:      true,
-		ConnReqUser:         "acs",
-		ConnReqTimeout:      10 * time.Second,
-		LogLevel:            "info",
-		RetentionDays:       30,
+		Listen:               ":7547",
+		WebListen:            "",
+		Path:                 "/acs",
+		DBPath:               "acs.db",
+		Realm:                "acs",
+		SessionTimeout:       60 * time.Second,
+		OfflineAfter:         10 * time.Minute,
+		OfflineProbe:         true,
+		OfflineProbeFactor:   2,
+		OfflineProbeAttempts: 3,
+		OfflineProbeInterval: 15 * time.Second,
+		OfflineProbeGrace:    30 * time.Second,
+		OfflineProbeMax:      0,
+		OfflineCheckInterval: 30 * time.Second,
+		MaxBodyBytes:         4 << 20,
+		MaxParamsPerRequest:  200,
+		TaskHistoryLimit:     500,
+		InformHistoryLimit:   500,
+		AutoFetchInfo:        true,
+		AutoFetchWiFi:        true,
+		ProbeCapabilities:    true,
+		ConnReqEnabled:       true,
+		ConnReqUser:          "acs",
+		ConnReqTimeout:       10 * time.Second,
+		LogLevel:             "info",
+		RetentionDays:        30,
 	}
 
 	// 环境变量
@@ -109,7 +129,22 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&c.User, "user", c.User, "CPE 认证账号（留空不校验）")
 	fs.StringVar(&c.Password, "password", c.Password, "CPE 认证密码")
 	fs.DurationVar(&c.SessionTimeout, "session-timeout", c.SessionTimeout, "会话空闲超时")
-	fs.DurationVar(&c.OfflineAfter, "offline-after", c.OfflineAfter, "多久没上报算离线")
+	fs.DurationVar(&c.OfflineAfter, "offline-after", c.OfflineAfter,
+		"多久没上报算离线（设备没上报周期信息时的兜底）")
+	fs.BoolVar(&c.OfflineProbe, "offline-probe", c.OfflineProbe,
+		"判定离线前主动发 Connection Request 探测；关掉=纯超时")
+	fs.IntVar(&c.OfflineProbeFactor, "offline-probe-factor", c.OfflineProbeFactor,
+		"超过 设备上报周期×这个倍数 没上报就开始探测")
+	fs.IntVar(&c.OfflineProbeAttempts, "offline-probe-attempts", c.OfflineProbeAttempts,
+		"最多探测几次（都没回音才判离线）")
+	fs.DurationVar(&c.OfflineProbeInterval, "offline-probe-interval", c.OfflineProbeInterval,
+		"两次探测之间的最小间隔")
+	fs.DurationVar(&c.OfflineProbeGrace, "offline-probe-grace", c.OfflineProbeGrace,
+		"最后一次探测后再等多久才判离线")
+	fs.DurationVar(&c.OfflineProbeMax, "offline-probe-max", c.OfflineProbeMax,
+		"周期×倍数 的上限（0=不设；设备上报的周期很大时用得上）")
+	fs.DurationVar(&c.OfflineCheckInterval, "offline-check-interval", c.OfflineCheckInterval,
+		"后台多久巡检一次在线状态")
 	fs.Int64Var(&c.MaxBodyBytes, "max-body", c.MaxBodyBytes, "单请求体上限（字节）")
 	fs.BoolVar(&c.LogRawSOAP, "log-soap", c.LogRawSOAP, "是否记录原始 SOAP 报文")
 	fs.BoolVar(&c.AutoFetchInfo, "auto-fetch-info", c.AutoFetchInfo, "Inform 后自动取设备基本信息")
@@ -130,6 +165,18 @@ func Load(args []string) (*Config, error) {
 		return nil, err
 	}
 
+	if c.OfflineProbeFactor < 1 {
+		c.OfflineProbeFactor = 1
+	}
+	if c.OfflineProbeAttempts < 0 {
+		c.OfflineProbeAttempts = 0
+	}
+	if c.OfflineProbeInterval <= 0 {
+		c.OfflineProbeInterval = 15 * time.Second
+	}
+	if c.OfflineCheckInterval <= 0 {
+		c.OfflineCheckInterval = 30 * time.Second
+	}
 	c.Path = normalizePath(c.Path)
 	if c.Listen == "" {
 		return nil, fmt.Errorf("监听地址不能为空")
@@ -197,6 +244,39 @@ func fromEnv(c *Config) {
 	if v := os.Getenv("ACS_OFFLINE_AFTER"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.OfflineAfter = d
+		}
+	}
+	if v := os.Getenv("ACS_OFFLINE_PROBE"); v != "" {
+		c.OfflineProbe = parseBool(v)
+	}
+	if v := os.Getenv("ACS_OFFLINE_PROBE_FACTOR"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.OfflineProbeFactor = n
+		}
+	}
+	if v := os.Getenv("ACS_OFFLINE_PROBE_ATTEMPTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.OfflineProbeAttempts = n
+		}
+	}
+	if v := os.Getenv("ACS_OFFLINE_PROBE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.OfflineProbeInterval = d
+		}
+	}
+	if v := os.Getenv("ACS_OFFLINE_PROBE_GRACE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.OfflineProbeGrace = d
+		}
+	}
+	if v := os.Getenv("ACS_OFFLINE_PROBE_MAX"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.OfflineProbeMax = d
+		}
+	}
+	if v := os.Getenv("ACS_OFFLINE_CHECK_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.OfflineCheckInterval = d
 		}
 	}
 	if v := os.Getenv("ACS_MAX_PARAMS_PER_REQUEST"); v != "" {

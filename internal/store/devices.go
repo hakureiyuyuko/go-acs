@@ -33,6 +33,11 @@ type Device struct {
 	Online           bool
 	ParamCount       int
 
+	// ProbeCount / ProbeAt：离线探测进度（超期没上报后主动发过几次 Connection Request）。
+	// 设备一上报就清零；界面上 ProbeCount > 0 且在线 = 「探测中」。
+	ProbeCount int
+	ProbeAt    time.Time
+
 	// Note 是人工写的备注（如「3 楼会议室」「张工负责」）。
 	// 设备上报不会动它。
 	Note string
@@ -55,22 +60,23 @@ func (d *Device) DisplayName() string {
 const devCols = `id, oui, product_class, serial_number, manufacturer, model_name, data_model_root,
 	software_version, hardware_version, spec_version, provisioning_code, external_ip,
 	conn_request_url, periodic_interval, user_agent, source_ip, last_events,
-	first_seen_at, last_inform_at, last_boot_at, online, note`
+	first_seen_at, last_inform_at, last_boot_at, online, note, probe_count, probe_at`
 
 func scanDevice(sc interface{ Scan(...any) error }) (*Device, error) {
 	var d Device
-	var first, lastInform, lastBoot string
+	var first, lastInform, lastBoot, probeAt string
 	var online int
 	err := sc.Scan(&d.ID, &d.OUI, &d.ProductClass, &d.SerialNumber, &d.Manufacturer, &d.ModelName,
 		&d.DataModelRoot, &d.SoftwareVersion, &d.HardwareVersion, &d.SpecVersion, &d.ProvisioningCode,
 		&d.ExternalIP, &d.ConnRequestURL, &d.PeriodicInterval, &d.UserAgent, &d.SourceIP, &d.LastEvents,
-		&first, &lastInform, &lastBoot, &online, &d.Note)
+		&first, &lastInform, &lastBoot, &online, &d.Note, &d.ProbeCount, &probeAt)
 	if err != nil {
 		return nil, err
 	}
 	d.FirstSeenAt = parseTS(first)
 	d.LastInformAt = parseTS(lastInform)
 	d.LastBootAt = parseTS(lastBoot)
+	d.ProbeAt = parseTS(probeAt)
 	d.Online = online == 1
 	return &d, nil
 }
@@ -147,7 +153,8 @@ func (s *Store) UpsertDevice(in *Device) (int64, bool, error) {
 		manufacturer = ?, model_name = ?, data_model_root = ?, software_version = ?,
 		hardware_version = ?, spec_version = ?, provisioning_code = ?, external_ip = ?,
 		conn_request_url = ?, periodic_interval = ?, user_agent = ?, source_ip = ?,
-		last_events = ?, last_inform_at = ?, last_boot_at = ?, online = 1
+		last_events = ?, last_inform_at = ?, last_boot_at = ?, online = 1,
+		probe_count = 0, probe_at = ''
 		WHERE id = ?`,
 		cur.Manufacturer, cur.ModelName, cur.DataModelRoot, cur.SoftwareVersion,
 		cur.HardwareVersion, cur.SpecVersion, cur.ProvisioningCode, cur.ExternalIP,
@@ -224,18 +231,39 @@ func (s *Store) ListDevices() ([]*Device, error) {
 	return out, nil
 }
 
-// MarkStaleOffline 把超过 maxAge 没上报的设备标记为离线。
-// 返回受影响行数。
-func (s *Store) MarkStaleOffline(maxAge time.Duration) (int64, error) {
-	cutoff := ts(time.Now().Add(-maxAge))
-	res, err := s.db.Exec(
-		`UPDATE devices SET online = 0 WHERE online = 1 AND (last_inform_at = '' OR last_inform_at < ?)`,
-		cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+// RecordProbe 记一次**没成功**的离线探测：累加计数，并记下时间用于节流。
+// 连续 Attempts 次都没成功、再等一个宽限期，就判离线。
+func (s *Store) RecordProbe(id int64, at time.Time) error {
+	_, err := s.db.Exec(
+		`UPDATE devices SET probe_count = probe_count + 1, probe_at = ? WHERE id = ?`, ts(at), id)
+	return err
 }
+
+// RecordProbeOK 记一次**成功**的离线探测：设备应答了 Connection Request，说明它还活着。
+//
+// 计数清零（保持在线），但 probe_at 仍然记下 —— 它是节流用的：探测成功的设备
+// 下一轮要等一个周期阈值才再探，别拿它当病人一直量体温。
+func (s *Store) RecordProbeOK(id int64, at time.Time) error {
+	_, err := s.db.Exec(
+		`UPDATE devices SET probe_count = 0, probe_at = ? WHERE id = ?`, ts(at), id)
+	return err
+}
+
+// ResetProbe 清掉探测进度（设备回话了、或者人工干预）。
+func (s *Store) ResetProbe(id int64) error {
+	_, err := s.db.Exec(
+		`UPDATE devices SET probe_count = 0, probe_at = '' WHERE id = ?`, id)
+	return err
+}
+
+// MarkOffline 把一台设备标记为离线（探测若干次都没回音）。
+func (s *Store) MarkOffline(id int64) error {
+	_, err := s.db.Exec(`UPDATE devices SET online = 0 WHERE id = ?`, id)
+	return err
+}
+
+// Probing 表示「超期没上报、已经发过探测但还没判离线」——界面上显示为「探测中」。
+func (d *Device) Probing() bool { return d.Online && d.ProbeCount > 0 }
 
 // SetDeviceNote 设置设备备注（人工写的，设备上报不会动它）。
 func (s *Store) SetDeviceNote(id int64, note string) error {

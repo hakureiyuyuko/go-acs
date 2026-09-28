@@ -14,6 +14,8 @@
   IPPingDiagnostics、Connection Request（含 HTTP Digest）；不依赖任何厂商私有服务
 - **先探测再显示**：能力探测决定界面出现哪些区块（WAN、FTTR 子设备…），探测不到就整块不显示，不摆空壳
 - **如实呈现设备行为**：能改不能读的参数、异步生效的无线参数、设备没上报的字段（显示 `N/A`），不编数字
+- **在线状态按设备自己的周期判**：超过`上报周期×2`没上报，先主动发 Connection Request 探三次，
+  探不通才判离线（设备断电时 TR-069 不会通知 ACS，只能这样确认）
 - **可运维**：任务队列持久化、一键唤醒设备、重启 / 删除设备、面板账号密码、任务与上报记录的保留上限
 
 ## 截图
@@ -100,16 +102,39 @@ go build -o cpesim ./test/cpesim
 | `-max-params-per-request` | `ACS_MAX_PARAMS_PER_REQUEST` | `200` | 单次 GetParameterValues 带多少个参数名 |
 | `-task-history-limit` | `ACS_TASK_HISTORY_LIMIT` | `500` | 每台设备保留多少条任务记录（`0` = 不限）|
 | `-inform-history-limit` | `ACS_INFORM_HISTORY_LIMIT` | `500` | 每台设备保留多少条上报记录（`0` = 不限）|
+| `-offline-after` | `ACS_OFFLINE_AFTER` | `10m` | 多久没上报算离线（设备**没**上报周期信息时的兜底）|
+| `-offline-probe` | `ACS_OFFLINE_PROBE` | `true` | 判离线前先主动探测；`false` = 退回纯超时 |
+| `-offline-probe-factor` | `ACS_OFFLINE_PROBE_FACTOR` | `2` | 超过 `上报周期 × 这个倍数` 没上报就开始探测 |
+| `-offline-probe-attempts` | `ACS_OFFLINE_PROBE_ATTEMPTS` | `3` | 最多探测几次，都没回音才判离线 |
+| `-offline-probe-interval` | `ACS_OFFLINE_PROBE_INTERVAL` | `15s` | 两次探测之间的间隔 |
+| `-offline-probe-grace` | `ACS_OFFLINE_PROBE_GRACE` | `30s` | 最后一次探测后再等多久才判离线 |
+| `-offline-probe-max` | `ACS_OFFLINE_PROBE_MAX` | `0` | `周期×倍数` 的上限（`0` = 不设；设备上报的周期很大时用得上）|
+| `-offline-check-interval` | `ACS_OFFLINE_CHECK_INTERVAL` | `30s` | 后台多久巡检一次在线状态 |
 | `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | 纳管时自动采集无线概况与主机列表 |
 | `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | 纳管时做一次能力探测（决定界面区块）|
 | `-log-level` | `ACS_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `-log-soap` | `ACS_LOG_SOAP` | `false` | 打印原始 SOAP 报文（排障用）|
 
+### 在线状态怎么判
+
+设备断电时 TR-069 **不会**给 ACS 发任何通知（只有设备主动连上来时 ACS 才知道它活着），
+所以在线状态是按「多久没动静」推出来的，且跟设备自己上报的周期挂钩：
+
+```
+最后一次上报 + 上报周期×2            → 开始主动探测：发 Connection Request
+  探测最多 3 次（间隔 15s）          → 有一次连上：判定设备还活着，保持在线
+  3 次都连不上 + 再等 30s            → 标记离线
+设备没上报周期信息                   → 退回 -offline-after（默认 10 分钟）纯超时
+```
+
+界面上有三种状态：**在线** / **探测中**（超期了、正在探）/ **离线**。
+设备再次上报（含被唤醒后回连）就自动恢复在线并清掉探测进度。
+
 ## 验收
 
 ```bash
 go test ./...                   # 单元测试：协议解析 / 存储 / Web
-bash scripts/verify-s1.sh       # 端到端 293 项：模拟器打真实 HTTP + SOAP，逐条断言
+bash scripts/verify-s1.sh       # 端到端 303 项：模拟器打真实 HTTP + SOAP，逐条断言
 bash scripts/verify-interop.sh  # 与 GenieACS 官方 JS 模拟器互通 8 项
 ```
 

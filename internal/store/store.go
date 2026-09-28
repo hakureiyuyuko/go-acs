@@ -105,6 +105,13 @@ var migrations = []string{
 	// 目前用来存自动生成的 ConnectionRequest 密码 —— 不能每次重启都换，
 	// 否则会把设备上的凭据写来写去。
 	`CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL)`,
+	// 3：离线探测状态 —— 设备超期没上报时我们会主动发 Connection Request 探测，
+	// 这里记「探了几次、上一次什么时候探的」。设备一上报就清零。
+	//
+	// 迁移必须**追加在末尾**：序号对应 PRAGMA user_version，插在中间会让已经升到
+	// 老版本的库跳过这一步（老库 user_version=2，只会执行 #3 及以后）。
+	`ALTER TABLE devices ADD COLUMN probe_count INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE devices ADD COLUMN probe_at TEXT NOT NULL DEFAULT ''`,
 }
 
 // migrate 把库升到当前版本。幂等：已升过的直接跳过。
@@ -221,6 +228,7 @@ func parseTS(s string) time.Time {
 type Stats struct {
 	Devices     int
 	Online      int
+	Probing     int // 正在被探测（超期未上报、已发过 Connection Request）
 	Params      int
 	PendingTask int
 	FailedTask  int
@@ -233,10 +241,11 @@ func (s *Store) Stats() (Stats, error) {
 		SELECT
 			(SELECT COUNT(*) FROM devices),
 			(SELECT COUNT(*) FROM devices WHERE online = 1),
+			(SELECT COUNT(*) FROM devices WHERE online = 1 AND probe_count > 0),
 			(SELECT COUNT(*) FROM device_params),
 			(SELECT COUNT(*) FROM tasks WHERE status = 'pending'),
 			(SELECT COUNT(*) FROM tasks WHERE status = 'failed')`)
-	if err := row.Scan(&st.Devices, &st.Online, &st.Params, &st.PendingTask, &st.FailedTask); err != nil {
+	if err := row.Scan(&st.Devices, &st.Online, &st.Probing, &st.Params, &st.PendingTask, &st.FailedTask); err != nil {
 		return st, err
 	}
 	return st, nil
