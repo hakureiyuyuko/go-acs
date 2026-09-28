@@ -539,6 +539,6 @@ log_redact = true
 
 ## 12. 当前环境备注
 
-- 工作目录 `/path/to/Desktop/ACS` 为空，未初始化 git。
+- 工作目录 `/path/to/ACS` 为空，未初始化 git。
 - 本机（LMDE 7 / Debian 13）**尚未安装 Go**；`apt` 中有 `golang-go`（1.24/1.26 backports）可选。
 - 编码前需先：安装 Go、`git init`、确定模块路径（如 `github.com/xxx/acs`）。

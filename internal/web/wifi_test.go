@@ -287,7 +287,7 @@ func TestDeviceMatches(t *testing.T) {
 	}
 	bands := []WifiBand{{SSID: "LabWifi"}}
 
-	yes := []string{"", "48575443AA00", "0001", "3 楼", "会议室", "huawei", "8145x6n", "00259e", "LabWifi"}
+	yes := []string{"", "48575443AA00", "0001", "3 楼", "会议室", "huawei", "8145x6n", "00259e", "labwifi"}
 	for _, q := range yes {
 		if !deviceMatches(d, bands, q) {
 			t.Errorf("应命中: %q", q)
