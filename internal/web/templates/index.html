@@ -5,12 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>设备列表 · 轻量 TR-069 ACS</title>
 <link rel="stylesheet" href="/static/style.css">
+<script>
+  // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
+  (function () {
+    try {
+      var t = localStorage.getItem("theme");
+      if (t !== "light" && t !== "dark") {
+        t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches)
+          ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
 </head>
 <body>
 <header class="top">
   <h1>轻量 TR-069 ACS</h1>
   <div class="spacer"></div>
   <span class="hint">CWMP 端点 <span class="mono">/acs</span></span>
+  <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
 </header>
 
 <main>
@@ -124,5 +140,6 @@
   </div>
   {{end}}
 </main>
+<script src="/static/app.js"></script>
 </body>
 </html>

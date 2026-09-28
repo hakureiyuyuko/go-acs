@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,8 @@ type Controller interface {
 	FetchWiFi(deviceID int64) error
 	// FetchNames 只枚举参数名不取值（浏览参数树）。
 	FetchNames(deviceID int64, path string, nextLevel bool) error
+	// Diagnose 下发一次 ping 诊断。
+	Diagnose(deviceID int64, host string, count int) error
 	// SetParameters 下发 SetParameterValues（改 WiFi 名字/密码/开关等）。
 	SetParameters(deviceID int64, params []store.Param) error
 }
@@ -73,6 +76,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	mux.HandleFunc("GET /devices/{id}", s.handleDevice)
 	mux.HandleFunc("POST /devices/{id}/refresh", s.handleRefresh)
 	mux.HandleFunc("POST /devices/{id}/note", s.handleDeviceNote)
+	mux.HandleFunc("POST /devices/{id}/diagnose", s.handleDiagnose)
 	mux.HandleFunc("POST /devices/{id}/fetch", s.handleFetch)
 	mux.HandleFunc("POST /devices/{id}/wifi", s.handleWifi)
 	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", s.handleWifiEdit)
@@ -158,6 +162,34 @@ func deviceMatches(d *store.Device, bands []WifiBand, q string) bool {
 	return false
 }
 
+// diagTaskKind 是 ping 诊断的任务类型，必须与 cwmp.TaskDiagnostics 一致。
+const diagTaskKind = "Diagnostics"
+
+// handleDiagnose 下发一次 ping 诊断。
+func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	back := "/devices/" + strconv.FormatInt(id, 10)
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, back+"?msg="+url.QueryEscape("表单解析失败")+"&err=1", http.StatusSeeOther)
+		return
+	}
+	host := strings.TrimSpace(r.Form.Get("host"))
+	count, _ := strconv.Atoi(strings.TrimSpace(r.Form.Get("count")))
+	if s.ctrl == nil {
+		http.Redirect(w, r, back+"?msg="+url.QueryEscape("未接入控制接口")+"&err=1", http.StatusSeeOther)
+		return
+	}
+	if err := s.ctrl.Diagnose(id, host, count); err != nil {
+		http.Redirect(w, r, back+"?msg="+url.QueryEscape(err.Error())+"&err=1", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, back+"?msg="+url.QueryEscape("诊断已入队，会在设备下次上报时下发（设备跑完 ping 后会再回报一次结果）"), http.StatusSeeOther)
+}
+
 // handleDeviceNote 保存设备备注。
 func (s *Server) handleDeviceNote(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -220,15 +252,35 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		wifiParams = map[int64][]store.Param{}
 	}
 
+	var diag *store.Task
+	diagHost := ""
+	for _, t := range tasks {
+		if t.Kind == diagTaskKind {
+			diag = t // tasks 按 ID 倒序，第一条就是最近一次
+			var p struct {
+				Host string `json:"host"`
+			}
+			if json.Unmarshal([]byte(t.Payload), &p) == nil {
+				diagHost = p.Host
+			}
+			break
+		}
+	}
+
 	data := map[string]any{
-		"Device":  d,
-		"Basic":   basicInfo(d, params),
-		"Params":  params,
-		"Tasks":   tasks,
-		"Informs": informs,
-		"Pending": pending,
-		"WiFi":    WifiOverview(wifiParams[id]),
-		"Path":    "/devices/" + strconv.FormatInt(id, 10),
+		"Device":      d,
+		"Diag":        diag,
+		"DiagHost":    diagHost,
+		"DiagRunning": diag != nil && (diag.Status == store.TaskRunning || diag.Status == store.TaskPending),
+		"Notice":      strings.TrimSpace(r.URL.Query().Get("msg")),
+		"NoticeErr":   r.URL.Query().Get("err") == "1",
+		"Basic":       basicInfo(d, params),
+		"Params":      params,
+		"Tasks":       tasks,
+		"Informs":     informs,
+		"Pending":     pending,
+		"WiFi":        WifiOverview(wifiParams[id]),
+		"Path":        "/devices/" + strconv.FormatInt(id, 10),
 		// 表单默认值：按设备的数据模型根猜一个 WiFi 路径（只是默认值，用户可改）
 		"DefaultPath": defaultFetchPath(d),
 	}

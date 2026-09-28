@@ -5,12 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Device.DisplayName}} · 轻量 TR-069 ACS</title>
 <link rel="stylesheet" href="/static/style.css">
+<script>
+  // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
+  (function () {
+    try {
+      var t = localStorage.getItem("theme");
+      if (t !== "light" && t !== "dark") {
+        t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches)
+          ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
 </head>
 <body>
 <header class="top">
   <h1>轻量 TR-069 ACS</h1>
   <div class="spacer"></div>
   <span class="hint">CWMP 端点 <span class="mono">/acs</span></span>
+  <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
 </header>
 
 <main>
@@ -34,6 +50,10 @@
     任务会在设备下次 Inform（或主动连接）时下发；设备离线时任务会一直排队等待。
   </div>
 
+  {{if .Notice}}
+  <div class="notice {{if not .NoticeErr}}ok{{end}}">{{.Notice}}</div>
+  {{end}}
+
   <h2>备注</h2>
   <form method="post" action="/devices/{{.Device.ID}}/note" class="searchbar">
     <input class="filter" style="width:560px" type="text" name="note" value="{{.Device.Note}}"
@@ -50,6 +70,28 @@
     <div class="row"><div class="k">{{.K}}</div><div class="v mono">{{.V}}</div></div>
     {{end}}
   </div>
+
+  <h2>网络诊断（Ping）</h2>
+  <form method="post" action="/devices/{{.Device.ID}}/diagnose" class="searchbar">
+    <input class="filter" style="width:320px" type="text" name="host" value="{{.DiagHost}}"
+           placeholder="IP 或域名，例如 www.baidu.com">
+    <input class="filter" style="width:96px" type="number" name="count" value="4" min="1" max="20">
+    <span class="hint">个包</span>
+    <button type="submit">诊断</button>
+    <span class="hint">让设备自己发 ICMP（标准的 IPPingDiagnostics），不用我们代劳</span>
+  </form>
+  {{if .Diag}}
+  <div class="diagbox">
+    <div class="diaghead">
+      <span class="badge {{.Diag.Status}}">{{.Diag.Status}}</span>
+      <span class="hint">任务 #{{.Diag.ID}} · 于 {{fmtTime .Diag.CreatedAt}} 发起</span>
+      {{if .DiagRunning}}<span class="hint">· 诊断进行中，等设备回报…</span>{{end}}
+    </div>
+    <pre class="diagout">{{if .Diag.Result}}{{.Diag.Result}}{{else}}（还没有结果）{{end}}</pre>
+  </div>
+  {{else}}
+  <div class="hint">还没跑过诊断。填个 IP 或域名，点「诊断」就行。</div>
+  {{end}}
 
   <h2>无线（WiFi）</h2>
   <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px">

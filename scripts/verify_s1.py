@@ -119,6 +119,21 @@ def run_chrome_dom(chrome, url):
         return None
 
 
+def run_sim_bg(workdir, seconds, *extra):
+    """跑模拟器若干秒（不加 -once），用于需要**多轮会话**的场景。
+
+    比如异步 ping 诊断：设备第一轮收到请求，第二轮才带事件 8 把结果报回来。
+    """
+    cmd = [workdir + "/cpesim", "-acs", CWMP] + list(extra)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds)
+        return p.returncode == 0, (p.stdout + p.stderr)
+    except subprocess.TimeoutExpired as e:
+        raw = e.stdout or ""
+        out = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        return True, out + "\n（按预期超时结束）"
+
+
 def wait_tasks_done(device_id, kinds=("SetParameterValues",), timeout=150):
     """等某类任务全部结束（或超时）。"""
     deadline = time.time() + timeout
@@ -552,6 +567,15 @@ def main():
                     vis = sum(1 for r in rows if "display: none" not in r) - 1
                     check("任务历史一页不超过 20 行", 0 <= vis <= 20, vis)
 
+                # 主题按钮：JS 会在加载后把标签写成“切换到日间/夜间”。
+                # 这顺带证明了 app.js 真的执行了（而不只是被引用了）。
+                mb = re.search(r'<button id="theme-toggle"[^>]*>([^<]*)</button>', dom)
+                check("主题按钮被 JS 初始化了",
+                      mb is not None and "切换到" in mb.group(1),
+                      mb.group(1) if mb else "没找到按钮")
+                check("根元素写入了 data-theme",
+                      'data-theme="light"' in dom or 'data-theme="dark"' in dom)
+
     print("== 20. 浏览参数树（只枚举名字，不取值）==")
     if did:
         st, body = post_json(f"/api/devices/{did}/names",
@@ -577,7 +601,50 @@ def main():
               len(nl) > 0 and all("then_fetch" not in t["Payload"] for t in nl),
               [t["Payload"][:70] for t in nl[:2]])
 
-    print("== 21. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 21. ping 诊断 ==")
+    if did:
+        sim = ("-serial", "VERIFY098", "-oui", "001122")
+
+        st, loc = post_form(f"/devices/{did}/diagnose", {"host": "www.baidu.com", "count": "3"})
+        check("发起诊断返回 303", st == 303, st)
+        ok, out = run_sim(workdir, *sim, "-once", "-event", "2 PERIODIC")
+        check("诊断会话成功", ok, out[-160:])
+        full = wait_tasks_done(did, kinds=("Diagnostics",))
+        dg = sorted([t for t in full["tasks"] if t["Kind"] == "Diagnostics"], key=lambda x: x["ID"])
+        d0 = dg[-1]
+        check("诊断任务已完成", d0["Status"] == "done", d0["Status"])
+        check("结果是 PING 汇总", "PING 目标 www.baidu.com" in d0["Result"], d0["Result"][:90])
+        check("请求的包数被用上了（3 个）", "发送包 3" in d0["Result"], d0["Result"][:90])
+        check("含延时数据", "ms" in d0["Result"], d0["Result"][:90])
+
+        # 参数校验
+        st, loc = post_form(f"/devices/{did}/diagnose", {"host": "", "count": "3"})
+        check("空目标被拒并回提示", st == 303 and "err=1" in (loc or ""), loc)
+        st, loc = post_form(f"/devices/{did}/diagnose", {"host": "a b<c>", "count": "3"})
+        check("非法字符目标被拒", st == 303 and "err=1" in (loc or ""), loc)
+
+        # 防重复：排队/进行中的诊断未结束前不允许再发起
+        st, _ = post_form(f"/devices/{did}/diagnose", {"host": "1.1.1.1", "count": "2"})
+        check("再次发起诊断返回 303", st == 303, st)
+        st, loc = post_form(f"/devices/{did}/diagnose", {"host": "2.2.2.2", "count": "2"})
+        check("已有诊断在排队时不允许重复发起", "err=1" in (loc or ""), loc)
+
+        # 异步路径：设备第一轮收请求、第二轮才带事件 8 回报结果
+        ok, out = run_sim_bg(workdir, 12, *sim, "-interval", "2s", "-diag-delay")
+        check("异步诊断的多轮会话跑起来了", ok, out[-180:])
+        full = wait_tasks_done(did, kinds=("Diagnostics",))
+        dg = sorted([t for t in full["tasks"] if t["Kind"] == "Diagnostics"], key=lambda x: x["ID"])
+        d1 = dg[-1]
+        check("异步诊断也完成了（等设备下次会话回报）", d1["Status"] == "done", d1["Status"])
+        check("异步诊断次数正确（2 个）", "发送包 2" in d1["Result"], d1["Result"][:90])
+
+    print("== 22. 三个页面都要加载 app.js（分页/搜索/主题都靠它）==")
+    if did:
+        for p in ("/", f"/devices/{did}", f"/devices/{did}/wifi/1"):
+            st, h = get(p)
+            check(f"{p} 引入了 app.js", "static/app.js" in h)
+
+    print("== 23. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 

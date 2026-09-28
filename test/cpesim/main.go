@@ -58,6 +58,14 @@ type simulator struct {
 	// 接受写入（回 Status=0），但**读回永远是空串**。
 	// 真机上华为的 PreSharedKey.1.KeyPassphrase 就是这样。
 	writeOnly []string
+
+	// diagDelay 模拟「设备异步跑 ping」：收到 DiagnosticsState=Requested 时不当场出结果，
+	// 而是在**下一次会话**的 Inform 里带事件 8 DIAGNOSTICS COMPLETE 一起报回来。
+	// 真机就是这个行为（所以 ACS 不能指望在同一会话里拿到结果）。
+	diagDelay bool
+
+	// pendingDiag 记录“已经开始跑、等着下次会话报结果”的诊断
+	pendingDiag string
 }
 
 func main() {
@@ -67,6 +75,7 @@ func main() {
 	var crPort int
 	var ignoreSet string
 	var writeOnly string
+	var diagDelay bool
 	flag.StringVar(&s.acsURL, "acs", "http://127.0.0.1:7547/acs", "ACS 的 CWMP 地址")
 	flag.StringVar(&s.user, "user", "", "CPE→ACS 认证账号")
 	flag.StringVar(&s.pass, "pass", "", "CPE→ACS 认证密码")
@@ -83,7 +92,9 @@ func main() {
 	flag.IntVar(&crPort, "cr-port", 0, "ConnectionRequest 监听端口（0 = 随机）")
 	flag.StringVar(&ignoreSet, "ignore-set", "", "模拟“接受写入但不生效”的参数名子串（逗号分隔）")
 	flag.StringVar(&writeOnly, "write-only", "", "模拟“能改不能读”的参数名子串（逗号分隔，写接受但读回为空）")
+	flag.BoolVar(&diagDelay, "diag-delay", false, "ping 诊断改为异步：下次会话才出结果并带事件 8 DIAGNOSTICS COMPLETE")
 	flag.Parse()
+	s.diagDelay = diagDelay
 
 	for _, part := range strings.Split(ignoreSet, ",") {
 		if p := strings.TrimSpace(part); p != "" {
@@ -231,6 +242,22 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(wlan+"5.TotalAssociations", "0", "unsignedInt")
 		set(wlan+"5.X_HW_RFBand", "5GHz", "string")
 	}
+
+	// ping 诊断对象（TR-069 标准的 IPPingDiagnostics）。
+	// 真机上两台光猫都有这 12 个参数，字段名与标准完全一致。
+	ping := root + "IPPingDiagnostics."
+	set(ping+"DiagnosticsState", "None", "string")
+	set(ping+"Host", "", "string")
+	set(ping+"NumberOfRepetitions", "4", "unsignedInt")
+	set(ping+"Timeout", "10000", "unsignedInt")
+	set(ping+"DataBlockSize", "56", "unsignedInt")
+	set(ping+"DSCP", "0", "unsignedInt")
+	set(ping+"Interface", "", "string")
+	set(ping+"SuccessCount", "0", "unsignedInt")
+	set(ping+"FailureCount", "0", "unsignedInt")
+	set(ping+"MinimumResponseTime", "0", "unsignedInt")
+	set(ping+"AverageResponseTime", "0", "unsignedInt")
+	set(ping+"MaximumResponseTime", "0", "unsignedInt")
 }
 
 // startConnectionRequestServer 起一个假的 CPE 侧 HTTP 服务。
@@ -280,6 +307,19 @@ func localIPFor(acsURL string) string {
 // ---------- 会话流程 ----------
 
 func (s *simulator) runSession(event string) error {
+	// 上一轮请求过的 ping 诊断：真机是跑完之后**单独发一次 Inform** 把结果带回来的，
+	// 所以这里把结果补上，并把事件改成 8 DIAGNOSTICS COMPLETE。
+	if s.pendingDiag != "" {
+		prefix := s.pendingDiag
+		s.pendingDiag = ""
+		n := 4
+		if v, err := strconv.Atoi(s.params[prefix+"NumberOfRepetitions"]); err == nil && v > 0 {
+			n = v
+		}
+		s.finishDiagnostic(prefix, n)
+		event = "8 DIAGNOSTICS COMPLETE"
+	}
+
 	// 1) Inform
 	resp, status, err := s.post(s.envelope(randID(), s.informBody(event)))
 	if err != nil {
@@ -514,9 +554,55 @@ func (s *simulator) setParameterValues(m *cwmp.Node) string {
 		log.Printf("  设置 %s = %s", v.Name, v.Value)
 		s.params[v.Name] = v.Value
 		s.types[v.Name] = v.Type
+
+		// ping 诊断：标准行为是把 DiagnosticsState 置 Requested，设备自己去跑
+		if strings.HasSuffix(v.Name, "IPPingDiagnostics.DiagnosticsState") && v.Value == "Requested" {
+			s.startDiagnostic(v.Name)
+		}
 	}
 	_ = key
 	return `<cwmp:SetParameterValuesResponse><Status>0</Status></cwmp:SetParameterValuesResponse>`
+}
+
+// startDiagnostic 响应一次 ping 诊断请求。
+//
+// 同步模式（默认）：当场算出结果，DiagnosticsState 直接置 Complete ——
+// ACS 在同一次会话里读就能拿到，流程最短。
+// 异步模式（-diag-delay）：保持 Requested，下次会话再置 Complete 并带事件 8，
+// 这才是真机的节奏。
+func (s *simulator) startDiagnostic(name string) {
+	prefix := strings.TrimSuffix(name, "DiagnosticsState")
+	host := s.params[prefix+"Host"]
+	n := 4
+	if v, err := strconv.Atoi(s.params[prefix+"NumberOfRepetitions"]); err == nil && v > 0 {
+		n = v
+	}
+	log.Printf("开始 ping 诊断：host=%s count=%d（diag-delay=%v）", host, n, s.diagDelay)
+	if s.diagDelay {
+		s.pendingDiag = prefix
+		return
+	}
+	s.finishDiagnostic(prefix, n)
+}
+
+// finishDiagnostic 把诊断结果写进参数（模拟 ping 已完成）。
+//
+// 为了让“成功/失败/延时可重现”，结果由 host 的字符和哈希决定，而不是随机数 ——
+// 验收脚本需要能断言具体数字。
+func (s *simulator) finishDiagnostic(prefix string, n int) {
+	fail := 0
+	if strings.Contains(prefix, "never") || s.params[prefix+"Host"] == "" {
+		fail = n
+	}
+	ok := n - fail
+	rtt := 10 + len(s.params[prefix+"Host"])%20 // 10..29，可重现
+	s.params[prefix+"DiagnosticsState"] = "Complete"
+	s.params[prefix+"SuccessCount"] = strconv.Itoa(ok)
+	s.params[prefix+"FailureCount"] = strconv.Itoa(fail)
+	s.params[prefix+"MinimumResponseTime"] = strconv.Itoa(rtt)
+	s.params[prefix+"AverageResponseTime"] = strconv.Itoa(rtt)
+	s.params[prefix+"MaximumResponseTime"] = strconv.Itoa(rtt)
+	log.Printf("诊断完成：host=%s 成功=%d 失败=%d rtt=%dms", s.params[prefix+"Host"], ok, fail, rtt)
 }
 
 func (s *simulator) shouldIgnore(name string) bool {

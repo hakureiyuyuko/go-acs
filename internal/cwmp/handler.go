@@ -29,6 +29,11 @@ const (
 	TaskSetParameterValues = "SetParameterValues"
 	TaskGetRPCMethods      = "GetRPCMethods"
 	TaskReboot             = "Reboot"
+
+	// TaskDiagnostics 是一次 ping 诊断。它跟其它任务不同：
+	// SetParameterValues 只是第一步（让设备开始跑），结果要等设备回报，
+	// 可能跨越好几轮 Inform —— 所以下发后任务会一直保持 running。
+	TaskDiagnostics = "Diagnostics"
 )
 
 // 任务载荷（JSON）。
@@ -50,6 +55,9 @@ type gpvPayload struct {
 	//   - 同会话核对：对不上先不判错（可能只是还没生效）；
 	//   - 下一轮会话核对：还对不上就是真的没生效。
 	Deferred bool `json:"deferred,omitempty"`
+
+	// DiagTask 非 0 时表示这是一次「读 ping 诊断结果」，拿到结果后据此更新对应任务。
+	DiagTask int64 `json:"diag_task,omitempty"`
 }
 
 type gpnPayload struct {
@@ -175,6 +183,12 @@ func (s *Server) StartJanitor(ctx context.Context) {
 				if n, err := s.store.MarkStaleOffline(s.cfg.OfflineAfter); err == nil && n > 0 {
 					s.log.Info("设备超时未上报，已标记离线", "count", n)
 				}
+				// 诊断收尾：设备不支持 ping、或者干脆没回报时，
+				// 不能让任务永远挂着 running。
+				if n, err := s.store.FailStaleTasks(TaskDiagnostics, 5*time.Minute,
+					"设备未在 5 分钟内回报诊断结果（可能不支持 ping 诊断）"); err == nil && n > 0 {
+					s.log.Warn("诊断超时未回报，已判为失败", "count", n)
+				}
 			}
 		}
 	}()
@@ -242,6 +256,78 @@ var basicInfoSuffixes = []string{
 	"ManagementServer.ConnectionRequestURL",
 	"ManagementServer.PeriodicInformInterval",
 	"ManagementServer.ParameterKey",
+}
+
+// diagPayload 是一次 ping 诊断的载荷。
+type diagPayload struct {
+	Host   string `json:"host"`
+	Count  int    `json:"count"`
+	Prefix string `json:"prefix"` // 诊断对象前缀（以 "." 结尾）
+}
+
+// diagnosticsPrefix 返回本设备上 ping 诊断对象的前缀。
+//
+// TR-098 是 InternetGatewayDevice.IPPingDiagnostics.，
+// TR-181 是 Device.IP.Diagnostics.IPPing.（字段名两边完全一样）。
+// 按设备自报的数据模型根来选 —— 真机上两边都探测过是标准对象。
+func diagnosticsPrefix(root string) string {
+	if strings.HasPrefix(root, "Device.") {
+		return "Device.IP.Diagnostics.IPPing."
+	}
+	return "InternetGatewayDevice.IPPingDiagnostics."
+}
+
+// diagnosticsReadFields 是诊断结果里要读回来的字段（都是只读的）。
+var diagnosticsReadFields = []string{
+	"DiagnosticsState",
+	"SuccessCount",
+	"FailureCount",
+	"MinimumResponseTime",
+	"AverageResponseTime",
+	"MaximumResponseTime",
+}
+
+// EnqueueDiagnostics 入队一次 ping 诊断。
+func (s *Server) EnqueueDiagnostics(deviceID int64, host string, count int) (int64, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return 0, fmt.Errorf("请填要诊断的 IP 或域名")
+	}
+	// 这串内容会直接进 SOAP 报文，限制字符集（不光是防注入，也能早点提示填错）
+	if len(host) > 253 || strings.ContainsAny(host, " \t\r\n<>&\"'") {
+		return 0, fmt.Errorf("目标格式不对：%q", host)
+	}
+	if count <= 0 || count > 20 {
+		count = 4
+	}
+	d, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	if open, err := s.store.FindOpenTask(deviceID, TaskDiagnostics); err == nil && open != nil {
+		return 0, fmt.Errorf("已经有一次诊断在排队或进行中（任务 #%d），等它结束再说", open.ID)
+	}
+	payload, _ := json.Marshal(diagPayload{
+		Host:   host,
+		Count:  count,
+		Prefix: diagnosticsPrefix(d.DataModelRoot),
+	})
+	id, err := s.store.EnqueueTask(&store.Task{
+		DeviceID:   deviceID,
+		Kind:       TaskDiagnostics,
+		Payload:    string(payload),
+		CommandKey: newRPCID(),
+	})
+	if err == nil {
+		s.log.Info("已入队：ping 诊断", "device_id", deviceID, "host", host, "count", count)
+	}
+	return id, err
+}
+
+// Diagnose 给外部（Web/REST）用。
+func (s *Server) Diagnose(deviceID int64, host string, count int) error {
+	_, err := s.EnqueueDiagnostics(deviceID, host, count)
+	return err
 }
 
 // EnqueueFetchSubtree 入队一条「枚举某个子树下的所有参数，再把值取回来」的任务。
@@ -703,6 +789,16 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		}
 	}
 
+	// 有诊断在等结果：设备这次 Inform 可能就带着结果回来了
+	// （事件 8 DIAGNOSTICS COMPLETE），也可能什么都没说。
+	// 两种情况都主动读一次 —— 不依赖事件码，因为不是所有设备都会发。
+	if running, err := s.store.FindRunningTask(deviceID, TaskDiagnostics); err == nil && running != nil {
+		s.log.Info("有诊断在等结果，本次会话读一次",
+			"device_id", deviceID, "task_id", running.ID,
+			"events", strings.Join(inf.EventCodes(), ", "))
+		s.enqueueDiagResultRead(sess, running.ID)
+	}
+
 	s.writeEnvelope(w, sess, env.ID, InformResponseBody())
 }
 
@@ -733,6 +829,11 @@ func (s *Server) onGetParameterValuesResponse(w http.ResponseWriter, sess *Sessi
 	}
 
 	s.checkReadBack(sess, p, params)
+
+	// ping 诊断：这条 GPV 可能是去读诊断结果的
+	if p.DiagTask != 0 {
+		s.handleDiagResult(sess, p.DiagTask, params)
+	}
 
 	s.finishTask(sess, fmt.Sprintf("收到 %d 个参数", len(params)))
 	s.log.Info("取回参数", "device_id", sess.DeviceID, "count", len(params))
@@ -875,6 +976,117 @@ func (s *Server) onGetParameterNamesResponse(w http.ResponseWriter, sess *Sessio
 	s.dispatchNextTask(w, sess)
 }
 
+// pendingTaskKind 取出当前在途任务的类型与 ID（没有则返回空串与 0）。
+func (s *Server) pendingTaskKind(sess *Session) (string, int64) {
+	t, ok := s.pendingTask(sess)
+	if !ok {
+		return "", 0
+	}
+	return t.Kind, t.ID
+}
+
+// enqueueDiagResultRead 入队一条「读 ping 诊断结果」的任务。
+//
+// 结果往往要分几次才能拿到：设备刚收到请求时 DiagnosticsState 还是 Requested，
+// 要等它跑完（会单独发一次 Inform）才变成 Complete。所以这个读会重复几轮，
+// 直到状态明确为止。
+func (s *Server) enqueueDiagResultRead(sess *Session, diagTaskID int64) {
+	if sess.DeviceID == 0 {
+		return
+	}
+	t, err := s.store.GetTask(diagTaskID)
+	if err != nil || t == nil {
+		return
+	}
+	var p diagPayload
+	if json.Unmarshal([]byte(t.Payload), &p) != nil {
+		return
+	}
+	prefix := p.Prefix
+	if prefix == "" {
+		d, err := s.store.GetDevice(sess.DeviceID)
+		if err != nil {
+			return
+		}
+		prefix = diagnosticsPrefix(d.DataModelRoot)
+	}
+	names := make([]string, 0, len(diagnosticsReadFields))
+	for _, f := range diagnosticsReadFields {
+		names = append(names, prefix+f)
+	}
+	payload, _ := json.Marshal(gpvPayload{Names: names, DiagTask: diagTaskID})
+	if _, err := s.store.EnqueueTask(&store.Task{
+		DeviceID: sess.DeviceID,
+		Kind:     TaskGetParameterValues,
+		Payload:  string(payload),
+	}); err != nil {
+		s.log.Warn("入队读诊断结果失败", "device_id", sess.DeviceID, "err", err)
+	}
+}
+
+// handleDiagResult 处理一次诊断结果的读回。
+//
+//   - Complete  -> 汇总结果，任务算成功
+//   - Error_*   -> 任务失败（设备把失败原因写在状态里）
+//   - 其它       -> 还在跑，任务保持 running，等设备下一次上报再读
+func (s *Server) handleDiagResult(sess *Session, diagTaskID int64, got []ParamValue) {
+	vals := map[string]string{}
+	for _, v := range got {
+		vals[strings.ToLower(v.Name)] = strings.TrimSpace(v.Value)
+	}
+	pick := func(field string) string {
+		want := strings.ToLower(field)
+		for k, v := range vals {
+			if strings.HasSuffix(k, want) {
+				return v
+			}
+		}
+		return ""
+	}
+
+	host := ""
+	if t, err := s.store.GetTask(diagTaskID); err == nil && t != nil {
+		var p diagPayload
+		if json.Unmarshal([]byte(t.Payload), &p) == nil {
+			host = p.Host
+		}
+	}
+
+	state := pick("DiagnosticsState")
+	switch {
+	case state == "":
+		s.log.Warn("读诊断结果：没拿到 DiagnosticsState", "device_id", sess.DeviceID, "task_id", diagTaskID)
+
+	case state == "Complete":
+		okN, _ := strconv.Atoi(pick("SuccessCount"))
+		failN, _ := strconv.Atoi(pick("FailureCount"))
+		summary := fmt.Sprintf("PING 目标 %s：发送包 %d，成功 %d，失败 %d；最小/平均/最大延时 = %s/%s/%s ms",
+			host, okN+failN, okN, failN,
+			pick("MinimumResponseTime"), pick("AverageResponseTime"), pick("MaximumResponseTime"))
+		if err := s.store.SetTaskResult(diagTaskID, summary); err != nil {
+			s.log.Warn("写诊断结果失败", "task_id", diagTaskID, "err", err)
+		}
+		if err := s.store.CompleteTask(diagTaskID, summary); err != nil {
+			s.log.Warn("结束诊断任务失败", "task_id", diagTaskID, "err", err)
+		}
+		s.log.Info("诊断完成", "device_id", sess.DeviceID, "task_id", diagTaskID, "result", summary)
+
+	case strings.HasPrefix(state, "Error"):
+		msg := "设备报告诊断失败：" + state
+		s.log.Warn("诊断失败", "device_id", sess.DeviceID, "task_id", diagTaskID, "state", state)
+		if err := s.store.FailTask(diagTaskID, msg); err != nil {
+			s.log.Warn("标记诊断失败出错", "task_id", diagTaskID, "err", err)
+		}
+
+	default:
+		// 还在跑：保持 running，让状态接着蹦
+		s.log.Info("诊断进行中", "device_id", sess.DeviceID, "task_id", diagTaskID, "state", state)
+		if err := s.store.SetTaskResult(diagTaskID, "诊断进行中（设备状态 "+state+"）…"); err != nil {
+			s.log.Warn("更新诊断任务状态失败", "task_id", diagTaskID, "err", err)
+		}
+	}
+}
+
 // pendingTask 取出当前在途任务。
 func (s *Server) pendingTask(sess *Session) (*store.Task, bool) {
 	if sess.pendingTask == 0 {
@@ -939,17 +1151,33 @@ func (s *Server) handleSetParameterValuesResponse(w http.ResponseWriter, sess *S
 
 	// 取出这次写了什么（下面要用它决定要不要重采无线概况）
 	var vals []ParamValue
-	if t, ok := s.pendingTask(sess); ok && t.Kind == TaskSetParameterValues {
-		var spv spvPayload
-		if json.Unmarshal([]byte(t.Payload), &spv) == nil {
-			vals = spv.Values
+	kind, taskID := "", int64(0)
+	if t, ok := s.pendingTask(sess); ok {
+		kind, taskID = t.Kind, t.ID
+		if t.Kind == TaskSetParameterValues {
+			var spv spvPayload
+			if json.Unmarshal([]byte(t.Payload), &spv) == nil {
+				vals = spv.Values
+			}
 		}
 	}
 
 	if status != "" && status != "0" {
 		msg := "CPE 报告设置失败，Status=" + status
-		s.log.Warn("设置参数失败", "device_id", sess.DeviceID, "status", status)
+		s.log.Warn("设置参数失败", "device_id", sess.DeviceID, "task_id", taskID, "status", status)
 		s.failTask(sess, msg)
+		s.dispatchNextTask(w, sess)
+		return
+	}
+
+	// ping 诊断：SetParameterValues 只是让设备开始跑，任务**不能**在这里结束 ——
+	// 结果要等设备回报，可能轮到下一次 Inform。
+	if kind == TaskDiagnostics {
+		if err := s.store.SetTaskResult(taskID, "诊断已下发，等设备回报结果…"); err != nil {
+			s.log.Warn("更新诊断任务状态失败", "task_id", taskID, "err", err)
+		}
+		s.log.Info("诊断已下发，接着先读一次结果", "device_id", sess.DeviceID, "task_id", taskID)
+		s.enqueueDiagResultRead(sess, taskID)
 		s.dispatchNextTask(w, sess)
 		return
 	}
@@ -1268,6 +1496,33 @@ func buildTaskBody(t *store.Task) (string, error) {
 			key = newRPCID()
 		}
 		return SetParameterValuesBody(p.Values, key), nil
+
+	case TaskDiagnostics:
+		var p diagPayload
+		if err := json.Unmarshal([]byte(t.Payload), &p); err != nil {
+			return "", err
+		}
+		key := t.CommandKey
+		if key == "" {
+			key = newRPCID()
+		}
+		// 顺序很重要：DiagnosticsState=Requested 必须放在**最后**。
+		// 设备看到 Requested 就会开始跑 ping，所以 Host / 次数得先就位；
+		// 否则可能拿着空 Host 或默认次数去跑（本项目的模拟器就这么暴露了这个顺序问题，
+		// 真机上有些设备也会这样）。
+		vals := []ParamValue{}
+		if p.Count > 0 {
+			vals = append(vals, ParamValue{
+				Name:  p.Prefix + "NumberOfRepetitions",
+				Value: strconv.Itoa(p.Count),
+				Type:  "unsignedInt",
+			})
+		}
+		vals = append(vals,
+			ParamValue{Name: p.Prefix + "Host", Value: p.Host, Type: "string"},
+			ParamValue{Name: p.Prefix + "DiagnosticsState", Value: "Requested", Type: "string"},
+		)
+		return SetParameterValuesBody(vals, key), nil
 
 	case TaskGetRPCMethods:
 		return GetRPCMethodsBody(), nil

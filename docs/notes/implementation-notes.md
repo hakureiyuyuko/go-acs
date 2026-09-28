@@ -391,6 +391,78 @@ POST /api/devices/2/names {"path":"InternetGatewayDevice.","next_level":true}
 3. `X_HW_SmartTopo.` 对象存在（7 个参数：RSSI 阈值、丢包率阈值、测量时长等），
    但**全是空的** —— 对象有不代表有数据，界面要能优雅地空着。
 
+### ping 诊断：一个「任务保持 running 等设备回报」的流程
+
+商用 ACS 那个「输入域名 → 诊断 → 显示发送/成功/失败与延时」的功能（见图）。
+用的是**标准对象** `IPPingDiagnostics`，不需要任何厂商私有扩展。
+
+#### 流程
+
+```
+用户点「诊断」
+  → 入队 TaskDiagnostics{host, count}
+  → 下次 Inform 时下发 SetParameterValues(次数, Host, DiagnosticsState=Requested)
+  → 同一会话内先读一次结果（通常还是 Requested）
+  → 设备跑完，**单独发一次 Inform**（事件 8 DIAGNOSTICS COMPLETE）
+  → 我们借这次 Inform 再读一次 → Complete → 汇总结果、任务结束
+```
+
+关键设计：这个任务**不能在 SetParameterValues 成功后就算完成** ——
+它要一直保持 `running` 等结果，可能跨越好几轮 Inform。所以：
+
+- 设备回报不需要依赖事件 8：**只要这个设备有诊断在跑，每次 Inform 都读一次**"
+  （诊断短命，多读一次代价很小；而且不是所有设备都会发事件 8）。
+- 兜底：janitor 把 `running` 超过 5 分钟的诊断判为失败
+  （“设备未在 5 分钟内回报诊断结果”），不让它永远挂着。
+- 防重：已有诊断在**排队或进行中**时不允许再发起（不只是 running，连 pending 也要拦）。
+
+#### 真机实测（华为 HN8145X6N）
+
+```
+16:06:52.443  诊断已下发，接着先读一次结果
+16:06:52.462  诊断进行中 state=Requested          ← 同会话读回还是“进行中”
+16:06:56.479  有诊断在等结果 events="8 DIAGNOSTICS COMPLETE"   ← 4 秒后设备单独回报
+16:06:56.504  诊断完成
+```
+
+结果：`PING 目标 www.baidu.com：发送包 4，成功 4，失败 0；最小/平均/最大延时 = 30/31/32 ms`
+
+两个值得记的细节：
+
+1. **设备跑完会把 `Host` 清空**（读回来是空串）—— 所以域名必须存在任务载荷里，
+   否则结果里就不知道 ping 的是谁了。
+2. 两台真机都有完整的 12 个标准参数，字段名与规范完全一致。
+
+#### 踩到的坑：`DiagnosticsState=Requested` 必须放在最后
+
+第一版把它放在了参数列表**最前面**。设备看到 Requested 就立刻开始跑 ping，
+而此时 `Host` / `NumberOfRepetitions` 还没写进去 —— 实际是拿**空 Host + 默认次数**在跑，
+结果就变成了「发送包 4，成功 0，失败 4」。
+
+TR-069 虽然要求一次 SetParameterValues 里的参数原子生效，但不能指望设备真这么做。
+改成「次数 → Host → **最后**才 Requested」之后立刻正常。
+
+> 这个坑是自写模拟器先暴露出来的（它按顺序处理），真机上有些设备也会这样。
+
+### 日间模式
+
+整体换成 CSS 变量方案：规则里不再写死颜色，只换 `:root[data-theme="light"]` 那一组变量。
+
+- 主题在页面 `<head>` 的内联脚本里**先于样式定好**，避免刷新时先闪一下暗色
+- 没选过时跟随系统的 `prefers-color-scheme`；点过之后选择记在 `localStorage`
+- 切换按钮的文案由 JS 写成「切换到日间 / 夜间」，不会让人猜哪个是当前值
+
+#### 顺手抓到一个真 bug：两个页面根本没引入 app.js
+
+做主题按钮时发现首页那个按钮的文案没被 JS 改（还是初始的“主题”）。
+一查：`index.html` 与 `wifi_edit.html` **从来没有引入 `/static/app.js`**，
+只有详情页引了。也就是说首页的**搜索防抖、表格分页**一直在静默失效 ——
+搜索按钮还能用（它就是普通表单提交），所以之前一直没被发现。
+
+已补上，并加了一条验收：三个页面都必须包含 `static/app.js`；
+另外在 headless 浏览器里断言**主题按钮被 JS 初始化过** ——
+这比“引了没引”强，它证明脚本真的执行了。
+
 ### 折叠与分页（界面细节）
 
 设备一多、参数一多，详情页不折叠就没人看了：一台设备现在能到 **923 个参数**、
@@ -616,7 +688,7 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
 | 项目 | 结果 |
 | --- | --- |
 | `go test ./...` | 全部通过（`internal/cwmp` 29 个用例、`internal/store` 7 个用例、`internal/web` 11 个用例）|
-| `scripts/verify-s1.sh` | **通过 115 / 失败 0** |
+| `scripts/verify-s1.sh` | **通过 133 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
 | 真机（华为 HN8145X6N + V271-20） | **两台不同型号均自动纳管成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |

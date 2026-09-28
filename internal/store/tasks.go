@@ -170,6 +170,60 @@ func (s *Store) ListTasks(deviceID int64, limit int) ([]*Task, error) {
 }
 
 // GetTask 取单条任务。
+// FindRunningTask 找某设备某个类型当前处于 running 的任务。
+//
+// 用于 ping 诊断：任务下发后要一直等设备把结果报回来（可能跨越好几轮 Inform），
+// 期间需要知道“这个设备还有一个诊断在等结果”。
+func (s *Store) FindRunningTask(deviceID int64, kind string) (*Task, error) {
+	row := s.db.QueryRow(`SELECT `+taskCols+` FROM tasks
+		WHERE device_id = ? AND kind = ? AND status = ? ORDER BY id DESC LIMIT 1`,
+		deviceID, kind, TaskRunning)
+	t, err := scanTask(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return t, err
+}
+
+// FindOpenTask 找某设备某个类型尚未结束（pending 或 running）的任务。
+//
+// 跟 FindRunningTask 的区别：那个只管“已经下发在等回报”，
+// 这个还包括“已入队还没下发”—— 防重复发起时要连排队中的一起算。
+func (s *Store) FindOpenTask(deviceID int64, kind string) (*Task, error) {
+	row := s.db.QueryRow(`SELECT `+taskCols+` FROM tasks
+		WHERE device_id = ? AND kind = ? AND status IN (?, ?) ORDER BY id DESC LIMIT 1`,
+		deviceID, kind, TaskPending, TaskRunning)
+	t, err := scanTask(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return t, err
+}
+
+// FailStaleTasks 把处于 running 超过 maxAge 的某类任务判为失败。
+//
+// 用于给诊断收尾：设备不支持 ping、或者干脆没回报时，不能让它永远挂着 running。
+func (s *Store) FailStaleTasks(kind string, maxAge time.Duration, reason string) (int64, error) {
+	cutoff := ts(time.Now().Add(-maxAge))
+	res, err := s.db.Exec(`UPDATE tasks SET status = ?, result = ?, finished_at = ?
+		WHERE kind = ? AND status = ? AND started_at <> '' AND started_at < ?`,
+		TaskFailed, reason, ts(time.Now()), kind, TaskRunning, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// SetTaskResult 只更新任务的结果文本，不改状态。
+//
+// 用于「还在进行中」的任务（如 ping 诊断）：既要能看到进展，
+// 又不能把它提前标成完成。
+func (s *Store) SetTaskResult(id int64, result string) error {
+	_, err := s.db.Exec(`UPDATE tasks SET result = ? WHERE id = ?`, result, id)
+	return err
+}
+
 func (s *Store) GetTask(id int64) (*Task, error) {
 	row := s.db.QueryRow(`SELECT `+taskCols+` FROM tasks WHERE id = ?`, id)
 	return scanTask(row)

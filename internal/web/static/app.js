@@ -7,7 +7,33 @@ document.addEventListener("DOMContentLoaded", function () {
   var pagers = setupPagers(document);
   wireParamFilter(pagers);
   wireSearchBox();
+  wireThemeToggle();
 });
+
+// ---------- 日间 / 夜间模式 ----------
+//
+// 主题值在页面 <head> 的肉联脚本里已经写好（避免刷新闪一下），
+// 这里只负责按钮的标签与切换。
+function wireThemeToggle() {
+  var btn = document.getElementById("theme-toggle");
+  var root = document.documentElement;
+  if (!btn) return;
+
+  function label() {
+    btn.textContent = root.getAttribute("data-theme") === "light"
+      ? "🌙 切换到夜间" : "☀ 切换到日间";
+  }
+  label();
+
+  btn.addEventListener("click", function () {
+    var next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
+    root.setAttribute("data-theme", next);
+    try {
+      localStorage.setItem("theme", next);
+    } catch (e) { /* 隐私模式下写不进去，忽略 */ }
+    label();
+  });
+}
 
 // ---------- 表格分页 ----------
 //
