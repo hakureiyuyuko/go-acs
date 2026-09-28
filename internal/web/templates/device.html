@@ -97,30 +97,32 @@
     <span class="mono">GetParameterValues</span> 取值（省掉一次设备轮询）。设备离线时会排队等下一次 Inform。
   </div>
 
-  <h2>参数（{{len .Params}}）</h2>
-  <div style="margin-bottom:10px; display:flex; align-items:center; gap:12px">
-    <input id="param-filter" class="filter" type="text" placeholder="按参数名过滤，如 DeviceInfo 或 SSID">
-    <span id="param-count" class="hint"></span>
-  </div>
-  {{if .Params}}
-  <table id="param-table">
-    <thead>
-      <tr><th style="width:46%">参数名</th><th>值</th><th style="width:90px">类型</th><th style="width:80px">可写</th></tr>
-    </thead>
-    <tbody>
-      {{range .Params}}
-      <tr data-name="{{.Name}}">
-        <td class="mono">{{.Name}}</td>
-        <td class="mono">{{.Value}}</td>
-        <td class="mono">{{.ValueType}}</td>
-        <td>{{if .Writable}}是{{else}}否{{end}}</td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <div class="empty">还没有采集到参数。等设备下次上报或点上面的「重新获取设备信息」。</div>
-  {{end}}
+  <details class="fold">
+    <summary>参数（{{len .Params}}）</summary>
+    <div style="margin:10px 0; display:flex; align-items:center; gap:12px">
+      <input id="param-filter" class="filter" type="text" placeholder="按参数名过滤，如 DeviceInfo 或 SSID">
+      <span id="param-count" class="hint"></span>
+    </div>
+    {{if .Params}}
+    <table id="param-table">
+      <thead>
+        <tr><th style="width:46%">参数名</th><th>值</th><th style="width:90px">类型</th><th style="width:80px">可写</th></tr>
+      </thead>
+      <tbody>
+        {{range .Params}}
+        <tr data-name="{{.Name}}">
+          <td class="mono">{{.Name}}</td>
+          <td class="mono">{{.Value}}</td>
+          <td class="mono">{{.ValueType}}</td>
+          <td>{{if .Writable}}是{{else}}否{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <div class="empty">还没有采集到参数。等设备下次上报或点上面的「重新获取设备信息」。</div>
+    {{end}}
+  </details>
 
   <h2>任务历史</h2>
   {{if .Tasks}}

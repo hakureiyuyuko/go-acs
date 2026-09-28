@@ -45,6 +45,30 @@ td.mono, .mono { font-family: ui-monospace, "SFMono-Regular", Consolas, monospac
 .badge.pending, .badge.running { color: var(--warn); }
 .badge.failed { color: var(--bad); }
 h2 { font-size: 14px; margin: 26px 0 10px; color: var(--dim); font-weight: 600; }
+
+/* 可折叠区块（用原生 <details>，不需要 JS） */
+details.fold { margin: 26px 0 10px; }
+details.fold > summary {
+  font-size: 14px; font-weight: 600; color: var(--dim);
+  cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 8px;
+  list-style: none; /* 去掉默认三角 */
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before {
+  content: "\25B8"; /* ▸ */
+  font-size: 11px; line-height: 1;
+  transition: transform .15s ease;
+  display: inline-block;
+}
+details.fold[open] > summary::before { transform: rotate(90deg); }
+details.fold > summary:hover { color: var(--fg); }
+details.fold > summary::after {
+  content: "点击展开";
+  font-weight: 400; font-size: 12px; color: var(--line);
+  margin-left: 4px;
+}
+details.fold[open] > summary::after { content: ""; }
 .kvs { display: grid; grid-template-columns: repeat(auto-fill, minmax(430px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .kvs .row { background: var(--panel); padding: 9px 14px; display: flex; gap: 16px; }
 .kvs .k { color: var(--dim); flex: 0 0 160px; max-width: 160px; overflow-wrap: anywhere; }
