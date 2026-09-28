@@ -5,7 +5,8 @@
 
 需求文档见 [`docs/requirements.md`](docs/requirements.md)。
 
-**当前进度：S1（最小可用：纳管 + 查看设备信息）** ✅ 已跑通真实验收 42/42。
+**当前进度：S1（最小可用：纳管 + 查看设备信息）** ✅
+已通过：端到端验收 42/42、独立实现互通验证 8/8、**真机（华为 OptiXstar HN8145X6N）纳管成功**。
 
 ---
 
@@ -19,14 +20,29 @@ export PATH=$HOME/.local/go/bin:$PATH
 CGO_ENABLED=0 go build -o acs ./cmd/acs
 CGO_ENABLED=0 go build -o cpesim ./test/cpesim
 
-# 3) 启动（默认监听 :7547，CWMP 端点在 /acs，数据存 acs.db）
+# 3) 启动（默认监听 :7547，CWMP 端点 /acs，数据存 acs.db）
 ./acs
 
 # 4) 打开界面
 #    http://127.0.0.1:7547/
 ```
 
-把 CPE 的 ACS URL 指到 `http://<本机IP>:7547/acs`（账号密码见下面的配置），设备下次 Inform 就会出现在界面里。
+长期联调（真机随时会上报，需要后台常驻）用这个脚本，带 pidfile 管理：
+
+```bash
+scripts/dev-server.sh start     # 编译 + 后台启动，默认端口 9090
+scripts/dev-server.sh status    # 状态 + 最近日志
+scripts/dev-server.sh log       # 跟踪日志
+scripts/dev-server.sh stop
+
+# 排障时同时看「收到的报文」和「发出的报文」：
+ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
+```
+
+把 CPE 的 ACS URL 指到 `http://<本机IP>:端口/acs`，**也可以直接写 `http://<本机IP>:端口/`**
+（两个都接）。账号密码见下面的配置。设备下次 Inform 就会出现在界面里。
+
+> 真机实测：华为 OptiXstar HN8145X6N 配的就是**根路径 `/`** —— 只监听 `/acs` 会直接收不到上报。
 
 没有真机也能验证 —— 用自带的 CPE 模拟器：
 
@@ -64,10 +80,11 @@ CGO_ENABLED=0 go build -o cpesim ./test/cpesim
 cmd/acs/            程序入口
 internal/config/    配置加载
 internal/cwmp/      CWMP 协议：XML 解析、SOAP 编解码、会话、HTTP 端点、任务下发
+internal/cwmp/testdata/  真机报文的回归样本（实际抓下来的，不是手写的）
 internal/store/     SQLite 持久化（devices / device_params / informs / tasks）
 internal/web/       Web 界面 + JSON API（模板内嵌，无前端构建链）
 test/cpesim/        用 Go 写的 CPE 模拟器（真机替代品）
-scripts/            验收脚本
+scripts/            验收脚本 + dev-server.sh（后台起 ACS 给真机联调）
 reference/          第三方参考实现（不进仓库，见 scripts/fetch-reference.sh）
 docs/               需求文档与笔记
 ```
@@ -108,7 +125,11 @@ scripts/verify-interop.sh
 TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生重复设备、周期上报不重复入队、
 手工刷新、界面渲染。
 
-## 实现过程中踩到/修掉的两个真问题
+真机报文已固化为回归样本（`internal/cwmp/testdata/`，不是手写的，是实际抓下来的字节），
+对应 `internal/cwmp/realdevice_test.go` 里的 4 个用例 —— 以后重构解析逻辑时，
+真机的那些怪癖（大写前缀、自闭合空元素、根节点名大小写写错）会被测到。
+
+## 实现过程中踩到/修掉的三个真问题
 
 1. **CWMP 命名空间回填写成了版本号**（单测抓到）
    `ParseEnvelope` 一度把 `env.CWMPNS` 设成 `"1.0"` 而不是完整的 `urn:dslforum-org:cwmp-1-0`，
@@ -122,6 +143,12 @@ TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生�
    真机大多支持子树，但既然有实现会栽在这里，就改成**下发显式参数名**（GenieACS 自己也这么做）：
    根未知时把 TR-098 与 TR-181 两种命名的同一批参数都发过去，CPE 只回它有的那些 ——
    这本身就把「数据模型根」探测出来了，而且一轮 RPC 搞定。
+
+3. **真机的 ACS URL 配的是根路径 `/`，不是 `/acs`**（真机联调抓到）
+   华为这台光猫把上报 POST 到了 `http://192.168.10.158:9090/`。我们当时只监听 `/acs`，
+   结果就是回 404、设备永远上不来，而日志里又什么都不会显示。
+   现在 `POST /{$}` 也接；并且新增的请求日志中间件会把这类「打进来了但没被处理」的 404/405
+   在 **WARN** 级别记下来 —— 以后接新设备时一眼就能看出是路径配错了。
 
 ## 相关笔记
 

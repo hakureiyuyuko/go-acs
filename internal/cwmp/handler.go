@@ -354,6 +354,13 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		}
 	}
 
+	// 厂商把根节点名大小写写错的情况（真机见过：InternetGateWayDevice.），
+	// 参数已原样存库，这里只提醒一句。
+	if typos := findRootTypo(root, inf.Params); len(typos) > 0 {
+		s.log.Warn("参数名根前缀大小写与标准不一致（按原文存库，未改写）",
+			"device_id", deviceID, "names", typos)
+	}
+
 	// 事件流水
 	_ = s.store.InsertInform(&store.InformRecord{
 		DeviceID:    deviceID,
@@ -636,43 +643,72 @@ func toStoreParams(in []ParamValue) []store.Param {
 }
 
 // detectRoot 从参数名推断数据模型根。
+//
+// 比较是**大小写不敏感**的，因为真机确实会写错：华为 HN8145X6N 在 0 BOOTSTRAP 时
+// 上报 InternetGateWayDevice.DeviceInfo.X_CT-ProvCode —— 根节点里的 W 是大写。
+// 注意：这里只影响「识别」；存库时参数名原样保留，以后 SetParameterValues 必须用
+// 设备自己的拼法（改写了就下发不会去）。
 func detectRoot(params []ParamValue) string {
 	for _, p := range params {
-		if strings.HasPrefix(p.Name, "Device.") {
+		lower := strings.ToLower(p.Name)
+		switch {
+		case strings.HasPrefix(lower, "device."):
 			return "Device."
-		}
-		if strings.HasPrefix(p.Name, "InternetGatewayDevice.") {
+		case strings.HasPrefix(lower, "internetgatewaydevice."):
 			return "InternetGatewayDevice."
 		}
 	}
 	return ""
 }
 
+// findRootTypo 找出「根前缀大小写写错」的参数名。
+//
+// 这类参数能正常存下来（解析是容错的），但值得在日志里提一句：
+// 一是提醒运维这批参数名和别的不是同一套拼法，二是以后做前缀查询时别把它漏掉。
+func findRootTypo(root string, params []ParamValue) []string {
+	if root == "" {
+		return nil
+	}
+	lowerRoot := strings.ToLower(root)
+	var out []string
+	for _, p := range params {
+		if strings.HasPrefix(p.Name, root) {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(p.Name), lowerRoot) {
+			out = append(out, p.Name)
+		}
+	}
+	return out
+}
+
 // deviceFieldsFromParams 从参数列表里挑出设备属性。
-// 用后缀匹配，所以 TR-098 / TR-181 两种命名都能命中。
+// 用后缀匹配（且忽略大小写），所以 TR-098 / TR-181 两种命名、
+// 以及厂商把根写错的情况都能命中。
 func deviceFieldsFromParams(params []ParamValue) *store.Device {
 	d := &store.Device{}
 	for _, p := range params {
+		lower := strings.ToLower(p.Name)
 		switch {
-		case strings.HasSuffix(p.Name, ".DeviceInfo.Manufacturer"):
+		case strings.HasSuffix(lower, ".deviceinfo.manufacturer"):
 			d.Manufacturer = p.Value
-		case strings.HasSuffix(p.Name, ".DeviceInfo.ModelName"):
+		case strings.HasSuffix(lower, ".deviceinfo.modelname"):
 			d.ModelName = p.Value
-		case strings.HasSuffix(p.Name, ".DeviceInfo.SoftwareVersion"):
+		case strings.HasSuffix(lower, ".deviceinfo.softwareversion"):
 			d.SoftwareVersion = p.Value
-		case strings.HasSuffix(p.Name, ".DeviceInfo.HardwareVersion"):
+		case strings.HasSuffix(lower, ".deviceinfo.hardwareversion"):
 			d.HardwareVersion = p.Value
-		case strings.HasSuffix(p.Name, ".DeviceInfo.SpecVersion"):
+		case strings.HasSuffix(lower, ".deviceinfo.specversion"):
 			d.SpecVersion = p.Value
-		case strings.HasSuffix(p.Name, ".DeviceInfo.ProvisioningCode"):
+		case strings.HasSuffix(lower, ".deviceinfo.provisioningcode"):
 			d.ProvisioningCode = p.Value
-		case strings.HasSuffix(p.Name, ".ManagementServer.ConnectionRequestURL"):
+		case strings.HasSuffix(lower, ".managementserver.connectionrequesturl"):
 			d.ConnRequestURL = p.Value
-		case strings.HasSuffix(p.Name, ".ManagementServer.PeriodicInformInterval"):
+		case strings.HasSuffix(lower, ".managementserver.periodicinforminterval"):
 			if n, err := strconv.Atoi(strings.TrimSpace(p.Value)); err == nil {
 				d.PeriodicInterval = n
 			}
-		case strings.HasSuffix(p.Name, ".ExternalIPAddress"):
+		case strings.HasSuffix(lower, ".externalipaddress"):
 			d.ExternalIP = p.Value
 		}
 	}

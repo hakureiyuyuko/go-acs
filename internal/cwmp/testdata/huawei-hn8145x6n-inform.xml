@@ -1,0 +1,58 @@
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:cwmp="urn:dslforum-org:cwmp-1-0">
+<SOAP-ENV:Header>
+<cwmp:ID SOAP-ENV:mustUnderstand="1">39</cwmp:ID>
+</SOAP-ENV:Header>
+<SOAP-ENV:Body>
+<cwmp:Inform>
+<DeviceId>
+<Manufacturer>Huawei Technologies Co., Ltd</Manufacturer>
+<OUI>00259E</OUI>
+<ProductClass>HN8145X6N</ProductClass>
+<SerialNumber>48575443AA000001</SerialNumber>
+</DeviceId>
+<Event SOAP-ENC:arrayType="cwmp:EventStruct[1]">
+<EventStruct>
+<EventCode>2 PERIODIC</EventCode>
+<CommandKey/>
+</EventStruct>
+</Event>
+<MaxEnvelopes>1</MaxEnvelopes>
+<CurrentTime>2026-09-28T06:58:51+00:00</CurrentTime>
+<RetryCount>0</RetryCount>
+<ParameterList SOAP-ENC:arrayType="cwmp:ParameterValueStruct[8]">
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.ManagementServer.ParameterKey</Name>
+<Value xsi:type="xsd:string">0</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.ManagementServer.ConnectionRequestURL</Name>
+<Value xsi:type="xsd:string">http://192.168.10.22:7547/0123456789abcdef0123456789abcdef</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceSummary</Name>
+<Value xsi:type="xsd:string">InternetGatewayDevice:1.4[](Baseline:1, EthernetLAN:1, WiFiLAN:2, Time:1, IPPing:1, DeviceAssociation:1), VoiceService:1.0[1](Endpoint:1, SIPEndpoint:1)</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.SpecVersion</Name>
+<Value xsi:type="xsd:string">1.0</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.HardwareVersion</Name>
+<Value xsi:type="xsd:string">35A0.E</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.SoftwareVersion</Name>
+<Value xsi:type="xsd:string">V5R023C00S120</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.ProvisioningCode</Name>
+<Value xsi:type="xsd:string"/>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANIPConnection.1.ExternalIPAddress</Name>
+<Value xsi:type="xsd:string">192.168.10.22</Value>
+</ParameterValueStruct>
+</ParameterList>
+</cwmp:Inform>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>

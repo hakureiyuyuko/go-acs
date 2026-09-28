@@ -171,7 +171,7 @@ func (s *Store) GetDevice(id int64) (*Device, error) {
 
 // ListDevices 返回全部设备，最近上报的在前。
 func (s *Store) ListDevices() ([]*Device, error) {
-	rows, err := s.db.Query(`SELECT `+devCols+` FROM devices
+	rows, err := s.db.Query(`SELECT ` + devCols + ` FROM devices
 		ORDER BY online DESC, last_inform_at DESC, id DESC`)
 	if err != nil {
 		return nil, err

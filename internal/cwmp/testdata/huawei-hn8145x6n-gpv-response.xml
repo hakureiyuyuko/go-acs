@@ -1,0 +1,67 @@
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:cwmp="urn:dslforum-org:cwmp-1-0">
+<SOAP-ENV:Header>
+<cwmp:ID SOAP-ENV:mustUnderstand="1">0abee7239d3f8942</cwmp:ID>
+</SOAP-ENV:Header>
+<SOAP-ENV:Body>
+<cwmp:GetParameterValuesResponse>
+<ParameterList SOAP-ENC:arrayType="cwmp:ParameterValueStruct[14]">
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.Manufacturer</Name>
+<Value xsi:type="xsd:string">Huawei Technologies Co., Ltd</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.ManufacturerOUI</Name>
+<Value xsi:type="xsd:string">00259E</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.ModelName</Name>
+<Value xsi:type="xsd:string">HN8145X6N</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.Description</Name>
+<Value xsi:type="xsd:string">OptiXstar HN8145X6N Ethernet Terminal (PRODUCT ID:2150086379HYQ4023224)</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.ProductClass</Name>
+<Value xsi:type="xsd:string">HN8145X6N</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.SerialNumber</Name>
+<Value xsi:type="xsd:string">48575443AA000001</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.HardwareVersion</Name>
+<Value xsi:type="xsd:string">35A0.E</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.SoftwareVersion</Name>
+<Value xsi:type="xsd:string">V5R023C00S120</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.SpecVersion</Name>
+<Value xsi:type="xsd:string">1.0</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.ProvisioningCode</Name>
+<Value xsi:type="xsd:string"/>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.DeviceInfo.UpTime</Name>
+<Value xsi:type="xsd:unsignedInt">949</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.ManagementServer.ConnectionRequestURL</Name>
+<Value xsi:type="xsd:string">http://192.168.10.22:7547/0123456789abcdef0123456789abcdef</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.ManagementServer.PeriodicInformInterval</Name>
+<Value xsi:type="xsd:unsignedInt">120</Value>
+</ParameterValueStruct>
+<ParameterValueStruct>
+<Name>InternetGatewayDevice.ManagementServer.ParameterKey</Name>
+<Value xsi:type="xsd:string">0</Value>
+</ParameterValueStruct>
+</ParameterList>
+</cwmp:GetParameterValuesResponse>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>

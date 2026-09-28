@@ -137,13 +137,99 @@ TypeError: Cannot read properties of undefined (reading 'replace')
 - schema 目前是「一次性建表 + IF NOT EXISTS」，**加字段前必须先引入版本迁移**，
   否则老库升不上去。
 
+## 真机联调（2026-09-28，已跑通）
+
+接了一台**真实 CPE** 指向本机 `9090` 端口上报，完整跑通了纳管 + 取信息。
+
+### 真机信息
+
+| 项 | 值 |
+| --- | --- |
+| 设备 | 华为 OptiXstar **HN8145X6N**（FTTR 光猫）|
+| User-Agent | `HW_WAP_CWMP_V02` |
+| OUI / 序列号 | `00259E` / `48575443AA000001` |
+| 软 / 硬件版本 | `V5R023C00S120` / `35A0.E` |
+| 数据模型 | `InternetGatewayDevice:1.4`（TR-098 Amendment 4）|
+| 上报周期 | 120 秒 |
+
+`DeviceSummary` 里还带了它支持的完整能力集，很有用（以后按能力置配策略靠它）：
+
+```
+InternetGatewayDevice:1.4[](Baseline:1, EthernetLAN:1, WiFiLAN:2, Time:1, IPPing:1, DeviceAssociation:1),
+VoiceService:1.0[1](Endpoint:1, SIPEndpoint:1)
+```
+
+### 真机暴露出来的坑（逐条）
+
+1. **它 POST 到根路径 `/`，不是 `/acs`**
+   很多 CPE / 运维就是把 ACS URL 配成 `http://host:port/`。之前只监听 `/acs`，会直接 404 收不到。
+   → 现在 `POST /` 也接（`mux.Handle("POST /{$}", srv)`）。**这是本次最有价值的一个修改。**
+
+2. **报文用大写前缀 `SOAP-ENV:` / `SOAP-ENC:`**
+   我们的解析只按本地名匹配，天然不受影响（单测里有这条断言）。
+
+3. **自闭合空元素**：`<CommandKey/>`、`<Value xsi:type="xsd:string"/>`
+   必须解出空字符串而不是报错。`ProvisioningCode` 在真机上就是空的，现在存的是 `""`。
+
+4. **`CurrentTime` 用 `2026-09-28T06:58:51+00:00`**（时区写成 `+00:00` 而不是 `Z`）。
+   我们只存不解析，所以没影响；但如果以后要解析，不能只按 RFC3339 的 `Z` 形式写。
+
+5. **它原样回填我们下发的 `cwmp:ID`**（例：`0abee7239d3f8942`）。
+   说明我们生成的 ID 它是认的，以后可以拿它做请求/响应配对。
+
+6. **`GetParameterValues` 只返回请求里存在的参数**，不存在的既不返回也不报错。
+   这正好是我们探测数据模型根所依赖的行为 —— 真机上验证过了。
+
+7. **厂商笔误：根节点名大小写写错**
+   0 BOOTSTRAP 时它上报 `InternetGateWay**D**evice.DeviceInfo.X_CT-ProvCode`（根里的 `W` 是大写），
+   配合值 `00/0`（华为自己的 provisioning code）。其他参数都是正确的 `InternetGatewayDevice.`。
+   → 解析和存库本来就是容错的（原样保留）；但根探测改成**大小写不敏感**，
+   并在日志里 Warn 提一句（`findRootTypo`）。**参数名绝不改写** —— 以后 `SetParameterValues`
+   必须用设备自己的拼法。
+
+8. **Inform 的 ParameterList 里没有 `DeviceInfo.Manufacturer`**
+   厂商只在 `DeviceId` 里给。这再次印证了「Inform 不能当全量」的设计，
+   也说明 `pick(fields.Manufacturer, DeviceId.Manufacturer)` 这种兜底是必要的。
+
+9. **`ConnectionRequestURL` 是可直连的**
+   `http://192.168.10.22:7547/0123456789abcdef0123456789abcdef` —— 虽然是私网地址、
+   还带一长串随机路径，但设备就跟我们在同一个局域网，**从 ACS 直接可达**。
+   也就是说下一步做 Connection Request（主动唤醒）时，**可以用这台真机做真实验收**，
+   不像很多部署那样被 NAT 挡住。
+
+### 抓到的真机报文已固化成回归样本
+
+放在 `internal/cwmp/testdata/`（不是手写的，是这次联调实际抓下来的原始字节）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `huawei-hn8145x6n-inform.xml` | 真机 Inform（大写前缀、自闭合空元素、8 个参数）|
+| `huawei-hn8145x6n-gpv-response.xml` | 真机对 GetParameterValues 的响应（14 个参数）|
+| `acs-getparametervalues-request.xml` | **我们发出去的**请求（用于回归保护：必须全是显式参数名）|
+
+对应 `internal/cwmp/realdevice_test.go` 里的 4 个用例。
+手写样本容易「按自己的理解写」而掩盖真机怪癖，用真机报文做回归才守得住。
+
+### 联调时的运维细节
+
+- 用 `scripts/dev-server.sh {start|stop|status|log}` 管理后台进程（带 pidfile）。
+- **别用 `pkill -f 'bin/acs'`**：命令包装器自己的命令行里就含 `bin/acs`，会把自己一起杀掉。
+  用 `pkill -x acs` 或脚本里的 pidfile。
+- 排障时这样起：`ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart`，
+  日志里能同时看到收到的报文（`CPE 报文`）和发出的报文（`发出报文`）。
+- 新增的请求日志中间件会把「打进来但没被处理」（404/405）在 **WARN** 级别记下来 ——
+  真机接不上时，这是第一眼要看的信号。
+
+---
+
 ## 验收记录（本次实测）
 
 | 项目 | 结果 |
 | --- | --- |
-| `go test ./...` | 全部通过（`internal/cwmp` 18 个用例、`internal/store` 6 个用例） |
+| `go test ./...` | 全部通过（`internal/cwmp` 22 个用例、`internal/store` 6 个用例） |
 | `scripts/verify-s1.sh` | **通过 42 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
+| 真机（华为 HN8145X6N） | **纳管成功**，取回 14 个参数，周期性上报稳定 |
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |
 
 > 以上都是**本次实例的实测值，不是项目常量**。
