@@ -171,23 +171,30 @@ func (s *Server) SweepOffline(ctx context.Context) (probed, offlined int) {
 			}
 		case offlineProbe:
 			// 探测本身也是「设备还活着」的最强证据：能连上就说明只是没按周期上报。
-			err := s.connectionRequest(d)
+			//
+			// 并发发出去：一台连不上的设备要等满 ConnReqTimeout（默认 10 秒），
+			// 一批设备同时掉线时串行探测会把整个巡检拖垮（下一次巡检的 tick 直接被丢掉）。
 			probed++
-			if err != nil {
-				if recordErr := s.store.RecordProbe(d.ID, now); recordErr != nil {
-					s.log.Warn("离线巡检：记录探测次数失败", "device_id", d.ID, "err", recordErr)
+			attempt := d.ProbeCount + 1
+			go func(dev *store.Device, attempt int, elapsed time.Duration) {
+				err := s.connectionRequest(dev)
+				at := time.Now()
+				if err != nil {
+					if recordErr := s.store.RecordProbe(dev.ID, at); recordErr != nil {
+						s.log.Warn("离线巡检：记录探测次数失败", "device_id", dev.ID, "err", recordErr)
+					}
+					s.log.Info("离线探测无响应（设备没应答 Connection Request）",
+						"device_id", dev.ID, "serial", dev.SerialNumber,
+						"attempt", attempt, "of", s.cfg.OfflineProbeAttempts, "err", err)
+					return
 				}
-				s.log.Info("离线探测无响应（设备没应答 Connection Request）",
-					"device_id", d.ID, "serial", d.SerialNumber,
-					"attempt", d.ProbeCount+1, "of", s.cfg.OfflineProbeAttempts, "err", err)
-				continue
-			}
-			if recordErr := s.store.RecordProbeOK(d.ID, now); recordErr != nil {
-				s.log.Warn("离线巡检：记录探测结果失败", "device_id", d.ID, "err", recordErr)
-			}
-			s.log.Info("离线探测成功（设备还活着，只是没按周期上报）",
-				"device_id", d.ID, "serial", d.SerialNumber,
-				"elapsed", dec.Elapsed.Round(time.Second).String())
+				if recordErr := s.store.RecordProbeOK(dev.ID, at); recordErr != nil {
+					s.log.Warn("离线巡检：记录探测结果失败", "device_id", dev.ID, "err", recordErr)
+				}
+				s.log.Info("离线探测成功（设备还活着，只是没按周期上报）",
+					"device_id", dev.ID, "serial", dev.SerialNumber,
+					"elapsed", elapsed.Round(time.Second).String())
+			}(d, attempt, dec.Elapsed)
 		case offlineMark:
 			if err := s.store.MarkOffline(d.ID); err != nil {
 				s.log.Warn("离线巡检：标记离线失败", "device_id", d.ID, "err", err)

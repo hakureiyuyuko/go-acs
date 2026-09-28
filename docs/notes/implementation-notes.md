@@ -1197,7 +1197,9 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
    关掉 `-offline-probe` 则整体退回纯超时，行为和以前一致。
 4. **`-offline-probe-max` 是个后门**：个别设备把 `PeriodicInformInterval` 报得很大
    （一天），那样「周期×2」就永远等不到。默认 `0` = 不限，完全按公式来。
-5. **迁移必须追加**：`probe_count` / `probe_at` 两列走迁移 #3，接在 settings 之后。
+5. **探测并发发**（每台一个 goroutine）：一台连不上的设备要等满 `-connreq-timeout`（默认 10 秒），
+   串行探测在一批设备同时掉线时会把整个巡检拖长，下一轮的 tick 就被丢掉了。
+6. **迁移必须追加**：`probe_count` / `probe_at` 两列走迁移 #3，接在 settings 之后。
    第一版我顺手插到了中间 —— 那样已经升到 user_version=2 的库会**跳过**这两列，
    启动后所有查询都会失败。教训：迁移的位置就是版本号，只能往后加。
 
