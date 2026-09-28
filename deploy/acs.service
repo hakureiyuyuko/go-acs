@@ -1,0 +1,32 @@
+[Unit]
+Description=轻量 TR-069 ACS（CWMP 管理光猫 / FTTR）
+Documentation=https://github.com/hakureiyuyuko/go-acs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@DATA@
+EnvironmentFile=-@ENVFILE@
+ExecStart=@BIN@ -db @DATA@/acs.db
+Restart=always
+RestartSec=3
+# 想要 1024 以下的端口（比如 :80）时，把下面两行的注释去掉
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+#CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# 只允许往数据目录写；数据库若挪到别处，记得加进 ReadWritePaths
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=@DATA@
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=@USER@
+
+[Install]
+WantedBy=multi-user.target

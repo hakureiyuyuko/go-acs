@@ -40,11 +40,38 @@ FTTR 子设备与网络诊断：子设备的型号、组网模式、光功率与
 
 ![设置](docs/images/settings.png)
 
-## 快速开始
+## 安装（Release 包）
+
+从 [Releases](https://github.com/hakureiyuyuko/go-acs/releases) 下对应架构的包，解压后一条命令装成 systemd 服务：
+
+```bash
+tar xzf acs-1.0.0-linux-amd64.tar.gz
+cd acs-1.0.0-linux-amd64
+sudo ./install.sh                                                # 默认 CWMP 与面板都走 :7547
+sudo ./install.sh --web-listen :8080 --web-user admin --web-pass '改成你自己的'
+```
+
+装完会打印面板地址与要填进光猫的 ACS URL（`http://<本机IP>:7547/acs`）。后续：
+
+```bash
+sudo ./update.sh         # 升级：校验 SHA256 → 停服务 → 备份 → 换新 → 健康检查，起不来自动回滚
+sudo ./uninstall.sh      # 卸载：默认保留数据库与配置，--purge 连数据一起删
+```
+
+默认落点：主程序 `/usr/local/bin/acs`、数据 `/var/lib/acs`、配置 `/etc/default/acs`、
+服务 `acs`。包内 `README.md` 有完整的选项与目录说明。
+
+## 快速开始（源码）
 
 ```bash
 go build -o acs ./cmd/acs        # Go 1.27+；CGO_ENABLED=0 可得到静态二进制
 ./acs -listen :9090 -db acs.db   # 面板 http://<IP>:9090/ ，CWMP http://<IP>:9090/acs
+```
+
+打发布包：
+
+```bash
+scripts/build-release.sh v1.0.0   # 产物在 dist/：amd64 + arm64 的 tar.gz 与 SHA256SUMS
 ```
 
 设备侧的 ACS URL 填 `http://<IP>:9090/acs`；真机里也见过配成根路径 `/` 的，所以两者都收。
@@ -93,13 +120,15 @@ internal/cwmp/      协议核心：SOAP 编解码、会话、任务、诊断、C
 internal/store/     SQLite：设备 / 参数 / 任务 / 上报记录（迁移走 user_version）
 internal/web/       Web UI 与 JSON API（模板 + 少量原生 JS，无前端框架）
 test/cpesim/        自研 CPE 模拟器（大量开关，验收靠它）
-scripts/            验收脚本、参考实现拉取、开发用起停脚本
-docs/               需求文档与实现笔记
+deploy/             发布包里的安装 / 升级 / 卸载脚本与 systemd 单元模板
+scripts/            打包、验收、参考实现拉取、开发用起停脚本
+docs/               需求文档、发布说明与实现笔记
 ```
 
 ## 更多
 
 - `docs/requirements.md` —— 需求与实现进度
+- `docs/notes/deploy.md` —— 安装包与部署脚本的实现笔记（systemd 加固、升级回滚、怎么验的）
 - `docs/notes/implementation-notes.md` —— **真机踩坑与实测记录**：协议边界（单次 GetParameterValues 上限、
   写回类型大小写、诊断要最后置 `Requested`）、设备怪癖（能改不能读、异步生效、身份键被元数据改写）、
   运维坑（挂载掉了不能乱删、任务别卡在 running）……修法与验证都在里面
