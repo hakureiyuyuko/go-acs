@@ -416,6 +416,8 @@ def main():
         check("详情页 200", st == 200, st)
         check("详情页展示了基本信息", "基本信息" in html and "SimVendor" in html)
         check("详情页展示了参数表", "DeviceInfo.SoftwareVersion" in html)
+        check("详情页也有 5 秒自动刷新开关（与列表页同一个全局开关）",
+              'id="autorefresh"' in html and "自动刷新" in html)
 
     print("== 11b. 界面上不留内部说明性质的文案 ==")
     if d98:
@@ -703,10 +705,11 @@ def main():
                 dom = run_chrome_dom(chrome, f"{BASE}/devices/{did}")
                 doms = {"device": dom, "index": run_chrome_dom(chrome, f"{BASE}/")}
             # 首页：5 秒自动刷新开关由 app.js 在加载后改写文案（默认关）
-            maf = re.search(r'<button id="autorefresh"[^>]*>([^<]*)</button>', doms.get("index") or "")
-            check("自动刷新开关被 JS 初始化了（默认关）",
-                  maf is not None and "自动刷新 5s" in maf.group(1) and "关" in maf.group(1),
-                  maf.group(1) if maf else "没找到按钮")
+            for page_name, key in (("首页", "index"), ("详情页", "device")):
+                maf = re.search(r'<button id="autorefresh"[^>]*>([^<]*)</button>', doms.get(key) or "")
+                check("%s的自动刷新开关被 JS 初始化了（默认关）" % page_name,
+                      maf is not None and "自动刷新 5s" in maf.group(1) and "关" in maf.group(1),
+                      maf.group(1) if maf else "没找到按钮")
             if dom is None:
                 skip("分页真的只显示 20 行", "headless 浏览器执行失败")
             else:
@@ -862,6 +865,10 @@ def main():
         st, js = get("/static/app.js")
         check("app.js 里有 5 秒自动刷新逻辑",
               st == 200 and "acs-autorefresh" in js and "autorefresh" in js, st)
+        check("自动刷新会保留分页位置与过滤词（sessionStorage）",
+              "acs-pager:" in js and "acs-param-filter" in js, "")
+        check("弹窗开着时自动刷新会跳过（不打断正在看的表单）",
+              ".modal-mask:not([hidden])" in js, "")
 
     print("== 24. FTTR 子设备：有就显示、没有就不显示 ==")
     if did:

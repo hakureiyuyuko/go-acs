@@ -26,6 +26,8 @@
   <h1>轻量 TR-069 ACS</h1>
   <div class="spacer"></div>
   <a class="ghost" href="/settings">设置</a>
+  <button id="autorefresh" class="ghost" type="button" aria-pressed="false"
+          title="每 5 秒自动刷新本页（开关状态与设备列表页共享）">自动刷新 5s：关</button>
   <button id="theme-toggle" class="ghost" type="button" title="切换日间 / 夜间模式">主题</button>
   {{if .AuthOn}}
   <form method="post" action="/logout"><button type="submit" class="ghost" title="退出登录">退出</button></form>

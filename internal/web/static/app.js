@@ -16,12 +16,15 @@ document.addEventListener("DOMContentLoaded", function () {
   wireModals();
 });
 
-// ---------- 首页：5 秒自动刷新 ----------
+// ---------- 5 秒自动刷新（设备列表页 + 设备详情页，开关状态全局共享）----------
 //
 // 在线/离线、探测中、任务进度这些会自己变，盯着看的时候不用手动刷。
-// 开关状态记在 localStorage，刷新后仍然保持开着。
-// 两个体贴处：焦点在输入框里（正在打字）时这一轮不刷新，别把没提交的搜索词刷掉；
-// 开关打开后立刻把状态写在按钮上（文案 + 高亮），不用猜。
+// 开关状态记在 localStorage（**所以两个页面共用一个开关**）：在一个页面打开，
+// 切到另一个页面也是开着的，刷新后仍然保持。
+// 三种情况会跳过这一轮（下一轮再看）：
+//   1. 焦点在输入框里（正在打字）—— 别把没提交的搜索词刷掉；
+//   2. 有弹窗开着 —— 别把正在看的终端列表/正在填的无线表单刷没；
+//   3. 开着的时候页面不可见？不，后台标签照刷，切回来就是新的。
 function wireAutoRefresh() {
   var btn = document.getElementById("autorefresh");
   if (!btn) return;
@@ -44,6 +47,10 @@ function wireAutoRefresh() {
       var el = document.activeElement;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) {
         schedule();   // 正在输入，跳过这一轮
+        return;
+      }
+      if (document.querySelector(".modal-mask:not([hidden])")) {
+        schedule();   // 弹窗开着，跳过这一轮
         return;
       }
       window.location.reload();
@@ -155,6 +162,18 @@ function makePager(table, defaultSize) {
   var page = 1;
   var predicate = function () { return true; };
 
+  // 自动刷新是整页重载，所以把"看到第几页 / 每页多少条"记在 sessionStorage 里，
+  // 不然每 5 秒就被打回第一页（开着自动刷新看参数表时最难受）。
+  var stateKey = table.id ? "acs-pager:" + table.id : "";
+  if (stateKey) {
+    try {
+      var sSize = parseInt(sessionStorage.getItem(stateKey + ":size"), 10);
+      var sPage = parseInt(sessionStorage.getItem(stateKey + ":page"), 10);
+      if (!isNaN(sSize) && sSize >= 0) size = sSize;
+      if (!isNaN(sPage) && sPage > 0) page = sPage;
+    } catch (e) { /* 隐私模式读不到，用默认值 */ }
+  }
+
   // 行数本来就不到一页时，分页条纯属噪音，直接不显示。
   if (rows.length <= defaultSize) {
     return { setFilter: function () {}, render: function () {} };
@@ -176,7 +195,7 @@ function makePager(table, defaultSize) {
     o.textContent = n === 0 ? "全部" : n + " 条/页";
     sizeSel.appendChild(o);
   });
-  sizeSel.value = String(defaultSize);
+  sizeSel.value = String(size);
 
   bar.appendChild(prev);
   bar.appendChild(info);
@@ -210,6 +229,13 @@ function makePager(table, defaultSize) {
       : "共 " + list.length + " 条";
     prev.disabled = page <= 1;
     next.disabled = page >= pages;
+
+    if (stateKey) {
+      try {
+        sessionStorage.setItem(stateKey + ":page", String(page));
+        sessionStorage.setItem(stateKey + ":size", String(size));
+      } catch (e) { /* 忽略 */ }
+    }
   }
 
   prev.addEventListener("click", function () { page--; render(); });
@@ -253,7 +279,17 @@ function wireParamFilter(pagers) {
     }
   }
 
-  box.addEventListener("input", apply);
+  // 过滤词同样记在 sessionStorage：自动刷新重载后还在，不用每 5 秒重打一遍
+  var filterKey = "acs-param-filter";
+  try {
+    var savedFilter = sessionStorage.getItem(filterKey);
+    if (savedFilter) box.value = savedFilter;
+  } catch (e) { /* 忽略 */ }
+
+  box.addEventListener("input", function () {
+    try { sessionStorage.setItem(filterKey, box.value); } catch (e) { /* 忽略 */ }
+    apply();
+  });
   apply();
 }
 
