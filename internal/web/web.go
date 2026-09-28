@@ -5,6 +5,7 @@
 package web
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -96,6 +97,25 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	return nil
 }
 
+// render 把模板先渲染到内存、成功后再写出。
+//
+// 为什么不直接 ExecuteTemplate(w, ...)：模板执行到一半出错时，那样会把**半个页面**
+// 发出去，错误文本还会混进 HTML 里（踩过：模板里调了一个签名不对的方法，
+// 页面被截断、尾巴上多出一行 `template: ...: invalid function signature`）。
+// 缓冲一下，出错就干干净净回 500。
+func (s *Server) render(w http.ResponseWriter, name string, data any) {
+	var buf bytes.Buffer
+	if err := s.tpl.ExecuteTemplate(&buf, name, data); err != nil {
+		http.Error(w, "模板渲染失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		// 客户端断了，没什么可做的
+		_ = err
+	}
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	all, err := s.store.ListDevices()
 	if err != nil {
@@ -143,9 +163,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"Notice":    strings.TrimSpace(r.URL.Query().Get("msg")),
 		"NoticeErr": r.URL.Query().Get("err") == "1",
 	}
-	if err := s.tpl.ExecuteTemplate(w, "index.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	s.render(w, "index.html", data)
 }
 
 // deviceMatches 判断设备是否命中搜索词。q 为空则全部命中。
@@ -413,9 +431,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		// 表单默认值：按设备的数据模型根猜一个 WiFi 路径（只是默认值，用户可改）
 		"DefaultPath": defaultFetchPath(d),
 	}
-	if err := s.tpl.ExecuteTemplate(w, "device.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	s.render(w, "device.html", data)
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
@@ -465,9 +481,7 @@ func (s *Server) handleWifiEdit(w http.ResponseWriter, r *http.Request) {
 		"Queued": r.URL.Query().Get("queued"),
 		"Path":   "/devices/" + strconv.FormatInt(id, 10) + "/wifi/" + strconv.Itoa(inst),
 	}
-	if err := s.tpl.ExecuteTemplate(w, "wifi_edit.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	s.render(w, "wifi_edit.html", data)
 }
 
 // handleWifiSave 处理无线编辑表单的提交：把真正变了的字段拼成 SetParameterValues 入队。

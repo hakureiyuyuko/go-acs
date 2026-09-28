@@ -401,9 +401,19 @@
   <ul class="clilist">
     {{range .}}
     <li>
-      <div class="climac mono">{{.MAC}}</div>
-      <div class="cliline"><span class="clik">IP 地址：</span><span class="mono">{{if .IP}}{{.IP}}{{else}}-{{end}}</span></div>
-      {{if .Meta}}<div class="climeta hint">{{.Meta}}</div>{{end}}
+      <div class="clirow">
+        <div class="climain">
+          <div class="climac mono">{{.MAC}}</div>
+          <div class="cliline"><span class="clik">IP 地址：</span><span class="mono">{{if .IP}}{{.IP}}{{else}}<span class="hint">设备未上报</span>{{end}}</span></div>
+          {{if .Meta}}<div class="climeta hint">{{.Meta}}</div>{{end}}
+        </div>
+        {{if .HasSignal}}
+        <div class="clisig" title="{{.SignalTitle}}">
+          <span class="sigbars" data-sig="{{.SignalPct}}" data-bars="{{.SignalBars}}"><i class="{{if ge .SignalBars 1}}on{{end}}"></i><i class="{{if ge .SignalBars 2}}on{{end}}"></i><i class="{{if ge .SignalBars 3}}on{{end}}"></i><i class="{{if ge .SignalBars 4}}on{{end}}"></i></span>
+          <span class="sigpct mono">{{.SignalPct}}%</span>
+        </div>
+        {{end}}
+      </div>
     </li>
     {{end}}
   </ul>

@@ -230,3 +230,24 @@ button.linkbtn {
   text-decoration: underline dotted; cursor: pointer;
 }
 button.linkbtn:hover { filter: none; text-decoration: underline solid; }
+
+/* ---------- 终端条目右侧的信号图标（四格小柱 + 百分比）---------- */
+.clirow { display: flex; align-items: flex-start; gap: 12px; }
+.climain { flex: 1; min-width: 0; }
+.clisig {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
+  gap: 2px; padding: 2px 0 0; cursor: default;
+}
+/* 柱子从矮到高：跟商用 ACS 那个小图标一个意思 */
+.sigbars { display: flex; align-items: flex-end; gap: 2px; height: 18px; }
+.sigbars i { display: block; width: 4px; border-radius: 1px; background: var(--line); }
+.sigbars i:nth-child(1) { height: 6px; }
+.sigbars i:nth-child(2) { height: 10px; }
+.sigbars i:nth-child(3) { height: 14px; }
+.sigbars i:nth-child(4) { height: 18px; }
+.sigbars i.on { background: var(--accent); }
+.sigpct {
+  font-size: 12.5px; color: var(--fg);
+  border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line);
+  padding: 1px 0; min-width: 38px; text-align: center;
+}

@@ -1,6 +1,10 @@
 package web
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -230,5 +234,88 @@ func TestBuildClientTreeXHWAliases(t *testing.T) {
 	}
 	if !strings.Contains(c.Meta(), "在线 15 天") {
 		t.Errorf("在线时长（X_HW_Uptime）没认出来：%q", c.Meta())
+	}
+}
+
+// 信号图标：优先用设备自报的质量，没有才用 RSSI 换算；两者都没有就不渲染（不编）。
+func TestClientSignal(t *testing.T) {
+	cases := []struct {
+		name      string
+		in        ClientInfo
+		pct, bars int
+		hasSignal bool
+	}{
+		{"设备自报质量优先", ClientInfo{Quality: "55", RSSI: "-62"}, 55, 2, true},
+		{"没有质量就用 RSSI（-58 → 84%）", ClientInfo{RSSI: "-58"}, 84, 3, true},
+		{"RSSI  -50 及以上算满格", ClientInfo{RSSI: "-41"}, 100, 4, true},
+		{"RSSI -100 算 0", ClientInfo{RSSI: "-100"}, 0, 0, true},
+		{"很弱也给一格（不像没连上）", ClientInfo{RSSI: "-95"}, 10, 1, true},
+		{"质量超出范围要夹住", ClientInfo{Quality: "140"}, 100, 4, true},
+		{"什么都没有就不显示图标", ClientInfo{SNR: "30"}, 0, 0, false},
+	}
+	for _, c := range cases {
+		if got := c.in.SignalPct(); got != c.pct {
+			t.Errorf("%s：百分比 = %d，期望 %d", c.name, got, c.pct)
+		}
+		if got := c.in.HasSignal(); got != c.hasSignal {
+			t.Errorf("%s：HasSignal = %v，期望 %v", c.name, got, c.hasSignal)
+		}
+		if got := c.in.SignalBars(); got != c.bars {
+			t.Errorf("%s：格数 = %d，期望 %d", c.name, got, c.bars)
+		}
+	}
+	// 悬停提示要把原始数据带上（免得百分比看着像设备事实）
+	c := ClientInfo{Quality: "55", RSSI: "-62", SNR: "30"}
+	title := c.SignalTitle()
+	for _, want := range []string{"信号 55%", "2/4 格", "设备自报质量 55", "RSSI -62 dBm", "SNR 30"} {
+		if !strings.Contains(title, want) {
+			t.Errorf("悬停提示里应含 %q：%q", want, title)
+		}
+	}
+}
+
+// 模板**必须完整渲染**：以前直接把模板写到 ResponseWriter，执行到一半出错时
+// 会发出去半个页面、错误文本还混在 HTML 里（踩过：模板调了签名不对的方法）。
+// 现在渲染到内存再输出，所以这里断言页尾标记在，且信号图标真的渲染出来了。
+func TestDevicePageRendersCompletely(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "acs.db"))
+	if err != nil {
+		t.Fatalf("打开库失败: %v", err)
+	}
+	defer st.Close()
+	id, _, err := st.UpsertDevice(&store.Device{OUI: "001122", ProductClass: "R", SerialNumber: "RENDER"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+	ps := []store.Param{
+		{Name: b + "SSID", Value: "W"},
+		{Name: b + "X_HW_RFBand", Value: "2.4GHz"},
+		{Name: b + "AssociatedDeviceNumberOfEntries", Value: "1"},
+		{Name: b + "AssociatedDevice.1.AssociatedDeviceMACAddress", Value: "AA:BB:CC:DD:EE:FF"},
+		{Name: b + "AssociatedDevice.1.AssociatedDeviceIPAddress", Value: "192.168.1.9"},
+		{Name: b + "AssociatedDevice.1.RSSI", Value: "-58"},
+	}
+	if err := st.UpsertParams(id, ps, "getvalues"); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	if err := Register(mux, st, &stubCtrl{}); err != nil {
+		t.Fatalf("挂路由失败: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/devices/"+strconv.FormatInt(id, 10), nil))
+	if rec.Code != 200 {
+		t.Fatalf("详情页应 200，得到 %d：%s", rec.Code, rec.Body.String()[:200])
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"</html>", "sigbars", `data-sig="84"`, `data-bars="3"`, "84%"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("页面里应含 %q（模板没渲染完？）", want)
+		}
+	}
+	if strings.Contains(body, "invalid function signature") || strings.Contains(body, "template: ") {
+		t.Errorf("页面里混进了模板错误：%s", body[len(body)-200:])
 	}
 }

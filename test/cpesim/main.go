@@ -423,7 +423,10 @@ func (s *simulator) buildParams(root, specVersion string) {
 				c := w + fmt.Sprintf("AssociatedDevice.%d.", k)
 				set(c+"AssociatedDeviceMACAddress", fmt.Sprintf("02:00:%02X:00:00:%02X", i, k), "string")
 				set(c+"AssociatedDeviceIPAddress", fmt.Sprintf("10.0.%d.%d", i, k), "string")
-				set(c+"RSSI", strconv.Itoa(-40-i*5), "string")
+				set(c+"RSSI", strconv.Itoa(-(50 + 8*k + 4*i)), "string")
+				// 设备自报的信号质量（0..100）：界面上的百分比优先用它，
+				// 而不是我们拿 RSSI 换算 —— 各家对“几格”的口径不一样。
+				set(c+"SingalQuality", strconv.Itoa(20+20*k+15*i), "string")
 				set(c+"SNR", strconv.Itoa(40-i), "string")
 				set(c+"RxRate", "573", "string")
 				set(c+"TxRate", "433", "string")

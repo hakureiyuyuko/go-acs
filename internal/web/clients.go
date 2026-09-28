@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -35,14 +36,96 @@ var clientIdxRe = regexp.MustCompile(`(?i)^AssociatedDevice\.(\d+)\.(.+)$`)
 
 // ClientInfo 是一台已连终端。
 type ClientInfo struct {
-	MAC       string
-	IP        string
-	RSSI      string
-	SNR       string
+	MAC  string
+	IP   string
+	RSSI string
+	SNR  string
+	// Quality 是**设备自报**的信号质量（0..100，如华为的 X_HW_SingalQuality）。
+	// 有它就用它 —— 各家对 RSSI 到「几格」的换算不一样，设备自己算的更可信。
+	Quality   string
 	RxRate    string
 	TxRate    string
 	Bandwidth string
 	Uptime    string
+}
+
+// signalPct 算出要显示的信号百分比（0..100）；ok=false 表示信号未知（拿不到质量值也拿不到 RSSI）。
+//
+// 优先用设备自报的质量；没有再把 RSSI 按业界常见口径换算：
+// -50 dBm 及以上算满格、-100 dBm 及以下算 0（中间线性）。
+func (c ClientInfo) signalPct() (int, bool) {
+	if v := strings.TrimSpace(c.Quality); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			return clampPct(int(n + 0.5)), true
+		}
+	}
+	if v := strings.TrimSpace(c.RSSI); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			return clampPct(int((n+100)*2 + 0.5)), true
+		}
+	}
+	return 0, false
+}
+
+// SignalPct / SignalBars / HasSignal 都是给模板直接调的方法 ——
+// **必须只有一个返回值**：html/template 只认 (值, error) 两返回值，
+// 写成 (值, bool) 会报 “invalid function signature”，而且错误发生在渲染中途，
+// 页面会被截断（踩过：页尾混进一行 template 错误文本）。
+func (c ClientInfo) SignalPct() int {
+	pct, _ := c.signalPct()
+	return pct
+}
+
+// SignalBars 返回信号有几格（0..4）—— 跟商用 ACS 那个小柱子图标一样四格。
+func (c ClientInfo) SignalBars() int {
+	pct, ok := c.signalPct()
+	if !ok {
+		return 0
+	}
+	bars := (pct + 12) / 25 // 四舍五入到 0..4
+	if bars == 0 && pct > 0 {
+		bars = 1 // 有一点信号就至少给一格，不然看着像“没连上”
+	}
+	if bars > 4 {
+		bars = 4
+	}
+	return bars
+}
+
+// HasSignal 表示信号值拿得到（拿不到就不渲染那个小图标，不编）。
+func (c ClientInfo) HasSignal() bool {
+	_, ok := c.signalPct()
+	return ok
+}
+
+// SignalTitle 是悬停提示：把原始数据也给人看。
+func (c ClientInfo) SignalTitle() string {
+	pct, ok := c.signalPct()
+	if !ok {
+		return "设备没有上报信号"
+	}
+	parts := []string{fmt.Sprintf("信号 %d%%（%d/4 格）", pct, c.SignalBars())}
+	if v := strings.TrimSpace(c.Quality); v != "" {
+		parts = append(parts, "设备自报质量 "+v)
+	}
+	if v := strings.TrimSpace(c.RSSI); v != "" {
+		parts = append(parts, "RSSI "+v+" dBm")
+	}
+	if v := strings.TrimSpace(c.SNR); v != "" {
+		parts = append(parts, "SNR "+v)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// clampPct 把百分比夹到 0..100。
+func clampPct(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > 100 {
+		return 100
+	}
+	return n
 }
 
 // Meta 是终端条目下面那行灰色小字（把非空字段拼起来）。
@@ -169,10 +252,13 @@ func BuildClientTree(params []store.Param, nodes []FttrNode) *ClientTree {
 				ci.MAC = v
 			case "associateddeviceipaddress", "ipaddress", "x_hw_ipaddress":
 				ci.IP = v
-			case "rssi", "x_hw_rssi":
+			case "rssi", "x_hw_rssi", "signalstrength", "x_hw_signalstrength":
 				ci.RSSI = v
 			case "snr", "x_hw_snr":
 				ci.SNR = v
+			case "singalquality", "signalquality", "x_hw_singalquality", "x_hw_signalquality":
+				// 设备自报的信号质量（0..100）；界面上优先用它
+				ci.Quality = v
 			case "rxrate", "x_hw_rxrate":
 				ci.RxRate = v
 			case "txrate", "x_hw_txrate":

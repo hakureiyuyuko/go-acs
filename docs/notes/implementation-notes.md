@@ -635,6 +635,25 @@ TR-069 虽然要求一次 SetParameterValues 里的参数原子生效，但不�
 现在 `WifiOverview` / `wifiInstanceParams` / `WifiInstances` 都会跳过子设备自己的 WLAN
 （`isSubDeviceWifi`），子设备的终端只在「FTTR 子设备」区块里看。
 
+**信号图标（四格小柱 + 百分比）**，口径定成两条，避免“同一个信号两种数字”：
+
+1. **优先用设备自报的质量**（华为 `X_HW_SingalQuality`，0..100；也认 `SignalQuality`）——
+   各家对「几格」的换算不一样，设备自己算的更可信。
+2. 没有质量值才用 RSSI 换算：**-50 dBm 及以上算满格、-100 dBm 及以下算 0**（中间线性）。
+   格数按 `round(百分比/25)`，有一点信号至少给一格（不然看着像“没连上”）。
+3. 两者都拿不到 → **不渲染这个图标**（不编）。悬停提示里把原始值都列出来
+   （设备自报质量 / RSSI / SNR），免得百分比被当成设备事实。
+
+**踩了一个坑（值得记）**：模板里调用方法时**只能有一个返回值**（或 `(值, error)`）。
+我一开始写了 `SignalPct() (int, bool)` 给模板用，`html/template` 直接报
+`invalid function signature: second return value should be error; is bool` ——
+更糟的是这个错误发生在**渲染中途**：页面被截断，页尾还混进一行 template 错误文本，
+因为原来是把模板直接写到 `ResponseWriter` 的。
+→ 两处都改了：① 给模板的方法都改成单返回值（内部另有一个 `signalPct() (int, bool)`）；
+② 新增 `Server.render()`，**先渲染到内存、成功后再写出**，出错就干干净净回 500。
+另外补了个回归用例 `TestDevicePageRendersCompletely`（断言页尾 `</html>` 在、
+且信号图标真的渲染出来），这类“渲染到一半出错”的问题以后会被直接抓出来。
+
 界面做法：弹窗内容**由服务端一起渲染在页面里**（`hidden`），`app.js` 只负责开/关
 （`data-modal` 打开，点遮罩 / ✕ / Esc 关闭）—— 不额外发请求，也不依赖前端拼内容。
 频段那一行点开的是**该频段**的完整列表（主机 + 各子机分组，分组头写明「主机 · SSID」/「子机 1（K251e）· SSID」），
@@ -1001,8 +1020,8 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
 
 | 项目 | 结果 |
 | --- | --- |
-| `go test ./...` | 全部通过（`internal/cwmp` 41 个用例、`internal/store` 9 个用例、`internal/web` 25 个用例）|
-| `scripts/verify-s1.sh` | **通过 238 / 失败 0** |
+| `go test ./...` | 全部通过（`internal/cwmp` 41 个用例、`internal/store` 9 个用例、`internal/web` 27 个用例）|
+| `scripts/verify-s1.sh` | **通过 246 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
 | 真机（华为 HN8145X6N + V271-20） | **两台不同型号均自动纳管成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |

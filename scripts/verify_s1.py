@@ -998,6 +998,34 @@ def main():
 
         # 其它设备必须还在（真机/别的模拟设备不能被连累）
         check("其它设备仍在列表里", len(api_devices()) == before - 1, len(api_devices()))
+
+    print("== 32. 终端条目的信号图标（四格小柱 + 百分比）==")
+    cli = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-CLI"]
+    if cli:
+        st, h = get(f"/devices/{cli[0]['ID']}")
+        modals = h.split('<div class="modal-mask"', 1)[1] if '<div class="modal-mask"' in h else ""
+        check("页面完整渲染（没有半截页 / 没有模板错误文本）",
+              h.rstrip().endswith("</html>") and "invalid function signature" not in h, st)
+
+        # 主机那两台没有“设备自报质量”，百分比由 RSSI 换算（-50 及以上满格、-100 为 0）
+        check("没有质量值时按 RSSI 换算：-41 dBm → 100%（4 格）",
+              '<span class="sigbars" data-sig="100" data-bars="4"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span>' in modals,
+              "")
+        check("按 RSSI 换算：-58 dBm → 84%（3 格）",
+              '<span class="sigbars" data-sig="84" data-bars="3"><i class="on"></i><i class="on"></i><i class="on"></i><i class=""></i></span>' in modals,
+              "")
+        # 子机那几台给了设备自报质量（55）→ 百分比优先用它，而不是拿 RSSI 去算
+        check("设备自报质量优先：质量 55 → 55%（2 格）",
+              '<span class="sigbars" data-sig="55" data-bars="2"><i class="on"></i><i class="on"></i><i class=""></i><i class=""></i></span>' in modals,
+              "")
+        check("百分比以文字显示在图标下方", ">84%</span>" in modals and ">55%</span>" in modals, "")
+        check("悬停提示里带上原始数据（质量 / RSSI / SNR）",
+              "设备自报质量 55" in modals and "RSSI -58 dBm" in modals, "")
+        check("每个终端都有信号块（数量对得上）",
+              modals.count('class="clisig"') == modals.count('class="sigbars"') >= 6,
+              (modals.count('class="clisig"'), modals.count('class="sigbars"')))
+        st, css = get("/static/style.css")
+        check("样式里有信号柱与百分比", ".sigbars" in css and ".sigpct" in css, st)
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")
