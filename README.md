@@ -103,6 +103,20 @@ ACS_LOG_LEVEL=debug ACS_LOG_SOAP=1 scripts/dev-server.sh restart
 
 所有跟运行环境绑定的值都是可配置的，代码里不写死「某台机器的事实」。
 
+## 仓库里有什么、没有什么
+
+- **有**：ACS 本体（`cmd/` `internal/`）、CPE 模拟器（`test/cpesim`）、验收脚本（`scripts/`）、
+  文档与真机抓包固化下来的回归样本（`internal/cwmp/testdata/`）。
+- **没有**：运行时数据库、日志、构建产物、第三方参考源码 —— 见 `.gitignore`。
+
+**样本与文档都做过脱敏**：来自真机的序列号、MAC、SSID、内网地址、终端主机名都换成了示例值
+（序列号形如 `48575443AA0000NN`，MAC 一律以 `02:` 开头即本地管理地址，SSID 为 `HomeWifi` / `LabWifi`）；
+设备**型号与固件版本保留**，因为那是兼容性记录，不属于个人信息。
+报文结构、参数名、状态码、错误码这些都原样保留，样本的回归价值不受影响。
+
+⚠️ 运行期的 `data/acs.db` 里有**真实设备信息与凭据**（面板密码散列、ConnectionRequest 密码、
+设备序列号与 MAC），它已被 `.gitignore` 排除；打包发布时也**不要**把它拷进发行物。
+
 ## 目录结构
 
 ```

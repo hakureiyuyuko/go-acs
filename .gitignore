@@ -6,14 +6,23 @@
 /cpesim
 /bin/
 
-# 运行时数据
+# 运行时数据（**含真实设备信息与凭据**，一律不进库）
+/data/
 *.db
 *.db-shm
 *.db-wal
-/data/
+*.log
 /files/
 
-# 编辑器
+# 打包 / 备份产物（别把 data/ 混进去）
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.bundle
+
+# 编辑器与系统
 .idea/
 .vscode/
 *.swp
+.DS_Store
