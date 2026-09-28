@@ -270,6 +270,16 @@ var wifiSummarySuffixes = []string{
 	".TotalAssociations",               // 已连终端数
 	".AssociatedDeviceNumberOfEntries", // 已连终端数（TR-181）
 	".SSIDAdvertisementEnabled",        // 是否广播 SSID
+	// 下面几个只读参数不参与展示，但能给编辑表单提供**下拉框候选值**：
+	// 信道可选值、发射功率可选值、支持的标准。这比在界面里写死列表靠谱。
+	".PossibleChannels",
+	".TransmitPowerSupported",
+	".X_HW_SupportedStandards",
+	// 可编辑的字段：密码与发射功率（读回来通常是空/只读，但写是有效的）
+	".KeyPassphrase",
+	".TransmitPower",
+	".IEEE11iEncryptionModes",
+	".IEEE11iAuthenticationMode",
 }
 
 // wifiSubtreePath 给出无线参数的子树路径。
@@ -329,6 +339,39 @@ func (s *Server) enqueueGPVDivided(deviceID int64, names []string) (int, error) 
 		batches++
 	}
 	return batches, nil
+}
+
+// EnqueueSetParameters 入队一条设置参数的任务。
+//
+// ParameterKey 由我们生成、CPE 必须在响应里原样回传，用来把“哪一次设置”对上。
+func (s *Server) EnqueueSetParameters(deviceID int64, vals []ParamValue) (int64, error) {
+	if len(vals) == 0 {
+		return 0, fmt.Errorf("没有要设置的参数")
+	}
+	key := newRPCID()
+	payload, _ := json.Marshal(spvPayload{Values: vals, ParameterKey: key})
+	id, err := s.store.EnqueueTask(&store.Task{
+		DeviceID:   deviceID,
+		Kind:       TaskSetParameterValues,
+		Payload:    string(payload),
+		CommandKey: key,
+	})
+	if err == nil {
+		s.log.Info("已入队：设置参数",
+			"device_id", deviceID, "count", len(vals), "parameter_key", key)
+	}
+	return id, err
+}
+
+// SetParameters 给外部（Web/REST）用。
+// 用 store.Param 传参只是为了复用一个已有类型（Name/Value/ValueType 正好够用）。
+func (s *Server) SetParameters(deviceID int64, params []store.Param) error {
+	vals := make([]ParamValue, 0, len(params))
+	for _, p := range params {
+		vals = append(vals, ParamValue{Name: p.Name, Value: p.Value, Type: p.ValueType})
+	}
+	_, err := s.EnqueueSetParameters(deviceID, vals)
+	return err
 }
 
 // filterLeafNames 从枚举结果里挑出可以取值的叶子参数名。
@@ -728,16 +771,63 @@ func (s *Server) chainFetchAfterNames(sess *Session, p gpnPayload, infos []Param
 // onSimpleResponse 处理我们不特别关心的响应（如 SetParameterValuesResponse）。
 func (s *Server) onSimpleResponse(w http.ResponseWriter, sess *Session, m *Node, note string) {
 	if m.Local == "SetParameterValuesResponse" {
-		status := m.ChildText("Status")
-		if status != "" && status != "0" {
-			s.finishTask(sess, "CPE 报告设置失败，Status="+status)
-			s.log.Warn("CPE 设置参数失败", "device_id", sess.DeviceID, "status", status)
-			s.dispatchNextTask(w, sess)
-			return
-		}
+		s.handleSetParameterValuesResponse(w, sess, m)
+		return
 	}
 	s.finishTask(sess, note)
 	s.dispatchNextTask(w, sess)
+}
+
+// handleSetParameterValuesResponse 处理设置参数的回执。
+func (s *Server) handleSetParameterValuesResponse(w http.ResponseWriter, sess *Session, m *Node) {
+	status := strings.TrimSpace(m.ChildText("Status"))
+	if status != "" && status != "0" {
+		msg := "CPE 报告设置失败，Status=" + status
+		s.log.Warn("设置参数失败", "device_id", sess.DeviceID, "status", status)
+		s.failTask(sess, msg)
+		s.dispatchNextTask(w, sess)
+		return
+	}
+
+	// 写入成功不等于真的生效：把刚写的参数读回来核对。
+	// 这一步是值得的 —— 有的 CPE 会默默接受写入但对某个参数不生效，
+	// 只有读回来才能看出来；而且顺带把界面上的值刷新成实际值。
+	s.enqueueReadBack(sess)
+	s.finishTask(sess, "设置成功（Status="+statusOrZero(status)+"）")
+	s.dispatchNextTask(w, sess)
+}
+
+func statusOrZero(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "0"
+	}
+	return s
+}
+
+// enqueueReadBack 把刚设置过的那批参数读回来。
+func (s *Server) enqueueReadBack(sess *Session) {
+	if sess.pendingTask == 0 || sess.DeviceID == 0 {
+		return
+	}
+	t, err := s.store.GetTask(sess.pendingTask)
+	if err != nil || t == nil || t.Kind != TaskSetParameterValues {
+		return
+	}
+	var p spvPayload
+	if json.Unmarshal([]byte(t.Payload), &p) != nil || len(p.Values) == 0 {
+		return
+	}
+	names := make([]string, 0, len(p.Values))
+	for _, v := range p.Values {
+		names = append(names, v.Name)
+	}
+	batches, err := s.enqueueGPVDivided(sess.DeviceID, names)
+	if err != nil {
+		s.log.Warn("入队读回校验失败", "device_id", sess.DeviceID, "err", err)
+		return
+	}
+	s.log.Info("设置成功，同一会话内读回核对",
+		"device_id", sess.DeviceID, "params", len(names), "batches", batches)
 }
 
 // onFault 处理 CPE 回的错误。
@@ -828,6 +918,17 @@ func (s *Server) finishTask(sess *Session, note string) {
 	}
 	if err := s.store.CompleteTask(sess.pendingTask, note); err != nil {
 		s.log.Warn("标记任务完成出错", "task_id", sess.pendingTask, "err", err)
+	}
+	sess.pendingTask = 0
+}
+
+// failTask 把当前在途任务标记失败。
+func (s *Server) failTask(sess *Session, note string) {
+	if sess.pendingTask == 0 {
+		return
+	}
+	if err := s.store.FailTask(sess.pendingTask, note); err != nil {
+		s.log.Warn("标记任务失败出错", "task_id", sess.pendingTask, "err", err)
 	}
 	sess.pendingTask = 0
 }

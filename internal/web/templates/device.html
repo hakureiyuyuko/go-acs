@@ -51,13 +51,13 @@
   {{if .WiFi}}
   <table>
     <thead>
-      <tr><th>频段</th><th>SSID</th><th>射频</th><th>信道</th><th>标准</th><th>加密</th><th>终端</th><th>状态</th></tr>
+      <tr><th>频段</th><th>SSID</th><th>射频</th><th>信道</th><th>标准</th><th>加密</th><th>终端</th><th>状态</th><th></th></tr>
     </thead>
     <tbody>
       {{range .WiFi}}
       <tr>
         <td><b>{{.Label}}</b>{{if .Note}} <span class="hint">{{.Note}}</span>{{end}}</td>
-        <td class="mono">{{if .SSID}}{{.SSID}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td class="mono">{{if .SSID}}<a href="/devices/{{$.Device.ID}}/wifi/{{.Instance}}">{{.SSID}}</a>{{else}}<span class="hint">-</span>{{end}}</td>
         <td>
           {{if .HaveOn}}
             {{if .On}}<span class="badge on">开</span>{{else}}<span class="badge off">关</span>{{end}}
@@ -68,6 +68,7 @@
         <td class="mono">{{if .Security}}{{.Security}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Clients}}{{.Clients}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Status}}{{.Status}}{{else}}-{{end}}</td>
+        <td><a class="btn" href="/devices/{{$.Device.ID}}/wifi/{{.Instance}}">修改</a></td>
       </tr>
       {{end}}
     </tbody>

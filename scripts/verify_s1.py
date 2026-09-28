@@ -7,7 +7,9 @@
 import base64
 import json
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = sys.argv[1].rstrip("/")
@@ -46,6 +48,49 @@ def post(body, user=None, pw=None, ctype='text/xml; charset="utf-8"'):
 def get(path):
     with urllib.request.urlopen(BASE + path, timeout=20) as r:
         return r.status, r.read().decode("utf-8", "replace")
+
+
+def get_code(path):
+    """只取状态码（404 之类的不会抛异常）。"""
+    try:
+        with urllib.request.urlopen(BASE + path, timeout=20) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """不让 urllib 自动跟随重定向，否则看不到 303。"""
+
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+_NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
+
+
+def post_form(path, fields):
+    """提交一个表单，返回 (状态码, Location)。不跟随重定向。"""
+    data = urllib.parse.urlencode(fields).encode()
+    req = urllib.request.Request(BASE + path, data=data, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with _NO_REDIRECT.open(req, timeout=20) as r:
+            return r.status, r.headers.get("Location", "")
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Location", "")
+
+
+def wait_tasks_done(device_id, kinds=("SetParameterValues",), timeout=150):
+    """等某类任务全部结束（或超时）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        full = api_device(device_id)
+        busy = [t for t in full["tasks"] if t["Kind"] in kinds and t["Status"] in ("pending", "running")]
+        if not busy:
+            return full
+        time.sleep(1)
+    return api_device(device_id)
 
 
 def api_devices():
@@ -139,8 +184,8 @@ def main():
         names = [p["Name"] for p in full["params"]]
         check("采到了 DeviceInfo 子树", any(n.endswith("DeviceInfo.ModelName") for n in names), names[:5])
         check("采到了 UpTime", any(n.endswith("DeviceInfo.UpTime") for n in names))
-        check("UpTime 类型正确(unsignedint)",
-              any(n.endswith("UpTime") and p["ValueType"] == "unsignedint" for n, p in zip(names, full["params"])))
+        check("UpTime 类型正确(unsignedInt)",
+              any(n.endswith("UpTime") and p["ValueType"] == "unsignedInt" for n, p in zip(names, full["params"])))
         check("Inform 记录已落库", len(full["informs"]) >= 1, full["informs"][:1])
         check("Inform 事件码正确", full["informs"] and "0 BOOTSTRAP" in full["informs"][0]["Events"],
               full["informs"][:1])
@@ -240,7 +285,56 @@ def main():
         check("设备详情页有无线区块", "无线（WiFi）" in dhtml)
         check("详情页显示两个 SSID", "SimWiFi" in dhtml and "SimWiFi-5G" in dhtml)
 
-    print("== 14. 认证（默认实例未启用，只验证未认证时可通）==")
+    print("== 14. WiFi 编辑表单 ==")
+    d98 = [d for d in api_devices() if d["SerialNumber"] == "VERIFY098"]
+    did = d98[0]["ID"] if d98 else 0
+    if did:
+        st, fhtml = get(f"/devices/{did}/wifi/1")
+        check("编辑页 200", st == 200, st)
+        check("编辑页显示字段标签与要写入的参数名",
+              "SSID" in fhtml and "WLANConfiguration.1.SSID" in fhtml)
+        check("信道下拉候选来自设备的 PossibleChannels", 'value="13"' in fhtml)
+        check("发射功率候选来自 TransmitPowerSupported 且带单位", "20%" in fhtml)
+        check("密码框是 password 且提示为空不修改",
+              'type="password"' in fhtml and "为空表示不修改" in fhtml)
+        check("设备没报的字段不会渲染成表单项（信道带宽）",
+              '<div class="wlabel">信道带宽</div>' not in fhtml)
+        check("不存在的实例返回 404", get_code(f"/devices/{did}/wifi/999") == 404)
+
+    print("== 15. 改 WiFi：提交 → 下发 → 设备生效 → 读回核对 ==")
+    if did:
+        newssid = "ACS-RENAMED-2G"
+        # 只提交 SSID 一个字段：其余字段不提交就应该不下发
+        st, loc = post_form(f"/devices/{did}/wifi/1", {"ssid": newssid})
+        check("提交返回 303 重定向", st == 303, st)
+        check("重定向里标明了入队条数=1", "queued=1" in (loc or ""), loc)
+
+        full = api_device(did)
+        spv = [t for t in full["tasks"] if t["Kind"] == "SetParameterValues"]
+        check("已入队 SetParameterValues", len(spv) == 1, [(t["Kind"], t["Status"]) for t in full["tasks"][:3]])
+        if spv:
+            check("只包含改动过的那 1 个参数",
+                  spv[0]["Payload"].count("WLANConfiguration.1.SSID") == 1,
+                  spv[0]["Payload"][:140])
+
+        # 让模拟器上线一次，把任务带出去执行
+        ok, out = run_sim(workdir, "-serial", "VERIFY098", "-oui", "001122", "-once", "-event", "2 PERIODIC")
+        check("模拟器会话成功", ok, out[-200:])
+
+        full = wait_tasks_done(did)
+        vals = {p["Name"]: p["Value"] for p in full["params"]}
+        got = vals.get("InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID")
+        check("设备上的 SSID 已变成新值（写回 + 读回核对成功）", got == newssid, got)
+        done = [t for t in full["tasks"] if t["Kind"] == "SetParameterValues" and t["Status"] == "done"]
+        check("SetParameterValues 任务已完成", len(done) >= 1,
+              [(t["Kind"], t["Status"], t["Result"][:40]) for t in full["tasks"][:4]])
+        # 没动过的参数不应被重复写入
+        if len(spv) == 1:
+            payload = spv[0]["Payload"]
+            check("没动过的参数没有被一起写入",
+                  "TotalAssociations" not in payload and "BeaconType" not in payload)
+
+    print("== 16. 认证（默认实例未启用，只验证未认证时可通）==")
     st, _, _, _ = post(envelope("urn:dslforum-org:cwmp-1-0", "u3", "<cwmp:GetRPCMethods/>"))
     check("未启用认证时无凭证也能通", st == 200, st)
 

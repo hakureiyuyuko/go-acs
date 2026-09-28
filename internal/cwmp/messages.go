@@ -70,13 +70,37 @@ func (i *Inform) CommandKeyOfEvent(code string) string {
 
 // ---------- 解析 ----------
 
-// normType 把 "xsd:string" / "xsi:unsignedInt" 归一化成 "string" / "unsignedint"。
-func normType(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.LastIndex(s, ":"); i >= 0 {
-		s = s[i+1:]
+// canonicalType 把 CPE 报的类型名归一化成 XML Schema 的**规范写法**。
+//
+// 为什么不能简单转小写：写回去的时候要用 xsd:<type>，而 XML Schema 的类型名是
+// 大小写敏感的 —— xsd:unsignedInt 合法，xsd:unsignedint 不合法，严格的 CPE 会拒收
+// （9008 invalid parameter type）。不认识的类型原样保留，不瞎改。
+func canonicalType(s string) string {
+	t := strings.TrimSpace(s)
+	if i := strings.LastIndex(t, ":"); i >= 0 {
+		t = t[i+1:]
 	}
-	return strings.ToLower(s)
+	switch strings.ToLower(t) {
+	case "", "string":
+		return "string"
+	case "int", "integer":
+		return "int"
+	case "long":
+		return "long"
+	case "unsignedint":
+		return "unsignedInt"
+	case "unsignedlong":
+		return "unsignedLong"
+	case "boolean", "bool":
+		return "boolean"
+	case "datetime":
+		return "dateTime"
+	case "base64":
+		return "base64"
+	case "hexbinary":
+		return "hexBinary"
+	}
+	return t
 }
 
 // ParseParamValues 解析一个 ParameterValueStruct 列表（ParameterList 的内容）。
@@ -88,14 +112,10 @@ func ParseParamValues(list *Node) []ParamValue {
 	out := make([]ParamValue, 0, len(kids))
 	for _, s := range kids {
 		v := s.Child("Value")
-		t := normType(v.Attr("type"))
-		if t == "" {
-			t = "string"
-		}
 		out = append(out, ParamValue{
 			Name:  s.ChildText("Name"),
 			Value: v.Trimmed(),
-			Type:  t,
+			Type:  canonicalType(v.Attr("type")),
 		})
 	}
 	return out
@@ -253,10 +273,8 @@ func SetParameterValuesBody(vals []ParamValue, parameterKey string) string {
 	b.WriteString(strconv.Itoa(len(vals)))
 	b.WriteString(`]">`)
 	for _, v := range vals {
-		t := v.Type
-		if t == "" {
-			t = "string"
-		}
+		// 写出去的类型要合法：xsd:unsignedInt 行，xsd:unsignedint 不行
+		t := canonicalType(v.Type)
 		b.WriteString(`<ParameterValueStruct><Name>` + esc(v.Name) + `</Name>`)
 		b.WriteString(`<Value xsi:type="xsd:` + esc(t) + `">` + esc(v.Value) + `</Value>`)
 		b.WriteString(`</ParameterValueStruct>`)

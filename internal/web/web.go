@@ -30,6 +30,8 @@ type Controller interface {
 	FetchSubtree(deviceID int64, path string, exclude []string, max int) error
 	// FetchWiFi 采集无线概况（看板上的 2.4G/5G 那一栏）。
 	FetchWiFi(deviceID int64) error
+	// SetParameters 下发 SetParameterValues（改 WiFi 名字/密码/开关等）。
+	SetParameters(deviceID int64, params []store.Param) error
 }
 
 // Server 是界面服务。
@@ -69,6 +71,8 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller) error {
 	mux.HandleFunc("POST /devices/{id}/refresh", s.handleRefresh)
 	mux.HandleFunc("POST /devices/{id}/fetch", s.handleFetch)
 	mux.HandleFunc("POST /devices/{id}/wifi", s.handleWifi)
+	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", s.handleWifiEdit)
+	mux.HandleFunc("POST /devices/{id}/wifi/{inst}", s.handleWifiSave)
 	mux.HandleFunc("GET /api/devices", s.apiDevices)
 	mux.HandleFunc("GET /api/devices/{id}", s.apiDevice)
 	mux.HandleFunc("POST /api/devices/{id}/fetch", s.apiFetch)
@@ -175,6 +179,145 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		_ = s.ctrl.RequestRefresh(id)
 	}
 	http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+// handleWifiEdit 展示某个频段的无线编辑表单。
+func (s *Server) handleWifiEdit(w http.ResponseWriter, r *http.Request) {
+	id, inst, ok := s.deviceAndInst(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.store.GetDevice(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	wifiParams, _ := s.store.WifiParams()
+	all := wifiParams[id]
+
+	bands := WifiOverview(all)
+	var band *WifiBand
+	for i := range bands {
+		if bands[i].Instance == inst {
+			band = &bands[i]
+		}
+	}
+	if band == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	tasks, _ := s.store.ListTasks(id, 8)
+	data := map[string]any{
+		"Device": d,
+		"Band":   band,
+		"Fields": WifiForm(inst, all),
+		"Tasks":  tasks,
+		"Queued": r.URL.Query().Get("queued"),
+		"Path":   "/devices/" + strconv.FormatInt(id, 10) + "/wifi/" + strconv.Itoa(inst),
+	}
+	if err := s.tpl.ExecuteTemplate(w, "wifi_edit.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleWifiSave 处理无线编辑表单的提交：把真正变了的字段拼成 SetParameterValues 入队。
+//
+// 只下发「变过的」字段，有两个好处：
+//   - 不会把没动过的参数重新写一遍（少一次风险）；
+//   - 密码留空就真的不碰（很多 CPE 不返回明文密码，本来就无法“改成一样”）。
+func (s *Server) handleWifiSave(w http.ResponseWriter, r *http.Request) {
+	id, inst, ok := s.deviceAndInst(w, r)
+	if !ok {
+		return
+	}
+	back := "/devices/" + strconv.FormatInt(id, 10) + "/wifi/" + strconv.Itoa(inst)
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "表单解析失败", http.StatusBadRequest)
+		return
+	}
+
+	wifiParams, _ := s.store.WifiParams()
+	fields := WifiForm(inst, wifiParams[id])
+
+	var sets []store.Param
+	for _, f := range fields {
+		if f.ReadOnly {
+			continue
+		}
+		var newVal string
+		switch f.Kind {
+		case "bool":
+			if r.Form.Get("h_"+f.Key) == "" {
+				continue // 这个字段没渲染出来
+			}
+			if r.Form.Get(f.Key) != "" {
+				newVal = "1"
+			} else {
+				newVal = "0"
+			}
+		case "password":
+			newVal = strings.TrimSpace(r.Form.Get(f.Key))
+			if newVal == "" {
+				continue // 留空 = 不修改
+			}
+		default:
+			v, present := r.Form[f.Key]
+			if !present {
+				continue
+			}
+			newVal = strings.TrimSpace(v[0])
+		}
+		if newVal == f.Value {
+			continue // 没变不下发
+		}
+		sets = append(sets, store.Param{Name: f.Param, Value: newVal, ValueType: f.Type})
+	}
+
+	// 高级：直接指定任意参数
+	if name := strings.TrimSpace(r.FormValue("adv_name")); name != "" {
+		val := r.FormValue("adv_value")
+		typ := r.FormValue("adv_type")
+		if typ == "" {
+			// 拿设备上已经知道的类型；不知道就按 string
+			if known, found, err := s.store.GetParam(id, name); err == nil && found && known.ValueType != "" {
+				typ = known.ValueType
+			} else {
+				typ = "string"
+			}
+		}
+		sets = append(sets, store.Param{Name: name, Value: val, ValueType: typ})
+	}
+
+	if len(sets) == 0 {
+		http.Redirect(w, r, back+"?queued=none", http.StatusSeeOther)
+		return
+	}
+	if s.ctrl == nil {
+		http.Error(w, "未接入控制接口", http.StatusInternalServerError)
+		return
+	}
+	if err := s.ctrl.SetParameters(id, sets); err != nil {
+		http.Error(w, "入队失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, back+"?queued="+strconv.Itoa(len(sets)), http.StatusSeeOther)
+}
+
+// deviceAndInst 解析路径里的设备 ID 与无线实例号。
+func (s *Server) deviceAndInst(w http.ResponseWriter, r *http.Request) (int64, int, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return 0, 0, false
+	}
+	inst, err := strconv.Atoi(r.PathValue("inst"))
+	if err != nil {
+		http.NotFound(w, r)
+		return 0, 0, false
+	}
+	return id, inst, true
 }
 
 // handleWifi 处理界面上的「重新采集无线概况」按钮。

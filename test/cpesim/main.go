@@ -184,6 +184,13 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(wlan+"1.WPAEncryptionModes", "AESEncryption", "string")
 		set(wlan+"1.TotalAssociations", "2", "unsignedInt")
 		set(wlan+"1.X_HW_RFBand", "2.4GHz", "string")
+		// 下面这几个是「可编辑 / 给下拉框提供候选值」用的
+		set(wlan+"1.KeyPassphrase", "", "string")
+		set(wlan+"1.IEEE11iEncryptionModes", "AESEncryption", "string")
+		set(wlan+"1.IEEE11iAuthenticationMode", "PSKAuthentication", "string")
+		set(wlan+"1.TransmitPower", "100", "unsignedInt")
+		set(wlan+"1.TransmitPowerSupported", "20,40,60,80,100", "string")
+		set(wlan+"1.PossibleChannels", "1,2,3,4,5,6,7,8,9,10,11,12,13", "string")
 
 		set(wlan+"5.SSID", "SimWiFi-5G", "string")
 		set(wlan+"5.Enable", "1", "boolean")

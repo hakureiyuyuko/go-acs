@@ -151,12 +151,12 @@ func TestParseRealHuaweiGetParameterValuesResponse(t *testing.T) {
 	if !ok {
 		t.Fatal("没解出 UpTime")
 	}
-	if up.Value != "949" || up.Type != "unsignedint" {
-		t.Errorf("UpTime = %q [%s]，期望 949 [unsignedint]", up.Value, up.Type)
+	if up.Value != "949" || up.Type != "unsignedInt" {
+		t.Errorf("UpTime = %q [%s]，期望 949 [unsignedInt]", up.Value, up.Type)
 	}
 
 	if ms, ok := byName["InternetGatewayDevice.ManagementServer.PeriodicInformInterval"]; !ok ||
-		ms.Value != "120" || ms.Type != "unsignedint" {
+		ms.Value != "120" || ms.Type != "unsignedInt" {
 		t.Errorf("PeriodicInformInterval = %+v", ms)
 	}
 }

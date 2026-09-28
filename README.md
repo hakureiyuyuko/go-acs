@@ -101,6 +101,10 @@ docs/               需求文档与笔记
 - **ACS→CPE 下发**：`GetParameterValues` / `GetParameterNames` / `SetParameterValues` / `Reboot` / `GetRPCMethods`
 - **CPE→ACS 接收**：`Inform` / `Fault` / 各类 `*Response` / `TransferComplete`（先记录）
 - **Web 界面**：设备列表 + 设备详情（基本信息 / 参数表带过滤 / 任务历史 / Inform 记录）+ 一键「重新获取设备信息」
+- **修改无线设置**：看板或详情页点 SSID（或频段）进入编辑表单，提交后下发 `SetParameterValues`。
+  字段是否出现、写向哪个参数、下拉候选值（信道/功率来自设备的 `PossibleChannels`、
+  `TransmitPowerSupported`）**全部从设备实报参数推导**，不写死；只下发真正改动过的字段；
+  下发成功后自动把参数读回来核对（写入成功不等于真的生效）
 - **JSON API**：`/api/devices`、`/api/devices/{id}`
 - **看板 WiFi 概览**：首页按设备分频段展示 2.4G/5G 的 SSID、射频开关、信道、标准、加密与**已连终端数**，
   并给出终端总数；首次纳管 / `0 BOOTSTRAP` 时**自动采集**（先枚举子树圈出真实实例号，
@@ -137,7 +141,7 @@ TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生�
 对应 `internal/cwmp/realdevice_test.go` 里的 4 个用例 —— 以后重构解析逻辑时，
 真机的那些怪癖（大写前缀、自闭合空元素、根节点名大小写写错）会被测到。
 
-## 实现过程中踩到/修掉的四个真问题
+## 实现过程中踩到/修掉的五个真问题
 
 1. **CWMP 命名空间回填写成了版本号**（单测抓到）
    `ParseEnvelope` 一度把 `env.CWMPNS` 设成 `"1.0"` 而不是完整的 `urn:dslforum-org:cwmp-1-0`，
@@ -166,6 +170,15 @@ TR-098 与 TR-181 两种设备的纳管与信息采集、重复上报不产生�
    因为各批还是同一个会话里依次下发。修完后 376 个参数拆成 200+176 两批，**一条不丢**。
    另加 `warnIfPartialResponse` 防御：发现「回的比请求的少」就记 WARN。
    > 这个坑自研模拟器永远发现不了（它会老老实实全返回）—— 又一次说明必须拿真机验收。
+
+5. **写回参数时类型名的大小写必须规范**（做「修改 WiFi」时想到并修掉）
+   我们原来把 CPE 报的类型名一律转小写存（`unsignedInt` -> `unsignedint`），
+   于是写回去就变成 `xsi:type="xsd:unsignedint"`。XML Schema 类型是**大小写敏感**的，
+   `xsd:unsignedint` 不合法，严格的 CPE 会直接拒收（9008 invalid parameter type）。
+   因为只影响写入路径，读/展示一直看不出来。
+   → 新增 `canonicalType()`：归一化成规范写法（`string` / `int` / `unsignedInt` /
+   `boolean` / `dateTime` / `base64`…），解析时和**写出去时**都过一遍（后者能顺便
+   修正库里已有的旧值），不认识的类型原样保留不瞎改。
 
 ## 相关笔记
 

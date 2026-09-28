@@ -69,3 +69,32 @@ input.filter {
 .empty { padding: 40px; text-align: center; color: var(--dim); }
 pre { background: var(--panel2); padding: 10px; border-radius: 8px; overflow: auto; margin: 0; font-size: 12px; }
 .crumb { color: var(--dim); font-size: 13px; margin-bottom: 12px; }
+
+/* 提示条 */
+.notice {
+  background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--warn);
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
+}
+.notice.ok { border-left-color: var(--ok); }
+
+/* WiFi 编辑表单（模仿商用 ACS 的“标签靠右、输入框靠左”排布） */
+form.wform { max-width: 900px; }
+.wrow { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
+.wlabel {
+  flex: 0 0 130px; text-align: right; padding-top: 7px;
+  color: var(--dim); font-size: 13px;
+}
+.winput { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.winput input[type=text], .winput input[type=password], .winput select {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
+  border-radius: 7px; padding: 7px 11px; font-family: inherit; font-size: 13px;
+  height: 34px; box-sizing: border-box;
+}
+.winput input[type=text] { width: 300px; }
+.winput input[type=password] { width: 300px; }
+.winput select { width: 200px; }
+.winput > button { align-self: flex-start; }
+.winput input:disabled, .winput select:disabled { opacity: .45; cursor: not-allowed; }
+.winput input:focus, .winput select:focus { outline: none; border-color: var(--accent); }
+label.chk { display: inline-flex; align-items: center; gap: 7px; padding-top: 7px; cursor: pointer; }
+label.chk input { width: 16px; height: 16px; accent-color: var(--accent); }

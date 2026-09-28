@@ -105,6 +105,121 @@ func TestWifiOverviewTruthiness(t *testing.T) {
 	}
 }
 
+func TestWifiFormBuildsFromDeviceParams(t *testing.T) {
+	b := "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+	mk := func(name, value, typ string) store.Param {
+		return store.Param{Name: b + name, Value: value, ValueType: typ, Writable: true, Source: "getnames"}
+	}
+	params := []store.Param{
+		mk("SSID", "WirelessNet", "string"),
+		mk("Enable", "1", "boolean"),
+		mk("RadioEnabled", "1", "boolean"),
+		mk("AutoChannelEnable", "1", "boolean"),
+		mk("Channel", "6", "unsignedInt"),
+		mk("PossibleChannels", "1,2,3,6,11,13", "string"),
+		mk("BeaconType", "11i", "string"),
+		mk("IEEE11iEncryptionModes", "AESEncryption", "string"),
+		mk("TransmitPower", "100", "unsignedInt"),
+		mk("TransmitPowerSupported", "20,40,60,80,100", "string"),
+		mk("KeyPassphrase", "", "string"),
+	}
+
+	fields := WifiForm(1, params)
+	byKey := map[string]WifiFormField{}
+	for _, f := range fields {
+		byKey[f.Key] = f
+	}
+
+	for _, k := range []string{"ssid", "enable", "radio", "auto_channel", "channel", "auth", "cipher", "power", "key"} {
+		if _, ok := byKey[k]; !ok {
+			t.Errorf("字段 %s 没生成出来", k)
+		}
+	}
+	// 设备没报的参数不要凭空出现
+	if _, ok := byKey["bandwidth"]; ok {
+		t.Error("设备没有 OperatingChannelBandwidth，不该出现信道带宽字段")
+	}
+	if _, ok := byKey["standard"]; ok {
+		t.Error("设备没报 Standard，不该出现无线标准字段")
+	}
+
+	// 参数名必须是设备的真实拼写（大小写敏感）
+	if byKey["ssid"].Param != b+"SSID" {
+		t.Errorf("SSID 参数名 = %q", byKey["ssid"].Param)
+	}
+	if byKey["ssid"].Value != "WirelessNet" || byKey["ssid"].Kind != "text" {
+		t.Errorf("SSID 字段 = %+v", byKey["ssid"])
+	}
+	if byKey["enable"].Kind != "bool" || byKey["enable"].Value != "1" {
+		t.Errorf("启用字段 = %+v", byKey["enable"])
+	}
+
+	// 信道下拉选项来自设备的 PossibleChannels，而且当前值 6 要能选中
+	ch := byKey["channel"]
+	if ch.Kind != "select" || len(ch.Options) != 6 {
+		t.Errorf("信道字段 = %+v", ch)
+	}
+	if !hasOption(ch.Options, "6") {
+		t.Error("信道下拉里没有当前值 6")
+	}
+
+	// 发射功率：候选来自 TransmitPowerSupported，带 % 单位
+	pw := byKey["power"]
+	if pw.Kind != "select" || len(pw.Options) != 5 {
+		t.Errorf("发射功率字段 = %+v", pw)
+	}
+	if pw.Options[0].Label != "20%" {
+		t.Errorf("发射功率选项标签 = %q，期望 20%%", pw.Options[0].Label)
+	}
+
+	// 密码字段：type=password，并且类型要带对（写回去用）
+	if byKey["key"].Kind != "password" {
+		t.Errorf("密码字段类型 = %q", byKey["key"].Kind)
+	}
+	if byKey["channel"].Type != "unsignedInt" {
+		t.Errorf("信道类型 = %q，写回去必须是 xsd:unsignedInt", byKey["channel"].Type)
+	}
+}
+
+func TestWifiFormSelectFallsBackToText(t *testing.T) {
+	b := "Device.WiFi.Radio.1."
+	params := []store.Param{
+		{Name: b + "Channel", Value: "36", ValueType: "unsignedInt", Writable: true},
+	}
+	fields := WifiForm(1, params)
+	if len(fields) != 1 {
+		t.Fatalf("字段数 = %d", len(fields))
+	}
+	// 没拿到 PossibleChannels，下拉框没有候选 -> 该退化成文本框，而不是给个空下拉
+	if fields[0].Kind != "text" {
+		t.Errorf("应退化成 text，实际 %q", fields[0].Kind)
+	}
+}
+
+func TestWifiFormMarksReadOnly(t *testing.T) {
+	b := "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+	params := []store.Param{
+		// 有可写信息（来自 GetParameterNames）时，只读的字段要标出来
+		{Name: b + "SSID", Value: "X", ValueType: "string", Writable: false, Source: "getnames"},
+		{Name: b + "Enable", Value: "1", ValueType: "boolean", Writable: true, Source: "getnames"},
+	}
+	fields := WifiForm(1, params)
+	if len(fields) == 0 || !fields[0].ReadOnly {
+		t.Errorf("SSID 应标记为只读: %+v", fields)
+	}
+
+	// 没有可写信息时（全都是取值得来的、没枚举过名字）不该一律标只读，
+	// 否则整个表单都会被置灰。
+	for i := range params {
+		params[i].Source = "getvalues"
+		params[i].Writable = false
+	}
+	fields = WifiForm(1, params)
+	if fields[0].ReadOnly {
+		t.Error("没有可写信息时不应标记只读")
+	}
+}
+
 func TestWifiOverviewEmpty(t *testing.T) {
 	if got := WifiOverview(nil); len(got) != 0 {
 		t.Errorf("没有无线参数时应返回空，实际 %+v", got)

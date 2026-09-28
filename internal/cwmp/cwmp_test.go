@@ -71,9 +71,9 @@ func TestParseInform(t *testing.T) {
 	if len(inf.Params) != 2 {
 		t.Fatalf("参数个数 = %d，期望 2", len(inf.Params))
 	}
-	// 类型归一化：xsd:unsignedInt -> unsignedint
-	if inf.Params[1].Type != "unsignedint" {
-		t.Errorf("参数类型 = %q，期望 unsignedint", inf.Params[1].Type)
+	// 类型归一化成 XML Schema 的规范写法（写成 unsignedInt，不是 unsignedint）
+	if inf.Params[1].Type != "unsignedInt" {
+		t.Errorf("参数类型 = %q，期望 unsignedInt", inf.Params[1].Type)
 	}
 	if inf.MaxEnvelopes != 1 {
 		t.Errorf("MaxEnvelopes = %d", inf.MaxEnvelopes)
