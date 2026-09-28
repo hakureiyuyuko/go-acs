@@ -553,6 +553,19 @@ var wifiSummarySuffixes = []string{
 	".TransmitPower",
 	".IEEE11iEncryptionModes",
 	".IEEE11iAuthenticationMode",
+	// 关联终端表：界面上「终端」弹窗要能说清谁连在这台设备上（MAC / IP / 信号 / 速率）。
+	// 一台网关通常就几台到几十台终端，一个终端 8 个字段，比整个 WLAN 子树轻得多。
+	".AssociatedDeviceMACAddress",
+	".AssociatedDeviceIPAddress",
+	".MACAddress", // TR-181 Multi-AP 的写法
+	".IPAddress",
+	".RSSI",
+	".SNR",
+	".RxRate",
+	".TxRate",
+	".FrequencyWidth",
+	".LastDataTransmitRate",
+	".Uptime",
 }
 
 // wifiSubtreePath 给出无线参数的子树路径。

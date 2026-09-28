@@ -574,6 +574,53 @@ TR-069 虽然要求一次 SetParameterValues 里的参数原子生效，但不�
 
 > 这个坑是自写模拟器先暴露出来的（它按顺序处理），真机上有些设备也会这样。
 
+### 关联终端：谁连主机、谁连子机（弹窗）
+
+需求来自用户的截图（商用 ACS 上点「终端」弹出一个列表：MAC + IP 地址），
+并且明确要求：**无线概况里的终端数要加上子设备上的终端**，
+还要能看出**哪些设备连主机、哪些连哪台从机**。
+
+真机现实（华为 V271-20 FTTR 主机 + 3 台子光猫）：主机自己的 WLAN 上有 5 台终端，
+三台子光猫上另有 3 / 4 / 0 台 —— **只看主机就是 5，实际全网 11 台**。
+
+数据来源（都是标准对象，不猜）：
+
+| 谁 | 路径 |
+| --- | --- |
+| 主机 | `<root>LANDevice.1.WLANConfiguration.{i}.AssociatedDevice.{k}.*` |
+| 子机 | `<root>X_HW_APDevice.{inst}.WLANConfiguration.{j}.AssociatedDevice.{k}.*` |
+| 子机（TR-181 Multi-AP） | `<root>WiFi.DataElements.Network.Device.{inst}.…` |
+
+几个必须记住的点：
+
+1. **条目数以 `AssociatedDeviceNumberOfEntries` 为准**。真机上这张表是快照式的，
+   会残留上一次读的空行（实测：`NumberOfEntries=1` 却有 2 行，第 2 行 MAC/IP/RSSI 全空）。
+   界面必须按条目数截断，否则会多出「幽灵终端」（模拟器里专门留了一条**带 MAC 的残留行**来守这条）。
+2. **字段名各家不同**：子机的表用标准名（`RSSI` / `SNR` / `RxRate` / `TxRate` / `FrequencyWidth` / `Uptime`），
+   主机的表用厂商私有名（`X_HW_RSSI` / `X_HW_SNR` / `X_HW_RxRate` / `X_HW_TxRate` / `X_HW_FrequencyWidth` / `X_HW_Uptime`），
+   TR-181 又是 `MACAddress` / `IPAddress`。按后缀别名认全。
+3. **主机的终端不回 IP**：真机上主机的 `AssociatedDeviceIPAddress` 是空串（子机那边倒是有，
+   例如 192.168.10.121）。界面就显示 `-` —— 不编。主机的 `LANDevice.1.Hosts.` 表里也没有这些 WiFi 终端
+   （只有三台子光猫），所以补不出来。
+4. **终端数 = 主机 + 子机**（用户要求）。同一频段有多行时（真机 5G 有一行是没 SSID 的空实例），
+   子机数量只算在**有 SSID 的那一行**，否则同一台子设备会被重复计入。
+5. **WiFi 摘要采集要带上终端字段**，否则主机自己的终端根本不在库里（弹窗里只剩子机的）。
+   白名单里加了 `AssociatedDeviceMACAddress` / `…IPAddress` / `RSSI` / `SNR` / `RxRate` / `TxRate` /
+   `FrequencyWidth` / `LastDataTransmitRate` / `Uptime`（TR-181 的 `MACAddress` / `IPAddress` 也认）。
+   已纳管的设备点一下「重新采集无线概况」就能补上。
+
+**顺手修掉一个会误导人的真 bug**：子设备也带 `WLANConfiguration`（实例号同样从 1 开始），
+而 `store.WifiParams()` 一条 `LIKE '%WLANConfiguration.%'` 会把它们全捞进来，
+于是**主机的「2.4G」那一行显示成了子光猫的 SSID / 信道**（真机上真的会这样：
+主机 2.4G 那行显示的是 LabWifi，其实是子机的值）。
+现在 `WifiOverview` / `wifiInstanceParams` / `WifiInstances` 都会跳过子设备自己的 WLAN
+（`isSubDeviceWifi`），子设备的终端只在「FTTR 子设备」区块里看。
+
+界面做法：弹窗内容**由服务端一起渲染在页面里**（`hidden`），`app.js` 只负责开/关
+（`data-modal` 打开，点遮罩 / ✕ / Esc 关闭）—— 不额外发请求，也不依赖前端拼内容。
+频段那一行点开的是**该频段**的完整列表（主机 + 各子机分组，分组头写明「主机 · SSID」/「子机 1（K251e）· SSID」），
+子设备那一行点开的是**这台子机**的列表。
+
 ### FTTR 子设备的「组网模式」与「光功率」：先探测，别硬做
 
 需求：子光猫那里想看**组网模式**和**光功率**（无线 / 有线组网就不显示光功率）。
@@ -935,8 +982,8 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
 
 | 项目 | 结果 |
 | --- | --- |
-| `go test ./...` | 全部通过（`internal/cwmp` 41 个用例、`internal/store` 8 个用例、`internal/web` 19 个用例）|
-| `scripts/verify-s1.sh` | **通过 202 / 失败 0** |
+| `go test ./...` | 全部通过（`internal/cwmp` 41 个用例、`internal/store` 8 个用例、`internal/web` 24 个用例）|
+| `scripts/verify-s1.sh` | **通过 221 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
 | 真机（华为 HN8145X6N + V271-20） | **两台不同型号均自动纳管成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |

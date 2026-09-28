@@ -326,9 +326,14 @@ def main():
               [n for n in names if "WLAN" in n][:3])
         check("自动采集到了频段（X_HW_RFBand）",
               any(n.endswith("X_HW_RFBand") for n in names))
-        # 只取摘要字段，不能把整棵几百个参数的子树拉回来
+        # 只取摘要字段 + 关联终端（弹窗要看「谁连上来」），
+        # 不能把整棵几百个参数的子树拉回来。条数会随已连终端数变化，所以上限给得宽松：
+        # 只有在明显把整棵子树都拉回来时才算失败。
         wlan = [n for n in names if "WLANConfiguration" in n]
-        check(f"只采集摘要字段（{len(wlan)} 条，应在 1..40 之间）", 0 < len(wlan) <= 40, len(wlan))
+        check(f"只采集摘要 + 终端字段（{len(wlan)} 条，应在 1..120 之间）", 0 < len(wlan) <= 120, len(wlan))
+        check("采集到了关联终端（终端弹窗要用）",
+              any(n.endswith("AssociatedDeviceMACAddress") for n in names),
+              [n for n in names if "AssociatedDevice" in n][:3])
         # 枚举出来的名字不该写库（SkipStore），否则参数表会被几百个空值刷屏
         check("枚举出来的名字没有写库",
               not any(n.endswith(".Associate" + "dDevice.") or n.endswith(".APWMMParameter.") for n in names),
@@ -895,6 +900,58 @@ def main():
         st, h = get(f"/devices/{vf[0]['ID']}")
         check("没读到光功率就没有光功率列", "<th>光功率</th>" not in h, st)
         check("组网列仍然有（设备自报了 WorkingMode）", "<th>组网</th>" in h, st)
+
+    print("== 30. 关联终端：谁连主机、谁连子机（弹窗）==")
+    ok, out = run_sim(workdir, "-serial", "VERIFY-CLI", "-oui", "001122", "-fttr", "3",
+                      "-once", "-event", "0 BOOTSTRAP")
+    check("带子设备与终端的设备注册成功", ok, out[-200:])
+    ds = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-CLI"]
+    if ds:
+        cid = ds[0]["ID"]
+        st, h = get(f"/devices/{cid}")
+        sq = lambda x: re.sub(r"\s+", " ", x)
+        wifi_sec = sq(h.split("无线（WiFi）", 1)[1].split("<h2>", 1)[0])
+        fttr_sec = sq(h.split("FTTR 子设备", 1)[1].split("<h2>", 1)[0])
+        # 弹窗内容单独看：下面的「参数」表会把所有参数（含残留行）都列出来，拿整页断言会误判
+        modals = h.split('<div class="modal-mask"', 1)[1] if '<div class="modal-mask"' in h else ""
+
+        # 1) 主机自己的无线概况不能被子设备的 WLAN 污染（两边实例号都是从 1 开始）
+        check("无线概况显示的是主机自己的 SSID", "SimWiFi</a>" in wifi_sec, wifi_sec[:220])
+        check("无线概况里没有子设备的 SSID", "SimWiFi-SUB" not in wifi_sec, "")
+
+        # 2) 终端数 = 主机 + 子机（真机上主机自己的 WLAN 一台都没有，终端全在子光猫上）
+        check("2.4G 终端数是主机 + 子机的合计（2+3=5）",
+              "主机 2 台 + 子光猫 3 台" in wifi_sec and ">5</button>" in wifi_sec, wifi_sec[-400:])
+        check("5G 终端数是主机 + 子机的合计（1+1=2）",
+              "主机 1 台 + 子光猫 1 台" in wifi_sec and ">2</button>" in wifi_sec, wifi_sec[-400:])
+
+        # 3) 子设备表：每台子机自己的终端数
+        check("子设备表里有「终端」列", "<th>终端</th>" in fttr_sec, st)
+        check("子机 1 显示 3 台（2.4G 2 + 5G 1）且是按钮",
+              'data-modal="climodal-sub-1"' in fttr_sec and ">3</button>" in fttr_sec, "")
+        check("没有终端的子机显示 0（而不是 -）", ">0</td>" in fttr_sec, fttr_sec[-220:])
+
+        # 4) 弹窗（频段的 + 子设备的）：能看出谁连主机、谁连子机
+        for mid in ("climodal-24G", "climodal-5G", "climodal-sub-1"):
+            check(f"弹窗 {mid} 已渲染", f'id="{mid}"' in h, st)
+        check("弹窗里有主机的终端（MAC + IP）",
+              "02:00:00:00:00:B1" in modals and "192.168.1.11" in modals, "")
+        check("弹窗里有子机 1 的终端（MAC + IP）",
+              "02:00:01:00:00:01" in modals and "10.0.1.1" in modals, "")
+        check("弹窗里标清了「主机」与「子机 1（K251-20）」",
+              "主机 · SimWiFi" in modals and "子机 1（K251-20）" in modals, "")
+        check("弹窗里有 IP 地址字段与信号/速率小字",
+              "IP 地址：" in modals and "dBm" in modals, "")
+
+        # 5) 幽灵终端：条目数（AssociatedDeviceNumberOfEntries）之外的残留行不能显示
+        check("残留行没被当成终端显示", "02:00:00:00:00:FF" not in modals, "")
+
+        # 6) 前端实现
+        st, js = get("/static/app.js")
+        check("前端实现了弹窗开关（data-modal / 点遮罩 / Esc）",
+              "data-modal" in js and "modal-mask" in js and "Escape" in js, st)
+        st, css = get("/static/style.css")
+        check("样式里有弹窗与终端列表", ".modal-mask" in css and ".clilist" in css, st)
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")

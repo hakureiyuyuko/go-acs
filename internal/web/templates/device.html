@@ -132,7 +132,7 @@
   {{if .Fttr}}
   <table>
     <thead>
-      <tr><th>实例</th><th>型号</th><th>序列号</th><th>MAC</th><th>在线</th>
+      <tr><th>实例</th><th>型号</th><th>序列号</th><th>MAC</th><th>在线</th><th>终端</th>
           <th>软件版本</th><th>信道</th><th>组网</th><th>信号</th>{{if .FttrHasOptical}}<th>光功率</th>{{end}}<th>时长</th><th>采集</th></tr>
     </thead>
     <tbody>
@@ -142,10 +142,18 @@
         <td>{{if .Model}}{{.Model}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Serial}}{{.Serial}}{{else}}-{{end}}</td>
         <td class="mono">{{if .MAC}}{{.MAC}}{{else}}-{{end}}</td>
+        {{$sc := index $.SubClients .Instance}}
         <td>
           {{if .HasOnline}}
             {{if .Online}}<span class="badge on">在线</span>{{else}}<span class="badge off">离线</span>{{end}}
           {{else if .Status}}{{.Status}}{{else}}<span class="hint">-</span>{{end}}
+        </td>
+        <td class="mono">
+          {{if $sc.HasWlan}}
+            {{if $sc.Total}}<button class="linkbtn" type="button" data-modal="{{$sc.ModalID}}"
+                   title="点开看这台子光猫下都连了什么终端">{{$sc.Total}}</button>
+            {{else}}0{{end}}
+          {{else}}<span class="hint">-</span>{{end}}
         </td>
         <td class="mono">{{if .Firmware}}{{.Firmware}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Channel}}{{.Channel}}{{else}}-{{end}}{{if .Band}} <span class="hint">{{.Band}}</span>{{end}}</td>
@@ -226,7 +234,12 @@
         <td class="mono">{{if .Channel}}{{.Channel}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Standard}}{{.Standard}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Security}}{{.Security}}{{else}}-{{end}}</td>
-        <td class="mono">{{if .Clients}}{{.Clients}}{{else}}-{{end}}</td>
+        <td class="mono">
+          {{if .HasClientsBtn}}
+            <button class="linkbtn" type="button" data-modal="{{.ModalID}}"
+                    title="主机 {{if .Clients}}{{.Clients}}{{else}}0{{end}} 台 + 子光猫 {{.SubClients}} 台，点开看是谁连的">{{.ClientsAll}}</button>
+          {{else if .Clients}}{{.Clients}}{{else}}<span class="hint">-</span>{{end}}
+        </td>
         <td class="mono">{{if .Status}}{{.Status}}{{else}}-{{end}}</td>
         <td class="mono hint">{{fmtTimeShort .Updated}}</td>
         <td><a class="btn" href="/devices/{{$.Device.ID}}/wifi/{{.Instance}}">修改</a></td>
@@ -236,6 +249,8 @@
   </table>
   <div class="hint" style="margin-top:6px">
     WPA 密码类参数若为空，通常是<b>设备不允许读取</b>（本机这台华为就是：能改不能读）。
+    终端数是<b>主机自己 + 子光猫</b>的合计：实测主机自己的 WLAN 一台都没有，终端全在子光猫上，
+    点数字能看到谁连主机、谁连哪台子机。
   </div>
   {{else}}
   <div class="empty">
@@ -329,7 +344,68 @@
   <div class="empty">暂无记录</div>
   {{end}}
   </details>
+
+  {{/* ---------- 终端弹窗（点「终端」数字打开）---------- */}}
+  {{range .BandClients}}
+  {{if .Groups}}
+  <div class="modal-mask" id="{{.ModalID}}" hidden>
+    <div class="modal">
+      <button class="modal-close" type="button" data-modal-close title="关闭">✕</button>
+      <h3>终端 · {{.Label}}</h3>
+      <div class="hint" style="margin-bottom:6px">
+        主机 {{.HostCount}} 台{{if .SubCount}} + 子光猫 {{.SubCount}} 台{{end}}，共 {{.Total}} 台。
+        数据是上次采集的快照。
+      </div>
+      {{range .Groups}}
+      <div class="cli-group">
+        <div class="cli-group-head">{{.Label}}
+          <span class="hint">{{len .Clients}} 台{{if .Updated}} · 采集 {{fmtTimeShort .Updated}}{{end}}</span>
+        </div>
+        {{template "clilist" .Clients}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+  {{end}}
+
+  {{range .SubClientsList}}
+  {{if .Groups}}
+  <div class="modal-mask" id="{{.ModalID}}" hidden>
+    <div class="modal">
+      <button class="modal-close" type="button" data-modal-close title="关闭">✕</button>
+      <h3>终端 · {{.Label}}</h3>
+      <div class="hint" style="margin-bottom:6px">这台子光猫上共 {{.Total}} 台终端。数据是上次采集的快照。</div>
+      {{range .Groups}}
+      <div class="cli-group">
+        <div class="cli-group-head">{{.Label}}
+          <span class="hint">{{len .Clients}} 台{{if .Updated}} · 采集 {{fmtTimeShort .Updated}}{{end}}</span>
+        </div>
+        {{template "clilist" .Clients}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+  {{end}}
 </main>
+
+{{/* 终端列表（弹窗里复用）：MAC + IP，次要信息跟在下面。 */}}
+{{define "clilist"}}
+  {{if .}}
+  <ul class="clilist">
+    {{range .}}
+    <li>
+      <div class="climac mono">{{.MAC}}</div>
+      <div class="cliline"><span class="clik">IP 地址：</span><span class="mono">{{if .IP}}{{.IP}}{{else}}-{{end}}</span></div>
+      {{if .Meta}}<div class="climeta hint">{{.Meta}}</div>{{end}}
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <div class="hint" style="padding:2px 0 8px">没有终端</div>
+  {{end}}
+{{end}}
 
 <script src="/static/app.js"></script>
 </body>

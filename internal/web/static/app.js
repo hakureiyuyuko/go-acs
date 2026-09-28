@@ -4,13 +4,45 @@
 //   2. 参数名过滤：过滤之后重新分页（两者是配合关系，不是各干各的）
 //   3. 概览页搜索框：防抖自动提交（服务端过滤）
 //   4. 破坏性操作（重启设备等）的二次确认
+//   5. 终端弹窗：data-modal 打开、点遮罩或 ✕ 或 Esc 关闭
 document.addEventListener("DOMContentLoaded", function () {
   var pagers = setupPagers(document);
   wireParamFilter(pagers);
   wireSearchBox();
   wireThemeToggle();
   wireConfirms();
+  wireModals();
 });
+
+// ---------- 终端弹窗 ----------
+//
+// 服务端把弹窗内容一起渲染在页面里（hidden），这里只管开/关 ——
+// 不用额外请求，不依赖 JS 也能看到内容（只是要点开而已）。
+function wireModals() {
+  function close(mask) { mask.hidden = true; }
+
+  document.querySelectorAll("[data-modal]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var mask = document.getElementById(btn.getAttribute("data-modal"));
+      if (mask) mask.hidden = false;
+    });
+  });
+
+  document.querySelectorAll(".modal-mask").forEach(function (mask) {
+    // 点遮罩（而不是卡片本身）关闭
+    mask.addEventListener("click", function (e) {
+      if (e.target === mask) close(mask);
+    });
+    mask.querySelectorAll("[data-modal-close]").forEach(function (x) {
+      x.addEventListener("click", function () { close(mask); });
+    });
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    document.querySelectorAll(".modal-mask").forEach(function (m) { close(m); });
+  });
+}
 
 // ---------- 破坏性操作的二次确认 ----------
 //

@@ -33,6 +33,18 @@ type WifiBand struct {
 	HaveOn bool // 是否知道开关状态（设备没报就不知道）
 
 	Empty bool // 实例存在但没采到任何字段
+
+	// ClientsAll / SubClients：终端数的「合计」与其中来自 FTTR 子设备的部分。
+	// **必须把子设备的终端算进来**：真机上主机自己的 WLAN 一台终端都没有，
+	// 终端全挂在子光猫上，只看 Clients 会显示 0。
+	ClientsAll int
+	SubClients int
+	// ModalID 非空时，「终端」那一格可以点开对应频段的终端弹窗。
+	// 同一频段有多行（真机上有一行没 SSID 的空实例）时，子机数量只算在有 SSID 的那行，
+	// 否则同一台子设备会被重复计入。
+	ModalID string
+	// HasClientsBtn：这一格是渲染成按钮还是纯数字 —— 只有真有终端时才做成按钮。
+	HasClientsBtn bool
 }
 
 // wifiInstanceRe 从参数名里抠出「容器名 + 实例号 + 剩余路径」。
@@ -42,6 +54,13 @@ type WifiBand struct {
 // 同时兼容 TR-098 的 WLANConfiguration.{i}.x 与 TR-181 的
 // WiFi.Radio.{i}.x / WiFi.SSID.{i}.x / WiFi.AccessPoint.{i}.x。
 var wifiInstanceRe = regexp.MustCompile(`(?i)(?:WLANConfiguration|Radio|SSID|AccessPoint)\.(\d+)\.(.+)$`)
+
+// isSubDeviceWifi 判断这个参数是不是 FTTR 子设备自己的无线参数。
+//
+// 子设备（X_HW_APDevice.{i} / TR-181 Multi-AP 的 DataElements.Network.Device.{i}）
+// 也带一套 WLANConfiguration，实例号同样从 1 开始 —— 它们不能混进**主机**的无线概览/编辑表单，
+// 否则主机的「2.4G」那一行会显示成子光猫的 SSID（真机上真的会这么误导人）。
+func isSubDeviceWifi(name string) bool { return subOwnerRe.MatchString(name) }
 
 // WifiOverview 把一堆无线参数整理成「按实例分组」的概况。
 // params 只包含无线相关参数（由 store.WifiParams 取出）。
@@ -68,6 +87,9 @@ func WifiOverview(params []store.Param) []WifiBand {
 	}
 
 	for _, p := range params {
+		if isSubDeviceWifi(p.Name) {
+			continue
+		}
 		m := wifiInstanceRe.FindStringSubmatch(p.Name)
 		if m == nil {
 			continue
@@ -202,6 +224,9 @@ type wifiParam struct {
 func wifiInstanceParams(inst int, params []store.Param) []wifiParam {
 	var out []wifiParam
 	for _, p := range params {
+		if isSubDeviceWifi(p.Name) {
+			continue
+		}
 		loc := wifiInstanceRe.FindStringSubmatchIndex(p.Name)
 		if loc == nil || len(loc) < 6 {
 			continue
@@ -234,6 +259,9 @@ func matchCandidate(rel, candidate string) bool {
 func WifiInstances(params []store.Param) []int {
 	seen := map[int]bool{}
 	for _, p := range params {
+		if isSubDeviceWifi(p.Name) {
+			continue
+		}
 		m := wifiInstanceRe.FindStringSubmatch(p.Name)
 		if m == nil {
 			continue

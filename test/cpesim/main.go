@@ -270,6 +270,12 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set("Device.WiFi.Radio.1.OperatingFrequencyBand", "5GHz", "string")
 		set("Device.WiFi.SSID.1.SSID", "SimWiFi", "string")
 		set("Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries", "2", "unsignedInt")
+		set("Device.WiFi.AccessPoint.1.AssociatedDevice.1.MACAddress", "02:00:00:00:00:A1", "string")
+		set("Device.WiFi.AccessPoint.1.AssociatedDevice.1.IPAddress", "192.168.1.101", "string")
+		set("Device.WiFi.AccessPoint.1.AssociatedDevice.1.SignalStrength", "-41", "string")
+		set("Device.WiFi.AccessPoint.1.AssociatedDevice.2.MACAddress", "02:00:00:00:00:A2", "string")
+		set("Device.WiFi.AccessPoint.1.AssociatedDevice.2.IPAddress", "192.168.1.102", "string")
+		set("Device.WiFi.AccessPoint.1.AssociatedDevice.2.SignalStrength", "-55", "string")
 		set("Device.WiFi.AccessPoint.1.SSIDAdvertisementEnabled", "1", "boolean")
 	} else {
 		wlan := root + "LANDevice.1.WLANConfiguration."
@@ -284,6 +290,22 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(wlan+"1.WPAEncryptionModes", "AESEncryption", "string")
 		set(wlan+"1.TotalAssociations", "2", "unsignedInt")
 		set(wlan+"1.X_HW_RFBand", "2.4GHz", "string")
+		// 关联终端：主机自己这 2 台（同时给一条**残留空行**：网关真机会留下上一次读的空行，
+		// 条目数必须以 AssociatedDeviceNumberOfEntries 为准，不然界面上会多出幽灵终端）。
+		set(wlan+"1.AssociatedDeviceNumberOfEntries", "2", "unsignedInt")
+		set(wlan+"1.AssociatedDevice.1.AssociatedDeviceMACAddress", "02:00:00:00:00:B1", "string")
+		set(wlan+"1.AssociatedDevice.1.AssociatedDeviceIPAddress", "192.168.1.11", "string")
+		set(wlan+"1.AssociatedDevice.1.RSSI", "-41", "string")
+		set(wlan+"1.AssociatedDevice.1.SNR", "43", "string")
+		set(wlan+"1.AssociatedDevice.1.RxRate", "72", "string")
+		set(wlan+"1.AssociatedDevice.1.TxRate", "65", "string")
+		set(wlan+"1.AssociatedDevice.1.Uptime", "3600", "string")
+		set(wlan+"1.AssociatedDevice.2.AssociatedDeviceMACAddress", "02:00:00:00:00:B2", "string")
+		set(wlan+"1.AssociatedDevice.2.AssociatedDeviceIPAddress", "192.168.1.12", "string")
+		set(wlan+"1.AssociatedDevice.2.RSSI", "-58", "string")
+		set(wlan+"1.AssociatedDevice.2.FrequencyWidth", "40MHz", "string")
+		set(wlan+"1.AssociatedDevice.3.AssociatedDeviceMACAddress", "02:00:00:00:00:FF", "string")
+		set(wlan+"1.AssociatedDevice.3.AssociatedDeviceIPAddress", "0.0.0.0", "string")
 		// 下面这几个是「可编辑 / 给下拉框提供候选值」用的
 		set(wlan+"1.KeyPassphrase", "", "string")
 		// WPA/WPA2-PSK 真正的密码位；两都存在时 ACS 应该优先选这个（真机验证过）
@@ -303,8 +325,13 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(wlan+"5.BSSID", "00:11:22:33:44:56", "string")
 		set(wlan+"5.BeaconType", "11i", "string")
 		set(wlan+"5.WPAEncryptionModes", "AESEncryption", "string")
-		set(wlan+"5.TotalAssociations", "0", "unsignedInt")
+		set(wlan+"5.TotalAssociations", "1", "unsignedInt")
 		set(wlan+"5.X_HW_RFBand", "5GHz", "string")
+		set(wlan+"5.AssociatedDeviceNumberOfEntries", "1", "unsignedInt")
+		set(wlan+"5.AssociatedDevice.1.AssociatedDeviceMACAddress", "02:00:00:00:00:C1", "string")
+		set(wlan+"5.AssociatedDevice.1.AssociatedDeviceIPAddress", "192.168.1.21", "string")
+		set(wlan+"5.AssociatedDevice.1.RSSI", "-52", "string")
+		set(wlan+"5.AssociatedDevice.1.FrequencyWidth", "160MHz", "string")
 	}
 
 	// ping 诊断对象（TR-069 标准的 IPPingDiagnostics）。
@@ -367,6 +394,45 @@ func (s *simulator) buildParams(root, specVersion string) {
 			set(ap+"X_HW_RxPower", fmt.Sprintf("-%.1f", 18.0+float64(i)), "string")
 			set(ap+"X_HW_TxPower", "2.5", "string")
 		}
+
+		// 子设备各自的无线配置 + 关联终端（真机上每台子光猫都带自己的 WLANConfiguration.，
+		// 终端就挂在这里 —— 主机那边一台都没有）。
+		// 台数按子设备序号递减，方便验收断言：子机 1 → 2.4G 2 台 / 5G 1 台，
+		// 子机 2 → 2.4G 1 台，子机 3 → 0 台。
+		n24 := 3 - i
+		if n24 < 0 {
+			n24 = 0
+		}
+		n5 := 0
+		if i == 1 {
+			n5 = 1
+		}
+		subWlan := func(j int, band, ssid string, n int) {
+			w := ap + fmt.Sprintf("WLANConfiguration.%d.", j)
+			set(w+"SSID", ssid, "string")
+			set(w+"Enable", "1", "boolean")
+			ch := "6"
+			if band == "5G" {
+				ch = "36"
+			}
+			set(w+"Channel", ch, "unsignedInt")
+			set(w+"Standard", "11be", "string")
+			set(w+"X_HW_RFBand", band, "string")
+			set(w+"AssociatedDeviceNumberOfEntries", strconv.Itoa(n), "unsignedInt")
+			for k := 1; k <= n; k++ {
+				c := w + fmt.Sprintf("AssociatedDevice.%d.", k)
+				set(c+"AssociatedDeviceMACAddress", fmt.Sprintf("02:00:%02X:00:00:%02X", i, k), "string")
+				set(c+"AssociatedDeviceIPAddress", fmt.Sprintf("10.0.%d.%d", i, k), "string")
+				set(c+"RSSI", strconv.Itoa(-40-i*5), "string")
+				set(c+"SNR", strconv.Itoa(40-i), "string")
+				set(c+"RxRate", "573", "string")
+				set(c+"TxRate", "433", "string")
+				set(c+"FrequencyWidth", "80MHz", "string")
+				set(c+"Uptime", "86400", "string")
+			}
+		}
+		subWlan(1, "2.4G", fmt.Sprintf("SimWiFi-SUB%d", i), n24)
+		subWlan(2, "5G", fmt.Sprintf("SimWiFi-SUB%d-5G", i), n5)
 	}
 }
 

@@ -342,6 +342,18 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	// WAN 连接：同样，没这类参数就不渲染
 	wan, hasWan := WanOverview(params)
 
+	// 关联终端树：主机 + 各子设备。真机上主机自己一台终端都没有，终端全在子光猫上，
+	// 所以「终端数」必须把子设备算进来，而且要点得开、能看出是谁连的。
+	clients := BuildClientTree(params, fttr)
+	bandClients, subClients := BuildClientViews(clients, fttr)
+	subClientsBy := map[int]SubClientsView{}
+	for _, v := range subClients {
+		subClientsBy[v.Instance] = v
+	}
+	// 无线概况：终端列改成「主机 + 子机」的合计
+	wifiBands := WifiOverview(wifiParams[id])
+	WireBandClients(wifiBands, clients)
+
 	data := map[string]any{
 		"Device":         d,
 		"Fttr":           fttr,
@@ -363,7 +375,10 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		"Tasks":          tasks,
 		"Informs":        informs,
 		"Pending":        pending,
-		"WiFi":           WifiOverview(wifiParams[id]),
+		"WiFi":           wifiBands,
+		"BandClients":    bandClients,
+		"SubClients":     subClientsBy,
+		"SubClientsList": subClients,
 		"Path":           "/devices/" + strconv.FormatInt(id, 10),
 		// 表单默认值：按设备的数据模型根猜一个 WiFi 路径（只是默认值，用户可改）
 		"DefaultPath": defaultFetchPath(d),

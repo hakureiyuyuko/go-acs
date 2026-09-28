@@ -187,3 +187,46 @@ form.wform { max-width: 900px; }
 .winput input:focus, .winput select:focus { outline: none; border-color: var(--accent); }
 label.chk { display: inline-flex; align-items: center; gap: 7px; padding-top: 7px; cursor: pointer; }
 label.chk input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+/* ---------- 关联终端弹窗（子设备 / 频段的「终端」按钮打开）---------- */
+/* 样式参照商用 ACS（华为）那套：暗色遮罩 + 白卡片 + 右上角 ✕，
+   条目是「MAC 一行 + IP 地址一行」。 */
+.modal-mask {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(0, 0, 0, .55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.modal-mask[hidden] { display: none; }
+.modal {
+  position: relative;
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .5);
+  width: min(680px, 100%); max-height: 80vh; overflow: auto;
+  padding: 18px 22px 8px;
+}
+.modal h3 { margin: 0 0 4px; font-size: 15px; }
+.modal-close {
+  position: absolute; top: 10px; right: 12px;
+  background: transparent; border: 0; color: var(--dim);
+  font-size: 16px; line-height: 1; padding: 6px 8px; cursor: pointer; border-radius: 6px;
+}
+.modal-close:hover { background: var(--ghost-hover); color: var(--fg); }
+.cli-group { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; }
+.cli-group:first-of-type { border-top: 0; }
+.cli-group-head { font-size: 12.5px; color: var(--dim); margin-bottom: 2px; }
+.clilist { list-style: none; margin: 0; padding: 0; }
+.clilist li { padding: 8px 0 10px; border-bottom: 1px solid var(--line); }
+.clilist li:last-child { border-bottom: 0; }
+.climac { font-size: 14px; color: var(--accent); }
+.cliline { margin-top: 3px; font-size: 13px; }
+.clik { color: var(--ok); margin-right: 6px; }
+.climeta { font-size: 12px; margin-top: 2px; }
+/* 表格里当按钮用的数字（终端数） */
+button.linkbtn {
+  background: transparent; border: 0; padding: 0 2px; margin: 0;
+  color: var(--accent); font-family: inherit; font-size: 13px;
+  text-decoration: underline dotted; cursor: pointer;
+}
+button.linkbtn:hover { filter: none; text-decoration: underline solid; }
