@@ -17,8 +17,9 @@
 ## 安装
 
 ```bash
-tar xzf acs-1.0.0-linux-amd64.tar.gz
-cd acs-1.0.0-linux-amd64
+VERSION=1.0.1                                  # 换成你下载的那个版本
+tar xzf acs-$VERSION-linux-amd64.tar.gz
+cd acs-$VERSION-linux-amd64
 sudo ./install.sh
 ```
 
@@ -55,7 +56,7 @@ sudo ./install.sh --help                             # 全部选项
 sudo ./update.sh                # 拉最新版
 sudo ./update.sh --check        # 只看有没有新版本
 sudo ./update.sh --tag v1.0.1   # 升到指定版本
-sudo ./update.sh --file acs-1.0.1-linux-amd64.tar.gz   # 内网/离线，用本地包
+sudo ./update.sh --file acs-$VERSION-linux-amd64.tar.gz   # 内网/离线，用本地包
 ```
 
 升级流程：下载 → 校验 SHA256 → 停服务 → 旧二进制备份到 `/var/lib/acs/backups/`

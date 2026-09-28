@@ -79,7 +79,7 @@ run() {
 }
 
 # 读配置里生效的值 / 从监听地址里取端口
-envval() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- ; }
+envval() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true ; }
 port_of() {
   local addr=${1##*:}
   case "$addr" in ''|*[!0-9]*) echo "" ;; *) echo "$addr" ;; esac
@@ -91,7 +91,13 @@ case "$(uname -m)" in
   *)              ARCH=$(uname -m); warn "没见过的架构 ${ARCH}，按原样去找包名";;
 esac
 
-cur_version=$(cat "$DATA_DIR/VERSION" 2>/dev/null || echo "(未知)")
+if [ -f "$DATA_DIR/VERSION" ]; then
+  had_version=1
+  cur_version=$(cat "$DATA_DIR/VERSION")
+else
+  had_version=0
+  cur_version="(未知)"
+fi
 log "当前版本 ${cur_version}；架构 ${ARCH}"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/acs-update-XXXXXX")
@@ -119,6 +125,7 @@ else
   flat=$(printf '%s' "$rel" | tr -d '\r\n')
   new_version=$(printf '%s' "$flat" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
   [ -n "$new_version" ] || die "release 信息里没有 tag_name"
+  new_tag=$new_version          # 拼下载地址要用原始 tag（带 v）
   new_version=$(strip_v "$new_version")
 
   if [ "$new_version" = "${cur_version#v}" ]; then
@@ -132,20 +139,26 @@ else
   fi
 
   asset="acs-${new_version}-linux-${ARCH}.tar.gz"
-  url=$(printf '%s' "$flat" | grep -oE "\"name\"[[:space:]]*:[[:space:]]*\"${asset}\"[^]]*\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" | head -1 | sed -E 's/.*"(https[^"]+)"$/\1/')
-  [ -n "$url" ] || die "这个 release 里没有 ${asset} 这个包（看下 release 页面）"
-  sums_url=$(printf '%s' "$flat" | grep -oE "\"name\"[[:space:]]*:[[:space:]]*\"SHA256SUMS\"[^]]*\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" | head -1 | sed -E 's/.*"(https[^"]+)"$/\1/')
+  # 下载地址不用刮 JSON：release 资产的 URL 形状是固定的 /releases/download/<tag>/<文件名>，
+  # 比正则靠谱（GitHub 的 JSON 里 asset 对象还嵌着 uploader 子对象，正则很容易蹿到别的资产上）
+  dl_base="${ACS_DL_BASE:-https://github.com/${REPO}/releases/download}/${new_tag}"
+  url="${dl_base}/${asset}"
+  sums_url="${dl_base}/SHA256SUMS"
 
   log "下载 ${asset}"
-  run curl -fL --retry 3 --max-time 300 -o "$WORK/$asset" "$url"
+  if [ "$DRY_RUN" = 1 ]; then
+    printf '   [dry-run] curl -fL -o %s %s\n' "$WORK/$asset" "$url"
+  elif ! curl -fL --retry 3 --max-time 300 -o "$WORK/$asset" "$url"; then
+    die "下载失败：${url}
+     （这个 release 里可能没有 ${asset}；也可以用 --file 指定本地包）"
+  fi
   tarball="$WORK/$asset"
 
   if [ "$DRY_RUN" = 1 ]; then
-    echo "   [dry-run] 下载 SHA256SUMS：${sums_url:-（没有这个资产）}"
-  elif [ -z "$sums_url" ]; then
-    warn "release 里没有 SHA256SUMS，跳过校验"
-  else
-    curl -fsSL --max-time 60 -o "$WORK/SHA256SUMS" "$sums_url" || warn "SHA256SUMS 下载失败"
+    echo "   [dry-run] 下载 SHA256SUMS：${sums_url}"
+  elif ! curl -fsSL --max-time 60 -o "$WORK/SHA256SUMS" "$sums_url"; then
+    rm -f "$WORK/SHA256SUMS"
+    warn "SHA256SUMS 下载失败，跳过校验"
   fi
 fi
 
@@ -167,7 +180,9 @@ if [ "$DRY_RUN" = 1 ]; then
   printf '   [dry-run] 解包 %s 到临时目录，检查新二进制能不能跑\n' "$tarball"
   NEWBIN="$tarball"
 else
-  tar -xzf "$tarball" -C "$WORK" || die "解包失败"
+  # --no-same-owner：包里带的属主信息在有些环境下没法还原（比如容器 / 用户命名空间里），
+  # 解出来的文件归当前用户就够，反正下一步是 install -m 0755 安装
+  tar --no-same-owner -xzf "$tarball" -C "$WORK" || die "解包失败"
   NEWBIN=$(find "$WORK" -type f -name acs -perm -u+x | head -1)
   [ -n "$NEWBIN" ] || die "包里没有 acs 二进制"
   chmod +x "$NEWBIN"
@@ -207,7 +222,15 @@ fi
 restore() {
   if [ -f "$backup" ]; then
     install -m 0755 "$backup" "$BIN_DIR/$SERVICE"
-    [ "$NO_SERVICE" = 0 ] && systemctl start "$SERVICE" || true
+    # 版本号也得跟着回退，否则数据目录里记的是新版本、跑的却是旧二进制
+    if [ "$had_version" = 1 ]; then
+      printf '%s\n' "$cur_version" > "$DATA_DIR/VERSION"
+    else
+      rm -f "$DATA_DIR/VERSION"
+    fi
+    if [ "$NO_SERVICE" = 0 ]; then
+      systemctl start "$SERVICE" 2>/dev/null || true
+    fi
     warn "已回滚到旧二进制 ${cur_version}"
   fi
 }
@@ -247,9 +270,10 @@ if [ "$NO_SERVICE" = 0 ]; then
 fi
 
 # ---------- 6. 清理旧备份 ----------
-ls -1t "$DATA_DIR"/backups/${SERVICE}-* 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | while read -r old; do
-  rm -f "$old"
-done
+{ ls -1t "$DATA_DIR"/backups/${SERVICE}-* 2>/dev/null || true; } |
+  tail -n +$((KEEP_BACKUPS + 1)) | while read -r old; do
+    rm -f "$old"
+  done
 
 log "升级完成：${cur_version} → ${new_version}"
 echo "   看状态： systemctl status ${SERVICE}"

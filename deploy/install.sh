@@ -125,7 +125,7 @@ write_file() {
 }
 
 # 读配置里生效的值（装了之后才知道最终监听在哪）
-eff() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- ; }
+eff() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true ; }
 port_of() {
   local addr=${1##*:}
   case "$addr" in ''|*[!0-9]*) echo "" ;; *) echo "$addr" ;; esac

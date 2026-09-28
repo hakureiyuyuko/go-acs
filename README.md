@@ -45,8 +45,9 @@ FTTR 子设备与网络诊断：子设备的型号、组网模式、光功率与
 从 [Releases](https://github.com/hakureiyuyuko/go-acs/releases) 下对应架构的包，解压后一条命令装成 systemd 服务：
 
 ```bash
-tar xzf acs-1.0.0-linux-amd64.tar.gz
-cd acs-1.0.0-linux-amd64
+VERSION=1.0.1                                   # 换成你下载的那个版本
+tar xzf acs-$VERSION-linux-amd64.tar.gz
+cd acs-$VERSION-linux-amd64
 sudo ./install.sh                                                # 默认 CWMP 与面板都走 :7547
 sudo ./install.sh --web-listen :8080 --web-user admin --web-pass '改成你自己的'
 ```
@@ -71,7 +72,7 @@ go build -o acs ./cmd/acs        # Go 1.27+；CGO_ENABLED=0 可得到静态二�
 打发布包：
 
 ```bash
-scripts/build-release.sh v1.0.0   # 产物在 dist/：amd64 + arm64 的 tar.gz 与 SHA256SUMS
+scripts/build-release.sh v1.0.1   # 产物在 dist/：amd64 + arm64 的 tar.gz 与 SHA256SUMS
 ```
 
 设备侧的 ACS URL 填 `http://<IP>:9090/acs`；真机里也见过配成根路径 `/` 的，所以两者都收。
