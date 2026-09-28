@@ -150,7 +150,7 @@ def run_chrome_dom(chrome, url):
         return None
 
 
-def browser_dom_without_login(workdir, chrome):
+def browser_dom_without_login(workdir, chrome):  # noqa: D401
     """给「必须真跑 JS」的检查准备一个**不需要登录**的页面，并返回跑完 JS 的 DOM。
 
     面板开了登录页之后，无头浏览器没有登录态（会被 303 送到 /login），
@@ -200,8 +200,12 @@ def browser_dom_without_login(workdir, chrome):
                     did = d["ID"]
         if did is None:
             return None
-        # 实例还活着的时候抓 DOM（Chrome 要真的去请求它）
-        return run_chrome_dom(chrome, "%s/devices/%d" % (base, did))
+        # 实例还活着的时候抓 DOM（Chrome 要真的去请求它）：
+        # 设备详情页给分页/主题用，首页给自动刷新开关用
+        return {
+            "device": run_chrome_dom(chrome, "%s/devices/%d" % (base, did)),
+            "index": run_chrome_dom(chrome, base + "/"),
+        }
     except Exception:  # noqa: BLE001
         return None
     finally:
@@ -647,6 +651,7 @@ def main():
         check("概览页显示了备注", note in html)
         check("概览页有搜索框", 'name="q"' in html)
         check("概览页有在线/离线筛选条", 'class="chip' in html and "筛选" in html)
+        check("概览页有 5 秒自动刷新开关", 'id="autorefresh"' in html and "自动刷新" in html)
 
         # 按备注搜
         st, html = get("/?q=" + urllib.parse.quote("会议室"))
@@ -689,11 +694,19 @@ def main():
         if not chrome:
             skip("分页真的只显示 20 行", "本机没有 headless 浏览器")
         else:
+            doms = None
             if PANEL_AUTH:
                 # 面板开了登录页：无头浏览器没有登录态，换一台不鉴权的临时实例来验前端行为
-                dom = browser_dom_without_login(workdir, chrome)
+                doms = browser_dom_without_login(workdir, chrome)
+                dom = doms.get("device") if doms else None
             else:
                 dom = run_chrome_dom(chrome, f"{BASE}/devices/{did}")
+                doms = {"device": dom, "index": run_chrome_dom(chrome, f"{BASE}/")}
+            # 首页：5 秒自动刷新开关由 app.js 在加载后改写文案（默认关）
+            maf = re.search(r'<button id="autorefresh"[^>]*>([^<]*)</button>', doms.get("index") or "")
+            check("自动刷新开关被 JS 初始化了（默认关）",
+                  maf is not None and "自动刷新 5s" in maf.group(1) and "关" in maf.group(1),
+                  maf.group(1) if maf else "没找到按钮")
             if dom is None:
                 skip("分页真的只显示 20 行", "headless 浏览器执行失败")
             else:
@@ -841,11 +854,14 @@ def main():
                             {"host": "1.1.1.1", "count": "2", "interface": "a b<c>"})
         check("非法承载接口被拒", st == 303 and "err=1" in (loc or ""), loc)
 
-    print("== 23. 三个页面都要加载 app.js（分页/搜索/主题都靠它）==")
+    print("== 23. 三个页面都要加载 app.js（分页/搜索/主题/自动刷新都靠它）==")
     if did:
         for p in ("/", f"/devices/{did}", f"/devices/{did}/wifi/1"):
             st, h = get(p)
             check(f"{p} 引入了 app.js", "static/app.js" in h)
+        st, js = get("/static/app.js")
+        check("app.js 里有 5 秒自动刷新逻辑",
+              st == 200 and "acs-autorefresh" in js and "autorefresh" in js, st)
 
     print("== 24. FTTR 子设备：有就显示、没有就不显示 ==")
     if did:

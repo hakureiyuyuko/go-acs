@@ -5,14 +5,61 @@
 //   3. 概览页搜索框：防抖自动提交（服务端过滤）
 //   4. 破坏性操作（重启设备等）的二次确认
 //   5. 终端弹窗：data-modal 打开、点遮罩或 ✕ 或 Esc 关闭
+//   6. 首页的 5 秒自动刷新开关（状态记在 localStorage）
 document.addEventListener("DOMContentLoaded", function () {
   var pagers = setupPagers(document);
   wireParamFilter(pagers);
   wireSearchBox();
   wireThemeToggle();
+  wireAutoRefresh();
   wireConfirms();
   wireModals();
 });
+
+// ---------- 首页：5 秒自动刷新 ----------
+//
+// 在线/离线、探测中、任务进度这些会自己变，盯着看的时候不用手动刷。
+// 开关状态记在 localStorage，刷新后仍然保持开着。
+// 两个体贴处：焦点在输入框里（正在打字）时这一轮不刷新，别把没提交的搜索词刷掉；
+// 开关打开后立刻把状态写在按钮上（文案 + 高亮），不用猜。
+function wireAutoRefresh() {
+  var btn = document.getElementById("autorefresh");
+  if (!btn) return;
+  var KEY = "acs-autorefresh";
+  var SECONDS = 5;
+  var on = false;
+  var timer = null;
+  try { on = localStorage.getItem(KEY) === "1"; } catch (e) { /* 隐私模式下读不到，当关 */ }
+
+  function label() {
+    btn.textContent = "自动刷新 " + SECONDS + "s：" + (on ? "开" : "关");
+    btn.classList.toggle("on", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  function schedule() {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!on) return;
+    timer = setTimeout(function () {
+      var el = document.activeElement;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) {
+        schedule();   // 正在输入，跳过这一轮
+        return;
+      }
+      window.location.reload();
+    }, SECONDS * 1000);
+  }
+
+  label();
+  schedule();
+
+  btn.addEventListener("click", function () {
+    on = !on;
+    try { localStorage.setItem(KEY, on ? "1" : "0"); } catch (e) { /* 忽略 */ }
+    label();
+    schedule();
+  });
+}
 
 // ---------- 终端弹窗 ----------
 //
