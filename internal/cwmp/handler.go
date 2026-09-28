@@ -566,6 +566,9 @@ var wifiSummarySuffixes = []string{
 	".FrequencyWidth",
 	".LastDataTransmitRate",
 	".Uptime",
+	// 终端名：各家写法不一，能取到就取（取不到界面上显示 N/A）
+	".X_HW_AssociatedDevicedescriptions",
+	".HostName",
 }
 
 // wifiSubtreePath 给出无线参数的子树路径。
@@ -635,12 +638,56 @@ func (s *Server) EnqueueFetchWiFi(deviceID int64) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// 顺便采集设备的「主机列表」：关联终端表里通常没有终端名，
+	// 名字只能从 LANDevice.1.Hosts.Host.{i}.HostName 按 MAC 对出来（界面上的「主机名」行）。
+	if _, err := s.EnqueueFetchHosts(deviceID); err != nil {
+		s.log.Warn("入队采集主机列表失败", "device_id", deviceID, "err", err)
+	}
 	return s.enqueueSubtree(deviceID, gpnPayload{
 		Path:      wifiSubtreePath(d.DataModelRoot),
 		ThenFetch: true,
 		Include:   wifiSummarySuffixes,
 		SkipStore: true,
 	})
+}
+
+// EnqueueFetchHosts 入队一条「采集设备主机列表」的任务。
+//
+// 这张表（TR-098：LANDevice.1.Hosts.；TR-181：Hosts.）是**唯一**能拿到终端名的
+// 常用地方，界面上终端条目的「主机名」就靠它（拿不到就显示 N/A）。
+// 表本身很小（几台到几十台），只取几个字段，负担可以忽略。
+func (s *Server) EnqueueFetchHosts(deviceID int64) (int64, error) {
+	d, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return s.enqueueSubtree(deviceID, gpnPayload{
+		Path:      hostsSubtreePath(d.DataModelRoot),
+		ThenFetch: true,
+		Include:   hostsSuffixes,
+		SkipStore: true,
+	})
+}
+
+// hostsSuffixes 是主机列表里要取的字段（TR-098 / TR-181 命名都列上）。
+var hostsSuffixes = []string{
+	".MACAddress",
+	".IPAddress",
+	".HostName",      // 终端名（界面上要显示的就是它）
+	".Active",        //
+	".InterfaceType", // 从哪个口过来的（PON / WiFi / Ethernet）
+	".AddressSource", // DHCP / Static
+	".VendorClassID", // 有时能看出型号（如 HUAWEI:FTTR_EdgeONT:K251-20）
+	".HostNumberOfEntries",
+}
+
+// hostsSubtreePath 给出「主机列表」的子树路径。
+// 数据模型根未知时按 TR-098 猜一个 —— 枚举不到东西不会报错，只是终端名显示 N/A。
+func hostsSubtreePath(root string) string {
+	if strings.HasPrefix(root, "Device.") {
+		return "Device.Hosts."
+	}
+	return "InternetGatewayDevice.LANDevice.1.Hosts."
 }
 
 // enqueueGPVDivided 把一批参数名**分批**入队成若干条 GetParameterValues 任务。

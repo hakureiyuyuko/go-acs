@@ -23,6 +23,24 @@ import (
 // 终端全挂子光猫上 —— 所以「这台设备连了多少终端」必须把子设备算进来，
 // 并且要说清哪些连主机、哪些连哪台子机。
 
+// hostNameRe 抠出设备「主机列表」里的一行：TR-098 的 LANDevice.1.Hosts.Host.{i}.x
+// 与 TR-181 的 Hosts.Host.{i}.x 都以这段结尾。
+//
+// 这张表是**唯一**能拿到终端名的常用地方（关联终端表里通常没有名字）——
+// 实测那台华为 FTTR 主机只列了 3 台子光猫（InterfaceType=PON），WiFi 终端一律没有名字，
+// 界面上就诚实地显示 N/A。
+var hostNameRe = regexp.MustCompile(`(?i)\.Hosts\.Host\.(\d+)\.(MACAddress|HostName)$`)
+
+// isClientNameField 判断终端行上的字段是不是“名字”（各家写法不一）。
+func isClientNameField(field string) bool {
+	switch strings.ToLower(field) {
+	case "hostname", "associateddevicehostname", "x_hw_hostname",
+		"x_hw_associateddevicedescriptions", "x_hw_devicename", "devicename":
+		return true
+	}
+	return false
+}
+
 // wlanPathRe 把参数名拆成「WLAN 实例前缀 + WLAN 实例号 + 剩余路径」。
 //
 // 只认 WLANConfiguration / AccessPoint 这两种容器（Radio/SSID 上不会有关联终端表）。
@@ -36,10 +54,14 @@ var clientIdxRe = regexp.MustCompile(`(?i)^AssociatedDevice\.(\d+)\.(.+)$`)
 
 // ClientInfo 是一台已连终端。
 type ClientInfo struct {
-	MAC  string
-	IP   string
-	RSSI string
-	SNR  string
+	MAC string
+	IP  string
+	// HostName 是终端名（设备不一定知道它 —— 界面上拿不到就显示 N/A，不编）。
+	// 来源两个：终端行自己的名字字段（如华为 X_HW_AssociatedDevicedescriptions），
+	// 以及设备的主机列表 LANDevice.1.Hosts.Host.{i}.HostName（按 MAC 对）。
+	HostName string
+	RSSI     string
+	SNR      string
 	// Quality 是**设备自报**的信号质量（0..100，如华为的 X_HW_SingalQuality）。
 	// 有它就用它 —— 各家对 RSSI 到「几格」的换算不一样，设备自己算的更可信。
 	Quality   string
@@ -206,6 +228,8 @@ func BuildClientTree(params []store.Param, nodes []FttrNode) *ClientTree {
 		updated                     time.Time
 	}
 	byWlan := map[string]*acc{}
+	// 设备「主机列表」里的 MAC → 名字（终端表通常没有名字，这里是唯一的补充来源）
+	hostTbl := map[string]map[string]string{}
 	touch := func(a *acc, t time.Time) {
 		if t.After(a.updated) {
 			a.updated = t
@@ -213,6 +237,18 @@ func BuildClientTree(params []store.Param, nodes []FttrNode) *ClientTree {
 	}
 
 	for _, p := range params {
+		// 主机列表（LANDevice.1.Hosts.Host.{i} / TR-181 的 Hosts.Host.{i}）先收集起来
+		if hm := hostNameRe.FindStringSubmatch(p.Name); hm != nil {
+			if v := strings.TrimSpace(p.Value); v != "" {
+				tbl := hostTbl[hm[1]]
+				if tbl == nil {
+					tbl = map[string]string{}
+					hostTbl[hm[1]] = tbl
+				}
+				tbl[strings.ToLower(hm[2])] = v
+			}
+			continue
+		}
 		m := wlanPathRe.FindStringSubmatch(p.Name)
 		if m == nil {
 			continue
@@ -275,6 +311,11 @@ func BuildClientTree(params []store.Param, nodes []FttrNode) *ClientTree {
 				ci.Bandwidth = v
 			case "uptime", "x_hw_uptime":
 				ci.Uptime = v
+			default:
+				if isClientNameField(cm[2]) && ci.HostName == "" {
+					// 终端行自己带的名字（如华为 X_HW_AssociatedDevicedescriptions）
+					ci.HostName = v
+				}
 			}
 			continue
 		}
@@ -297,6 +338,24 @@ func BuildClientTree(params []store.Param, nodes []FttrNode) *ClientTree {
 		case "associateddevicenumberofentries", "totalassociations":
 			if n, err := strconv.Atoi(v); err == nil {
 				a.nEntries, a.hasN = n, 1
+			}
+		}
+	}
+
+	// MAC → 名字：主机列表优先，各终端行自己带的名字也能给别的表借用
+	hostNames := map[string]string{}
+	for _, tbl := range hostTbl {
+		if mac, name := strings.ToLower(tbl["macaddress"]), strings.TrimSpace(tbl["hostname"]); mac != "" && name != "" {
+			hostNames[mac] = name
+		}
+	}
+	for _, a := range byWlan {
+		for _, ci := range a.clients {
+			mac := strings.ToLower(strings.TrimSpace(ci.MAC))
+			if mac != "" && strings.TrimSpace(ci.HostName) != "" {
+				if _, ok := hostNames[mac]; !ok {
+					hostNames[mac] = strings.TrimSpace(ci.HostName)
+				}
 			}
 		}
 	}
@@ -327,7 +386,11 @@ func BuildClientTree(params []store.Param, nodes []FttrNode) *ClientTree {
 				g.Stale++
 				continue
 			}
-			g.Clients = append(g.Clients, *ci)
+			info := *ci
+			if strings.TrimSpace(info.HostName) == "" {
+				info.HostName = hostNames[strings.ToLower(strings.TrimSpace(info.MAC))]
+			}
+			g.Clients = append(g.Clients, info)
 		}
 		if a.owner == 0 {
 			tree.Host = append(tree.Host, g)

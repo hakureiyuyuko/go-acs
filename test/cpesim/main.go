@@ -276,6 +276,12 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set("Device.WiFi.AccessPoint.1.AssociatedDevice.2.MACAddress", "02:00:00:00:00:A2", "string")
 		set("Device.WiFi.AccessPoint.1.AssociatedDevice.2.IPAddress", "192.168.1.102", "string")
 		set("Device.WiFi.AccessPoint.1.AssociatedDevice.2.SignalStrength", "-55", "string")
+		// 主机列表（TR-181）：终端名只能从这里按 MAC 对出来
+		set("Device.Hosts.Host.1.MACAddress", "02:00:00:00:00:A1", "string")
+		set("Device.Hosts.Host.1.IPAddress", "192.168.1.101", "string")
+		set("Device.Hosts.Host.1.HostName", "Sim-Dev-A1", "string")
+		set("Device.Hosts.Host.1.Active", "1", "boolean")
+		set("Device.Hosts.HostNumberOfEntries", "1", "unsignedInt")
 		set("Device.WiFi.AccessPoint.1.SSIDAdvertisementEnabled", "1", "boolean")
 	} else {
 		wlan := root + "LANDevice.1.WLANConfiguration."
@@ -332,6 +338,21 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(wlan+"5.AssociatedDevice.1.AssociatedDeviceIPAddress", "192.168.1.21", "string")
 		set(wlan+"5.AssociatedDevice.1.RSSI", "-52", "string")
 		set(wlan+"5.AssociatedDevice.1.FrequencyWidth", "160MHz", "string")
+
+		// 主机列表（TR-098）：终端名靠它按 MAC 对出来（关联终端表里通常没有名字）
+		hosts := root + "LANDevice.1.Hosts."
+		set(hosts+"Host.1.MACAddress", "02:00:00:00:00:B1", "string")
+		set(hosts+"Host.1.IPAddress", "192.168.1.11", "string")
+		set(hosts+"Host.1.HostName", "Sim-Laptop", "string")
+		set(hosts+"Host.1.Active", "1", "boolean")
+		set(hosts+"Host.1.AddressSource", "DHCP", "string")
+		set(hosts+"Host.2.MACAddress", "02:00:01:00:00:01", "string")
+		set(hosts+"Host.2.IPAddress", "10.0.1.1", "string")
+		set(hosts+"Host.2.HostName", "Sim-Phone", "string")
+		set(hosts+"Host.2.Active", "1", "boolean")
+		set(hosts+"HostNumberOfEntries", "2", "unsignedInt")
+		// 另一台终端把名字写在自己的行上（验证「行自带名字」这条路）
+		set(wlan+"1.AssociatedDevice.2.X_HW_AssociatedDevicedescriptions", "Sim-Camera", "string")
 	}
 
 	// ping 诊断对象（TR-069 标准的 IPPingDiagnostics）。

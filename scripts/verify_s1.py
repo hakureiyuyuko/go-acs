@@ -1037,6 +1037,31 @@ def main():
               (modals.count('class="clisig"'), modals.count('class="sigbars"')))
         st, css = get("/static/style.css")
         check("样式里有信号柱与百分比", ".sigbars" in css and ".sigpct" in css, st)
+
+    print("== 33. 终端条目的主机名（拿不到就 N/A）==")
+    ok, out = run_sim(workdir, "-serial", "VERIFY-NAME", "-oui", "001122", "-fttr", "2",
+                      "-once", "-event", "0 BOOTSTRAP")
+    check("带主机列表的设备注册会话成功", ok, out[-160:])
+    ds = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-NAME"]
+    if ds:
+        nid = ds[0]["ID"]
+        full = api_device(nid)
+        check("采到了设备的主机列表（终端名的来源）",
+              any("Hosts.Host.1.HostName" in p["Name"] for p in full["params"]),
+              [p["Name"] for p in full["params"] if "Hosts" in p["Name"]][:3])
+        st, h = get(f"/devices/{nid}")
+        modals = h.split('<div class="modal-mask"', 1)[1] if '<div class="modal-mask"' in h else ""
+        check("终端条目里有「主机名：」一行", "主机名：" in modals, "")
+        # ① 主机列表按 MAC 对出来的
+        check("主机上的终端借用主机列表的名字（Sim-Laptop）", "Sim-Laptop" in modals, "")
+        # ② 终端行自己带的描述
+        check("终端行自带的描述也能当名字（Sim-Camera）", "Sim-Camera" in modals, "")
+        # ③ 子设备的终端借用主机列表（跨表按 MAC 对）
+        check("子设备终端也能借到主机列表的名字（Sim-Phone）", "Sim-Phone" in modals, "")
+        # ④ 拿不到的显示 N/A，而不是留空
+        check("拿不到名字的显示 N/A", "N/A" in modals, "")
+        st, css = get("/static/style.css")
+        check("终端条目样式仍在（标签 + 弹窗列表）", ".clik" in css and ".clilist" in css, st)
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")

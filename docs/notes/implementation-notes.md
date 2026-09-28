@@ -640,6 +640,31 @@ TR-069 虽然要求一次 SetParameterValues 里的参数原子生效，但不�
 现在 `WifiOverview` / `wifiInstanceParams` / `WifiInstances` 都会跳过子设备自己的 WLAN
 （`isSubDeviceWifi`），子设备的终端只在「FTTR 子设备」区块里看。
 
+**主机名**：终端条目里加了一行「主机名：」，拿不到就显示 **N/A**（不编、也不留空）。
+
+来源有两个，按顺序取：
+
+1. 终端行自己带的名字字段（华为是 `X_HW_AssociatedDevicedescriptions`，也认 `HostName` /
+   `AssociatedDeviceHostName` / `X_HW_DeviceName`）；
+2. 设备的**主机列表**（TR-098 `LANDevice.1.Hosts.Host.{i}.HostName`，TR-181 `Hosts.Host.{i}.HostName`），
+   按 MAC 对 —— 大小写不一致也能对上；各 AP 的终端行里带的名字也会并进这张索引，
+   所以**子设备的终端也能借到主机列表里的名字**。
+
+主机列表原来不在任何默认采集里（无线摘要只枚举 WLAN 子树），所以加了一条
+`EnqueueFetchHosts`（枚举 `LANDevice.1.Hosts.` 后按后缀只取 MAC / IP / HostName / Active /
+InterfaceType / AddressSource / VendorClassID / 条目数），挂在「采集无线概况」一起下发
+（点界面上的「重新采集无线概况」也会刷新它）。终端名同理，也加进了无线摘要白名单。
+
+**两台真机上的实测差异（很说明问题）**：
+
+- 设备 1（HN8145X6N 光猫）：主机列表里有那台终端 —— 界面直接显示 **Android-Phone**；
+- 设备 2（V271-20 FTTR 主机）：主机列表里只有 3 台子光猫（`InterfaceType=PON`），
+  WiFi 终端一台都没有 → 那一列全是 **N/A**。
+
+这和之前「主机终端没有 IP」是同一个根因：这台 FTTR 主机的 INTERNET 业务是桥接的，
+主机的三层视角里基本没有这些终端（它既拿不到 IP，也拿不到名字），
+而子光猫自己有 ARP/转发视角，所以子机那边的 IP 是齐的。**设备不知道的就显示 N/A，不猜。**
+
 **信号图标（四格小柱 + 百分比）**，口径定成两条，避免“同一个信号两种数字”：
 
 1. **优先用设备自报的质量**（华为 `X_HW_SingalQuality`，0..100；也认 `SignalQuality`）——
@@ -1025,8 +1050,8 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
 
 | 项目 | 结果 |
 | --- | --- |
-| `go test ./...` | 全部通过（`internal/cwmp` 41 个用例、`internal/store` 9 个用例、`internal/web` 27 个用例）|
-| `scripts/verify-s1.sh` | **通过 246 / 失败 0** |
+| `go test ./...` | 全部通过（`internal/cwmp` 41 个用例、`internal/store` 9 个用例、`internal/web` 30 个用例）|
+| `scripts/verify-s1.sh` | **通过 255 / 失败 0** |
 | `scripts/verify-interop.sh` | 通过（GenieACS 官方模拟器可完整纳管） |
 | 真机（华为 HN8145X6N + V271-20） | **两台不同型号均自动纳管成功**；实测过 SSID 改名、开 5GHz 射频、写密码（后者发现参数选错）|
 | 界面渲染 | 用 headless Chrome 截图确认（列表页 + 详情页） |

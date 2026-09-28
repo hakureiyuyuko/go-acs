@@ -319,3 +319,79 @@ func TestDevicePageRendersCompletely(t *testing.T) {
 		t.Errorf("页面里混进了模板错误：%s", body[len(body)-200:])
 	}
 }
+
+// 主机名：优先终端行自己带的，其次是设备主机列表按 MAC 对出来的；都没有就是空（界面显示 N/A）。
+func TestBuildClientTreeHostName(t *testing.T) {
+	now := time.Now()
+	b := "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+	ps := []store.Param{
+		{Name: b + "SSID", Value: "W", UpdatedAt: now},
+		{Name: b + "AssociatedDeviceNumberOfEntries", Value: "3", UpdatedAt: now},
+		// 1 号：名字在终端行自己身上
+		{Name: b + "AssociatedDevice.1.AssociatedDeviceMACAddress", Value: "AA:BB:CC:00:00:01", UpdatedAt: now},
+		{Name: b + "AssociatedDevice.1.X_HW_AssociatedDevicedescriptions", Value: "Camera", UpdatedAt: now},
+		// 2 号：名字只能从主机列表按 MAC 对出来（大小写不一致也要对上）
+		{Name: b + "AssociatedDevice.2.AssociatedDeviceMACAddress", Value: "AA:BB:CC:00:00:02", UpdatedAt: now},
+		// 3 号：两处都没有 → 空
+		{Name: b + "AssociatedDevice.3.AssociatedDeviceMACAddress", Value: "AA:BB:CC:00:00:03", UpdatedAt: now},
+		{Name: "InternetGatewayDevice.LANDevice.1.Hosts.Host.1.MACAddress", Value: "aa:bb:cc:00:00:02", UpdatedAt: now},
+		{Name: "InternetGatewayDevice.LANDevice.1.Hosts.Host.1.HostName", Value: "Laptop", UpdatedAt: now},
+		{Name: "InternetGatewayDevice.LANDevice.1.Hosts.HostNumberOfEntries", Value: "1", UpdatedAt: now},
+	}
+	tree := BuildClientTree(ps, nil)
+	if len(tree.Host) != 1 {
+		t.Fatalf("应该有 1 个分组：%+v", tree.Host)
+	}
+	got := map[string]string{}
+	for _, c := range tree.Host[0].Clients {
+		got[c.MAC] = c.HostName
+	}
+	want := map[string]string{
+		"AA:BB:CC:00:00:01": "Camera",
+		"AA:BB:CC:00:00:02": "Laptop",
+		"AA:BB:CC:00:00:03": "",
+	}
+	for mac, name := range want {
+		if got[mac] != name {
+			t.Errorf("%s 的主机名 = %q，期望 %q", mac, got[mac], name)
+		}
+	}
+}
+
+// 子设备的终端也能借用「主机列表」里的名字（真机上主机列表只有子光猫，但别的设备会给全）。
+func TestBuildClientTreeHostNameCrossTable(t *testing.T) {
+	now := time.Now()
+	ps := []store.Param{
+		{Name: "InternetGatewayDevice.X_HW_APDevice.1.WLANConfiguration.1.SSID", Value: "S", UpdatedAt: now},
+		{Name: "InternetGatewayDevice.X_HW_APDevice.1.WLANConfiguration.1.AssociatedDeviceNumberOfEntries", Value: "1", UpdatedAt: now},
+		{Name: "InternetGatewayDevice.X_HW_APDevice.1.WLANConfiguration.1.AssociatedDevice.1.AssociatedDeviceMACAddress", Value: "DE:AD:BE:EF:00:01", UpdatedAt: now},
+		{Name: "InternetGatewayDevice.LANDevice.1.Hosts.Host.1.MACAddress", Value: "de:ad:be:ef:00:01", UpdatedAt: now},
+		{Name: "InternetGatewayDevice.LANDevice.1.Hosts.Host.1.HostName", Value: "TV", UpdatedAt: now},
+	}
+	tree := BuildClientTree(ps, []FttrNode{{Instance: 1, Model: "K251e"}})
+	gs := tree.SubsBy[1]
+	if len(gs) != 1 || len(gs[0].Clients) != 1 {
+		t.Fatalf("子设备终端没解析出来：%+v", gs)
+	}
+	if got := gs[0].Clients[0].HostName; got != "TV" {
+		t.Errorf("子设备终端的主机名 = %q，期望 TV（应能从主机列表按 MAC 借到）", got)
+	}
+}
+
+// TR-181 的 Device.Hosts.Host.{i}.HostName 也要认。
+func TestBuildClientTreeHostNameTR181(t *testing.T) {
+	now := time.Now()
+	ps := []store.Param{
+		{Name: "Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries", Value: "1", UpdatedAt: now},
+		{Name: "Device.WiFi.AccessPoint.1.AssociatedDevice.1.MACAddress", Value: "AA:00:00:00:00:01", UpdatedAt: now},
+		{Name: "Device.Hosts.Host.1.MACAddress", Value: "AA:00:00:00:00:01", UpdatedAt: now},
+		{Name: "Device.Hosts.Host.1.HostName", Value: "Dev-A", UpdatedAt: now},
+	}
+	tree := BuildClientTree(ps, nil)
+	if len(tree.Host) != 1 || len(tree.Host[0].Clients) != 1 {
+		t.Fatalf("没解析出来：%+v", tree.Host)
+	}
+	if got := tree.Host[0].Clients[0].HostName; got != "Dev-A" {
+		t.Errorf("TR-181 主机名 = %q，期望 Dev-A", got)
+	}
+}
