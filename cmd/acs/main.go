@@ -56,6 +56,12 @@ func run(args []string) error {
 		}
 	}
 
+	// 任务历史保留上限（每台设备）。tasks 表只增不减，跑久了会把库撑大。
+	st.SetTaskHistoryLimit(cfg.TaskHistoryLimit)
+	if n, err := st.PruneTasks(); err == nil && n > 0 {
+		log.Info("已按保留上限清理任务历史", "deleted", n, "limit", cfg.TaskHistoryLimit)
+	}
+
 	if n, err := st.ResetRunningTasks(); err == nil && n > 0 {
 		log.Info("上次中断的任务已退回待办", "count", n)
 	}

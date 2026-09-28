@@ -47,6 +47,41 @@ func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	return &t, nil
 }
 
+// SetTaskHistoryLimit 设置「每台设备保留多少条任务记录」（0 = 不限）。
+//
+// 为什么要有它：tasks 表只增不减，跑久了会把库撑大，而任务历史只有最近的才有用。
+// 注意上限只裁**已结束**的任务：pending / running 是还没执行的事，一条都不能少。
+func (s *Store) SetTaskHistoryLimit(n int) { s.taskHistoryLimit = n }
+
+// TaskHistoryLimit 返回当前上限（0 = 不限）。界面上要显示它。
+func (s *Store) TaskHistoryLimit() int { return s.taskHistoryLimit }
+
+// PruneTasks 按上限裁一次任务历史，返回删掉的条数。
+//
+// 每台设备各留最近 N 条（按 id 倒序），且**永不删未结束的任务** ——
+// 所以某台设备排了一堆队时，总数可能暂时超过 N，这是对的（排队的不能丢）。
+func (s *Store) PruneTasks() (int64, error) {
+	if s.taskHistoryLimit <= 0 {
+		return 0, nil
+	}
+	res, err := s.db.Exec(`DELETE FROM tasks
+		WHERE status NOT IN (?, ?)
+		  AND id IN (
+			SELECT id FROM (
+				SELECT id, ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY id DESC) AS rn
+				FROM tasks
+			) WHERE rn > ?
+		  )`, TaskPending, TaskRunning, s.taskHistoryLimit)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // EnqueueTask 入队一个任务。
 func (s *Store) EnqueueTask(t *Task) (int64, error) {
 	if t.Status == "" {
@@ -59,7 +94,14 @@ func (s *Store) EnqueueTask(t *Task) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	// 顺手按上限裁一次（自带上限时才做事）。裁剪失败不影响这次入队：
+	// 任务已经写进去了，清理只是管家活，启动时还会再裁一次。
+	_, _ = s.PruneTasks()
+	return id, nil
 }
 
 // EnqueueTaskIfAbsent 入队，但同一设备同一 Kind 已有 pending 任务时跳过（去重）。
@@ -144,6 +186,33 @@ func (s *Store) ResetRunningTasks() (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// RequeueTask 把一条「已经下发、但 CPE 没应答」的在途任务退回待办。
+//
+// 为什么需要：任务一旦被下发就置为 running，而**只有收到 CPE 的应答**才会
+// 结束它。如果设备在这次会话里掉线 / 进程被杀 / 半路不回，任务就会永远挂在
+// running —— 界面上一直显示“进行中”，也永远不会重发（真机上就是这台光猫被
+// 拔网线的情形）。所以会话结束时要把在途且仍是 running 的任务退回待办。
+//
+// 也不能无限重试：retry_count 超过 maxRetries 就判失败，把原因写清楚
+// （免得一条注定完不成的任务被反复重发、刷满界面）。
+func (s *Store) RequeueTask(id int64, maxRetries int, reason string) error {
+	var rc int
+	var status string
+	if err := s.db.QueryRow(`SELECT retry_count, status FROM tasks WHERE id = ?`, id).Scan(&rc, &status); err != nil {
+		return err
+	}
+	if status != TaskRunning {
+		return nil // 已经有结果了（完成 / 失败 / 已退回），别覆盖
+	}
+	if maxRetries >= 0 && rc+1 > maxRetries {
+		return s.FailTask(id, reason)
+	}
+	_, err := s.db.Exec(
+		`UPDATE tasks SET status = ?, retry_count = retry_count + 1, result = ? WHERE id = ?`,
+		TaskPending, reason, id)
+	return err
 }
 
 // ListTasks 列出某设备的任务（新的在前）。

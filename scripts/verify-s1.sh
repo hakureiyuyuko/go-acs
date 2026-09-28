@@ -35,7 +35,8 @@ echo "  到 $WORK"
 
 echo "== 起 ACS（端口 $PORT，库 $DB）=="
 # 固定 ConnectionRequest 凭据：让「主动唤醒」的 Digest 那条能被确定性地测到
-ACS_CONNREQ_USER=acs ACS_CONNREQ_PASS=verify-connreq-pass \
+# ACS_TASK_HISTORY_LIMIT 调小一点（默认 500）：让「任务历史裁剪」在验收里真的被触发
+ACS_CONNREQ_USER=acs ACS_CONNREQ_PASS=verify-connreq-pass ACS_TASK_HISTORY_LIMIT=20 \
   ACS_LISTEN=":$PORT" ACS_DB="$DB" ACS_LOG_LEVEL=info \
   "$WORK/acs" >"$LOG" 2>&1 &
 ACSPID=$!

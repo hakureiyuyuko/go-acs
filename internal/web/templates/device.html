@@ -279,7 +279,7 @@
   </details>
 
   <details class="fold">
-    <summary>任务历史</summary>
+    <summary>任务历史{{if .TaskHistoryLimit}} <span class="hint">最近 {{.TaskHistoryLimit}} 条</span>{{end}}</summary>
     {{if .Tasks}}
     <table id="task-table" data-pager="20">
     <thead><tr><th>#</th><th>类型</th><th>状态</th><th>结果</th><th>创建</th><th>完成</th></tr></thead>

@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -368,5 +369,157 @@ func TestMarkStaleOffline(t *testing.T) {
 	d, _ := st.GetDevice(id)
 	if d.Online {
 		t.Error("应该已经离线")
+	}
+}
+
+// 「下发后 CPE 没应答」的任务要能退回待办，且不能无限重发。
+func TestRequeueTask(t *testing.T) {
+	st := newTestStore(t)
+	devID, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "REQ"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tid, err := st.EnqueueTask(&Task{DeviceID: devID, Kind: "GetParameterValues", Payload: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 下发（置 running）
+	claimed, err := st.ClaimNextTask(devID, nil)
+	if err != nil || claimed == nil {
+		t.Fatalf("取任务失败: %v %+v", err, claimed)
+	}
+	if claimed.Status != "running" {
+		t.Fatalf("应当已置为 running：%q", claimed.Status)
+	}
+
+	// 会话结束时退回
+	if err := st.RequeueTask(tid, 3, "设备没有应答"); err != nil {
+		t.Fatalf("退回失败: %v", err)
+	}
+	got, err := st.GetTask(tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "pending" {
+		t.Errorf("应退回 pending，实际 %q", got.Status)
+	}
+	if got.RetryCount != 1 {
+		t.Errorf("重试计数应为 1，实际 %d", got.RetryCount)
+	}
+	if !strings.Contains(got.Result, "没有应答") {
+		t.Errorf("应记下退回原因：%q", got.Result)
+	}
+
+	// 反复不应答 → 到上限后判失败（不能永远重发）
+	for i := 0; i < 5; i++ {
+		if _, err := st.ClaimNextTask(devID, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RequeueTask(tid, 3, "设备没有应答"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ = st.GetTask(tid)
+	if got.Status != "failed" {
+		t.Errorf("超过重试上限应判失败，实际 %q", got.Status)
+	}
+
+	// 已经有结果的任务不能被退回覆盖
+	tid2, err := st.EnqueueTask(&Task{DeviceID: devID, Kind: "Reboot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimNextTask(devID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CompleteTask(tid2, "已接受"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RequeueTask(tid2, 3, "设备没有应答"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.GetTask(tid2); got.Status != "done" {
+		t.Errorf("已完成的任务不该被退回：%q", got.Status)
+	}
+}
+
+// 任务历史保留上限：每台设备最多留 N 条，只裁已结束的，未结束的一条都不许丢。
+func TestTaskHistoryLimit(t *testing.T) {
+	st := newTestStore(t)
+	dev, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := st.UpsertDevice(&Device{OUI: "A", ProductClass: "P", SerialNumber: "S2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st.SetTaskHistoryLimit(10)
+	var ids []int64
+	for i := 0; i < 25; i++ {
+		id, err := st.EnqueueTask(&Task{DeviceID: dev, Kind: "GetParameterValues", Payload: `{"names":["A"]}`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+		if err := st.CompleteTask(id, "done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 另一台设备只留 3 条：别的设备的量不该把它的记录挤掉
+	for i := 0; i < 3; i++ {
+		if _, err := st.EnqueueTask(&Task{DeviceID: other, Kind: "GetParameterValues", Payload: `{"names":["B"]}`}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tasks, err := st.ListTasks(dev, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 10 {
+		t.Fatalf("上限 10，实际留下 %d 条", len(tasks))
+	}
+	// 留下的是最新的 10 条（ListTasks 按 id 倒序）
+	if tasks[0].ID != ids[len(ids)-1] {
+		t.Errorf("最新的一条应该留着：%d vs %d", tasks[0].ID, ids[len(ids)-1])
+	}
+	for _, t2 := range tasks {
+		for _, old := range ids[:15] {
+			if t2.ID == old {
+				t.Errorf("最旧的 %d 条应当被裁掉，但 %d 还在", 15, old)
+			}
+		}
+	}
+	if o, _ := st.ListTasks(other, 100); len(o) != 3 {
+		t.Errorf("另一台设备的 3 条不该被裁：%d", len(o))
+	}
+
+	// 未结束的任务永不删：上限 5，排 2 条 pending + 5 条已完成
+	st.SetTaskHistoryLimit(5)
+	if _, err := st.PruneTasks(); err != nil {
+		t.Fatal(err)
+	}
+	pend1, _ := st.EnqueueTask(&Task{DeviceID: dev, Kind: "Reboot"})
+	pend2, _ := st.EnqueueTask(&Task{DeviceID: dev, Kind: "Reboot"})
+	all, _ := st.ListTasks(dev, 100)
+	kept := false
+	for _, t2 := range all {
+		if t2.ID == pend1 || t2.ID == pend2 {
+			kept = true
+		}
+	}
+	if !kept && len(all) < 7 {
+		t.Errorf("排队的任务被误删了（剩下 %d 条）", len(all))
+	}
+	if n, _ := st.PendingTaskCount(dev); n < 2 {
+		t.Errorf("pending 任务数 = %d，应 ≥2", n)
+	}
+
+	// 不限（0）时什么都不裁
+	st.SetTaskHistoryLimit(0)
+	if n, err := st.PruneTasks(); err != nil || n != 0 {
+		t.Errorf("上限为 0 时不该裁剪：n=%d err=%v", n, err)
 	}
 }

@@ -1867,12 +1867,37 @@ func (s *Server) writeEnvelope(w http.ResponseWriter, sess *Session, id, body st
 // endSession 回 204（无内容）并结束会话 —— 这是 TR-069 里「我没活了」的标准表达。
 func (s *Server) endSession(w http.ResponseWriter, sess *Session) {
 	s.log.Debug("会话结束", "session", sess.ID, "device_id", sess.DeviceID)
+	s.requeueUnansweredTask(sess)
 	// 清掉推迟列表：本次会话要跳过的任务，下一轮会话就该放行了。
 	// （会话对象会跨多次 HTTP 请求甚至跨会话复用，不清就会把任务永久跳过。）
 	sess.clearDeferred()
 	s.sess.end(sess)
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// requeueUnansweredTask 会话结束时，把「已下发但一直没应答」的在途任务退回待办。
+//
+// 判据很简单：sess.pendingTask 还有值，就说明最后下发的那条请求没收到应答
+// （收到应答的分支都会把它清 0）。CPE 掉线、进程被杀、半路不回都属于这种。
+//
+// 不这么做的话任务会永远卡在 running：界面显示“进行中”、ACS 也不会重发，
+// 只有重启进程才可能恢复（踩过：会话循环写错的那次，3 条任务就这么挂住了）。
+func (s *Server) requeueUnansweredTask(sess *Session) {
+	if sess.pendingTask == 0 {
+		return
+	}
+	id := sess.pendingTask
+	sess.pendingTask = 0
+	if err := s.store.RequeueTask(id, maxTaskRetries,
+		"设备这次会话没有应答，已退回待办重发"); err != nil {
+		s.log.Warn("退回未应答任务失败", "task_id", id, "err", err)
+		return
+	}
+	s.log.Warn("在途任务没有应答，已退回待办", "device_id", sess.DeviceID, "task_id", id)
+}
+
+// maxTaskRetries 是「CPE 不应答」的最大重发次数。
+const maxTaskRetries = 3
 
 // ---------- 小工具 ----------
 

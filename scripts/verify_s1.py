@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import subprocess
+import os
 import sys
 import time
 import urllib.error
@@ -785,13 +786,29 @@ def main():
 
     print("== 26. 主动唤醒（Connection Request + Digest）==")
     if did:
-        # 把设备侧的 ConnectionRequest 账号密码 provision 进去（ACS 启动后首次 Inform 会做）
-        full = api_device(did)
-        prov = [t for t in full["tasks"]
-                if t["Kind"] == "SetParameterValues" and "ConnectionRequestUsername" in t["Payload"]]
-        check("已把 ConnectionRequest 凭据 provision 进设备", len(prov) >= 1, len(prov))
-        check("凭据下发成功", any(t["Status"] == "done" for t in prov),
-              [(t["ID"], t["Status"], t["Result"][:40]) for t in prov])
+        # 把设备侧的 ConnectionRequest 账号密码 provision 进去（ACS 启动后首次 Inform 会做）。
+        #
+        # 注意**不要去任务历史里找那条 provisioning 任务**：任务历史有保留上限（ACS_TASK_HISTORY_LIMIT），
+        # 早期任务可能已经被裁掉。这里看设备侧的实际结果 —— 我们写进去的用户名能读回来。
+        # （密码读不回来，那是设备“能改不能读”；它到底对不对，由下面 Digest 唤醒的成功与否证明。）
+        # ① ACS 侧的动作（日志里能看到）
+        logt = ""
+        try:
+            with open(os.path.join(workdir, "acs.log"), encoding="utf-8", errors="replace") as f:
+                logt = f.read()
+        except OSError:
+            pass
+        check("ACS 会主动把凭据写进设备（日志里能看到下发动作）",
+              "把 ConnectionRequest 凭据写进设备" in logt, "")
+        # ② 实际效果：模拟器默认给的是 cpe-cr，新设备会被 ACS 改写成我们配置的账号
+        ok2, _ = run_sim(workdir, "-serial", "VERIFY-CR", "-oui", "001122",
+                         "-once", "-event", "0 BOOTSTRAP")
+        check("新设备注册会话成功（用于验证凭据下发）", ok2, "")
+        ds2 = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-CR"]
+        if ds2:
+            vals = [p["Value"] for p in api_device(ds2[0]["ID"])["params"]
+                    if p["Name"].endswith("ManagementServer.ConnectionRequestUsername")]
+            check("凭据真的写进了设备（上报的账号被改成 acs）", "acs" in vals, vals)
 
         # 模拟器带 Connection Request 监听跑起来（它会用我们 provision 的凭据要 Digest）
         # 先确定 CR 端口
@@ -1085,6 +1102,28 @@ def main():
         check("拿不到名字的显示 N/A", "N/A" in modals, "")
         st, css = get("/static/style.css")
         check("终端条目样式仍在（标签 + 弹窗列表）", ".clik" in css and ".clilist" in css, st)
+
+    print("== 34. 任务历史只保留最近 N 条（控制库大小）==")
+    if did:
+        import sqlite3
+        con = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
+        rows = con.execute("""
+            select device_id,
+                   sum(case when status in ('done','failed') then 1 else 0 end),
+                   sum(case when status in ('pending','running') then 1 else 0 end)
+            from tasks group by device_id""").fetchall()
+        limit = int(os.environ.get("ACS_VERIFY_TASK_LIMIT", "20"))
+        check(f"每台设备保留的已结束任务都不超过上限（{limit}）",
+              all(r[1] <= limit for r in rows), rows)
+        check("确实触发过裁剪（至少一台设备正好到上限）", any(r[1] == limit for r in rows), rows)
+        # 未结束的任务一条都不能因为裁剪而丢
+        api_open = sum(api_device(d["ID"])["pending_tasks"] for d in api_devices())
+        db_open = sum(r[2] for r in rows)
+        check("排队 / 执行中的任务一条都没少", db_open == api_open, (db_open, api_open))
+        con.close()
+
+        st, h = get(f"/devices/{did}")
+        check("任务历史标题里写明了保留条数", f"最近 {limit} 条" in h, st)
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")
