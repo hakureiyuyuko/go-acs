@@ -67,28 +67,96 @@
     {{if or .Query (ne .State "all")}}<a href="/" class="hint">{{T "清除"}}</a>{{end}}
     <span class="hint">{{if or .Query (ne .State "all")}}{{T "匹配 %d / %d 台" (len .Devices) .Total}}{{else}}{{T "共 %d 台" .Total}}{{end}}</span>
   </form>
+
+  <div class="toolbar">
+    <form id="batch-form" method="get" action="/wifi/batch">
+      <button type="submit" class="ghost"
+              title='{{T "给勾选的设备统一下发无线参数（SSID / 密码 / 信道 / 射频开关等）"}}'>{{T "批量下发 WiFi 参数"}}</button>
+      <span class="hint" id="batch-count">{{T "已选 %d 台" 0}}</span>
+    </form>
+    <details class="colpick">
+      <summary>{{T "显示项"}}</summary>
+      <form method="get" action="/">
+        <input type="hidden" name="state" value="{{.State}}">
+        <input type="hidden" name="q" value="{{.Query}}">
+        <div class="colpick-grid">
+          {{range $c := .ColDefs}}
+          <label class="chk" {{if $c.Hint}}title="{{$c.Hint}}"{{end}}>
+            <input type="checkbox" name="cols" value="{{$c.Key}}" {{if index $.Cols $c.Key}}checked{{end}}>
+            <span>{{$c.Label}}</span>
+          </label>
+          {{end}}
+        </div>
+        <div class="colpick-actions">
+          <button type="submit">{{T "应用"}}</button>
+          <a class="ghost" href="/?cols=all&amp;state={{urlquery .State}}{{if .Query}}&amp;q={{urlquery .Query}}{{end}}">{{T "全选"}}</a>
+          <a class="ghost" href="/?cols=default&amp;state={{urlquery .State}}{{if .Query}}&amp;q={{urlquery .Query}}{{end}}">{{T "恢复默认"}}</a>
+          <span class="hint">{{T "选择会记在本浏览器里（下次打开还在）"}}</span>
+        </div>
+      </form>
+    </details>
+  </div>
+
   {{if .Devices}}
   <table id="devices-table" data-pager="20">
     <thead>
       <tr>
-        <th>{{T "状态"}}</th><th>{{T "名称"}}</th><th>{{T "备注"}}</th><th>{{T "序列号"}}</th>
-        <th>{{T "软件版本"}}</th><th>{{T "数据模型"}}</th><th>{{T "最后上报"}}</th><th>{{T "参数"}}</th>
-        <th>{{T "无线终端"}}</th><th></th>
+        <th class="pick"><input type="checkbox" id="dev-check-all" title='{{T "全选本页 / 取消全选"}}'></th>
+        {{if index .Cols "status"}}<th>{{T "状态"}}</th>{{end}}
+        <th>{{T "名称"}}</th>
+        {{if index .Cols "note"}}<th>{{T "备注"}}</th>{{end}}
+        {{if index .Cols "serial"}}<th>{{T "序列号"}}</th>{{end}}
+        {{if index .Cols "sw"}}<th>{{T "软件版本"}}</th>{{end}}
+        {{if index .Cols "model"}}<th>{{T "数据模型"}}</th>{{end}}
+        {{if index .Cols "lastinform"}}<th>{{T "最后上报"}}</th>{{end}}
+        {{if index .Cols "params"}}<th>{{T "参数"}}</th>{{end}}
+        {{if index .Cols "ip"}}<th>{{T "上报 IP"}}</th>{{end}}
+        {{if index .Cols "clients"}}<th>{{T "无线终端"}}</th>{{end}}
+        {{if index .Cols "rx"}}<th>{{T "收光"}}</th>{{end}}
+        {{if index .Cols "tx"}}<th>{{T "发光"}}</th>{{end}}
+        <th></th>
       </tr>
     </thead>
     <tbody>
       {{range $d := .Devices}}
       {{$bands := index $.WiFi $d.ID}}
+      {{$opt := index $.Optical $d.ID}}
       <tr>
+        <td class="pick"><input type="checkbox" class="dev-check" name="ids" value="{{$d.ID}}" form="batch-form"></td>
+        {{if index $.Cols "status"}}
         <td>{{if $d.Probing}}<span class="badge probing" title='{{T "超过 %d 秒周期的 2 倍没上报，已主动探测 %d 次" $d.PeriodicInterval $d.ProbeCount}}' >{{T "探测中"}}</span>{{else if $d.Online}}<span class="badge on">{{T "在线"}}</span>{{else}}<span class="badge off">{{T "离线"}}</span>{{end}}</td>
+        {{end}}
         <td><a href="/devices/{{$d.ID}}">{{$d.DisplayName}}</a></td>
+        {{if index $.Cols "note"}}
         <td class="note" title="{{$d.Note}}">{{if $d.Note}}{{$d.Note}}{{else}}<span class="hint">-</span>{{end}}</td>
+        {{end}}
+        {{if index $.Cols "serial"}}
         <td class="mono">{{$d.SerialNumber}}</td>
+        {{end}}
+        {{if index $.Cols "sw"}}
         <td class="mono">{{if $d.SoftwareVersion}}{{$d.SoftwareVersion}}{{else}}-{{end}}</td>
+        {{end}}
+        {{if index $.Cols "model"}}
         <td class="mono">{{if $d.DataModelRoot}}{{dataModelLabel $d.DataModelRoot}}{{else}}<span class="hint">{{T "未知"}}</span>{{end}}</td>
+        {{end}}
+        {{if index $.Cols "lastinform"}}
         <td class="mono">{{fmtTime $d.LastInformAt}}</td>
+        {{end}}
+        {{if index $.Cols "params"}}
         <td class="mono">{{$d.ParamCount}}</td>
+        {{end}}
+        {{if index $.Cols "ip"}}
+        <td class="mono">{{if $d.SourceIP}}{{$d.SourceIP}}{{else}}-{{end}}</td>
+        {{end}}
+        {{if index $.Cols "clients"}}
         <td class="mono">{{index $.ClientCounts $d.ID}}</td>
+        {{end}}
+        {{if index $.Cols "rx"}}
+        <td class="mono" {{if $opt.SourceText}}title="{{TS $opt.SourceText}}"{{end}}>{{if $opt.Rx}}{{$opt.Rx}}{{else}}<span class="hint">-</span>{{end}}</td>
+        {{end}}
+        {{if index $.Cols "tx"}}
+        <td class="mono" {{if $opt.SourceText}}title="{{TS $opt.SourceText}}"{{end}}>{{if $opt.Tx}}{{$opt.Tx}}{{else}}<span class="hint">-</span>{{end}}</td>
+        {{end}}
         <td>
           <form method="post" action="/devices/{{$d.ID}}/wifi">
             <button type="submit" class="ghost" {{if not $d.Online}}disabled

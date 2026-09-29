@@ -25,6 +25,12 @@ gateways: **onboard → inspect → configure → diagnose → manage sub-device
 - **Online status derived from the device's own interval**: if nothing is reported for more than
   `report interval × 2`, the ACS probes the device with Connection Request three times, and only marks it offline
   when all probes fail (a powered-off device sends no TR-069 notification, so this is the only way to confirm)
+- **Pick your own columns on the overview page**: every device-list column (online status, serial number,
+  software version, data model, last inform, parameter count, source IP, Wi-Fi client count, Rx / Tx optical
+  power) can be toggled; the choice is stored in the browser and can also be shared via URL
+- **Bulk Wi-Fi changes**: tick several devices on the overview page → “Bulk Wi-Fi change”, then push SSID /
+  password / channel / radio switch… by band (no need to remember instance numbers). Each device gets one
+  SetParameterValues task, and devices lacking a parameter are reported explicitly
 - **Operable**: persistent task queue, one-click device wake-up, reboot / delete device, a dedicated panel login
   page (session cookie, with logout), and retention limits for task and inform history
 
@@ -33,8 +39,9 @@ gateways: **onboard → inspect → configure → diagnose → manage sub-device
 > Data comes from the CPE simulator bundled with this repository; no real device information is included.
 
 Overview: device list (online status, serial number, software version, data model, last inform time, number of
-collected parameters, wireless client count; filterable by online / offline, with three states —
-online / probing / offline — and a 5-second auto-refresh toggle in the top-right) plus wireless overview
+collected parameters, source IP, wireless client count, Rx / Tx optical power — all of these columns can be
+toggled under “Columns”; filterable by online / offline, with three states — online / probing / offline —
+and a 5-second auto-refresh toggle in the top-right), bulk Wi-Fi change for ticked devices, plus wireless overview
 
 ![Overview](docs/images/overview.png)
 

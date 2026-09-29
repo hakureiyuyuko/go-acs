@@ -145,6 +145,9 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 	mux.HandleFunc("POST /devices/{id}/wifi", guard(s.handleWifi))
 	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", guard(s.handleWifiEdit))
 	mux.HandleFunc("POST /devices/{id}/wifi/{inst}", guard(s.handleWifiSave))
+	// 批量下发无线参数：从概览页勾选多台设备后进来
+	mux.HandleFunc("GET /wifi/batch", guard(s.handleWifiBatch))
+	mux.HandleFunc("POST /wifi/batch", guard(s.handleWifiBatchApply))
 	mux.HandleFunc("GET /api/devices", guard(s.apiDevices))
 	mux.HandleFunc("GET /api/devices/{id}", guard(s.apiDevice))
 	mux.HandleFunc("POST /api/devices/{id}/fetch", guard(s.apiFetch))
@@ -243,6 +246,8 @@ var jsKeys = []string{
 	"看到第几页 / 每页多少条",
 	"‹ 上一页", "下一页 ›", "全部",
 	"每页 %d 条", "共 %d 条 · 第 %d / %d 页", "共 %d 条",
+	// 设备列表多选（批量下发 WiFi 用）
+	"已选 %d 台", "先勾选要下发的设备",
 }
 
 // mergeCommon 把公共数据合进页面自己的数据里（页面数据优先）。
@@ -301,10 +306,26 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 显示项：URL ?cols= 优先，其次 cookie，都没有用默认（见 resolveCols）
+	cols := s.resolveCols(w, r)
+	lang := s.langOf(w, r)
+
 	// 无线概况：一次查询拿全设备的无线参数，再按设备/频段整理
 	wifiParams, err := s.store.WifiParams()
 	if err != nil {
 		wifiParams = map[int64][]store.Param{}
+	}
+
+	// 收光 / 发光：只有勾了这两列才去查（没勾就别做这次查询）
+	opticalByDevice := map[int64]OpticalPower{}
+	if wantOptical(cols) {
+		opticalParams, err := s.store.OpticalParams()
+		if err != nil {
+			opticalParams = map[int64][]store.Param{}
+		}
+		for id, ps := range opticalParams {
+			opticalByDevice[id] = OpticalOverview(ps)
+		}
 	}
 
 	// 搜索：服务端过滤（结果可以分享 URL，也不依赖 JS）。
@@ -349,10 +370,16 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"Stats":        stats,
 		"WiFi":         wifiByDevice,
 		"ClientCounts": clientCounts,
+		"Optical":      opticalByDevice,
 		"Query":        q,
 		"State":        state,
 		"AuthOn":       s.authEnabled(),
 		"Total":        len(all),
+		// 显示项：Cols 是当前勾选（模板按它决定渲染哪些 <th>/<td>），
+		// ColDefs 是给「显示项」面板用的完整清单（已按当前语言译好）
+		"Cols":    cols,
+		"ColDefs": colDefsFor(lang),
+		"ColAll":  len(cols) == len(overviewColDefs),
 		// 筛选条上的数字（在线含探测中，探测中是它的子集）
 		"OnlineCount":  stats.Online,
 		"OfflineCount": stats.Devices - stats.Online,

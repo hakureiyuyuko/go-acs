@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{T "批量下发 WiFi 参数"}} · {{T "轻量 TR-069 ACS"}}</title>
+<link rel="stylesheet" href="/static/style.css">
+<script>
+  // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
+  (function () {
+    try {
+      var t = localStorage.getItem("theme");
+      if (t !== "light" && t !== "dark") {
+        t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches)
+          ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
+</head>
+<body>
+<header class="top">
+  <h1>{{T "轻量 TR-069 ACS"}}</h1>
+  <div class="spacer"></div>
+  <a class="ghost" href="/">{{T "设备列表"}}</a>
+  <a class="ghost" href="/settings">{{T "设置"}}</a>
+  <button id="theme-toggle" class="ghost" type="button" title='{{T "切换日间 / 夜间模式"}}'>{{T "主题"}}</button>
+  <a class="ghost" href="?lang={{.OtherLang}}{{if .QueryIDs}}&amp;ids={{.QueryIDs}}{{end}}" title='{{T "切换界面语言"}}'>{{.OtherLangName}}</a>
+  {{if .AuthOn}}
+  <form method="post" action="/logout"><button type="submit" class="ghost" title='{{T "退出登录"}}'>{{T "退出"}}</button></form>
+  {{end}}
+</header>
+
+<main>
+  <div class="crumb">
+    <a href="/">{{T "设备列表"}}</a> / {{T "批量下发 WiFi 参数"}}
+  </div>
+
+  <h2>{{T "批量下发 WiFi 参数"}}</h2>
+  <div class="hint" style="margin:-4px 0 12px">
+    {{T "给多台设备一次性下发同样的无线参数（SSID / 密码 / 信道 / 射频开关等）。"}}
+    {{T "每台设备各生成一条 SetParameterValues 任务，设备下次上报时执行，成功后会自动读回核对。"}}
+  </div>
+
+  {{if .Notice}}
+  <div class="notice {{if not .NoticeErr}}ok{{end}}">{{TS .Notice}}</div>
+  {{end}}
+  {{if .Run}}
+  <div class="notice ok">{{T "已对 %d 台设备下发" .Run.Queued}}</div>
+  {{end}}
+
+  <form method="post" action="/wifi/batch" data-confirm="{{T "确认向勾选的设备下发这些无线参数？"}}">
+    <h3>{{T "目标设备"}}</h3>
+    <div class="batch-bar">
+      <button type="button" class="ghost" id="ids-all-on">{{T "全选"}}</button>
+      <button type="button" class="ghost" id="ids-all-off">{{T "清空"}}</button>
+      <span class="hint" id="ids-count">{{T "已选 %d 台" 0}}</span>
+    </div>
+    {{if .Devices}}
+    <div class="batch-devices">
+      {{range $d := .Devices}}
+      <label class="chk">
+        <input type="checkbox" class="ids-check" name="ids" value="{{$d.ID}}"
+               {{if index $.Selected $d.ID}}checked{{end}}>
+        <span>{{$d.DisplayName}}</span>
+        <span class="mono hint">{{$d.SerialNumber}}</span>
+      </label>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">{{T "还没有设备接入。"}}</div>
+    {{end}}
+
+    <h3>{{T "频段范围"}}</h3>
+    <div class="hint" style="margin:-4px 0 8px">
+      {{T "按频段下发，不用记每台设备的实例号（同一频段在不同设备上实例号可能不一样）。"}}
+    </div>
+    <select name="band" style="width:220px">
+      {{range $b := .Bands}}
+      <option value="{{$b.Value}}">{{TS $b.Label}}</option>
+      {{end}}
+    </select>
+
+    <h3>{{T "要修改的参数"}}</h3>
+    <div class="hint" style="margin:-4px 0 10px">
+      {{T "勾选要改的项；没勾的字段一律不动。"}}
+      {{T "密码留空表示不修改。"}}
+    </div>
+    {{if .Fields}}
+    {{range $f := .Fields}}
+    <div class="wrow">
+      <div class="wlabel">
+        <label class="chk">
+          <input type="checkbox" class="use-check" name="use_{{$f.Key}}" value="1">
+          <span>{{TS $f.Label}}</span>
+        </label>
+        {{if lt $f.Support $f.Combos}}
+        <div class="hint">{{T "%d / %d 个频段支持" $f.Support $f.Combos}}</div>
+        {{end}}
+      </div>
+      <div class="winput">
+        {{if eq $f.Kind "bool"}}
+          <label class="chk">
+            <input type="checkbox" name="v_{{$f.Key}}" value="1">
+            <span>{{T "启用"}}</span>
+          </label>
+        {{else if eq $f.Kind "select"}}
+          <select name="v_{{$f.Key}}">
+            <option value="">{{T "（不改）"}}</option>
+            {{range $o := $f.Options}}
+            <option value="{{$o.Value}}">{{TS $o.Label}}</option>
+            {{end}}
+          </select>
+        {{else if eq $f.Kind "password"}}
+          <input type="password" name="v_{{$f.Key}}" value="" placeholder='{{T "为空表示不修改"}}' autocomplete="new-password">
+        {{else}}
+          <input type="text" name="v_{{$f.Key}}" value="" placeholder='{{T "为空表示不修改"}}'>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+    <div class="wrow">
+      <div class="wlabel"></div>
+      <div class="winput"><button type="submit">{{T "下发"}}</button></div>
+    </div>
+    {{else}}
+    <div class="empty">
+      {{if .Selected}}
+      {{T "选中的设备还没有采集到无线参数。"}}
+      {{else}}
+      {{T "先在上面的设备列表里勾选要下发的设备。"}}
+      {{end}}
+    </div>
+    {{end}}
+  </form>
+
+  {{if .Run}}
+  <h3>{{T "下发结果"}}</h3>
+  <div class="hint" style="margin:-4px 0 10px">
+    {{T "任务在设备下次上报时执行；状态会自己变，可以刷新页面看进展。"}}
+  </div>
+  <table>
+    <thead>
+      <tr><th>{{T "设备"}}</th><th>{{T "频段"}}</th><th>{{T "参数"}}</th><th>{{T "状态"}}</th><th>{{T "结果"}}</th></tr>
+    </thead>
+    <tbody>
+      {{range $r := .Run.Results}}
+      <tr>
+        <td><a href="/devices/{{$r.DeviceID}}">{{$r.Name}}</a></td>
+        <td class="mono">{{if $r.Bands}}{{$r.Bands}}{{else}}-{{end}}</td>
+        <td class="mono">{{$r.Count}}</td>
+        <td>
+          {{if $r.Err}}<span class="badge failed">{{T "失败"}}</span>
+          {{else if $r.Skipped}}<span class="badge off">{{T "跳过"}}</span>
+          {{else if $r.Task}}<span class="badge {{$r.Task.Status}}">{{$r.Task.Status}}</span>
+          {{else}}<span class="badge pending">pending</span>{{end}}
+        </td>
+        <td class="mono">
+          {{if $r.Err}}{{TS $r.Err}}
+          {{else if $r.Skipped}}{{TS $r.Skipped}}
+          {{else if $r.Task}}{{if $r.Task.Result}}{{TS $r.Task.Result}}{{else}}-{{end}}
+            {{if $r.Wake}}<div class="hint">{{TS $r.Wake}}</div>{{end}}
+          {{else}}-{{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</main>
+<script>window.I18N = {{.I18NJSON}};</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

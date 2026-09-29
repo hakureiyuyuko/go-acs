@@ -17,6 +17,8 @@ function t(key) {
 //   4. 破坏性操作（重启设备等）的二次确认
 //   5. 终端弹窗：data-modal 打开、点遮罩或 ✕ 或 Esc 关闭
 //   6. 首页的 5 秒自动刷新开关（状态记在 localStorage）
+//   7. 设备列表的多选：全选本页 + 已选台数 + 提交时只带「看得见」的那些
+//   8. 批量页上的「全选 / 清空」与已选台数
 document.addEventListener("DOMContentLoaded", function () {
   var pagers = setupPagers(document);
   wireParamFilter(pagers);
@@ -25,7 +27,100 @@ document.addEventListener("DOMContentLoaded", function () {
   wireAutoRefresh();
   wireConfirms();
   wireModals();
+  wireBatchSelection();
+  wireBatchDevicePicker();
 });
+
+// ---------- 批量页：目标设备的全选 / 清空 / 计数 ----------
+function wireBatchDevicePicker() {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll(".ids-check"));
+  var count = document.getElementById("ids-count");
+  var on = document.getElementById("ids-all-on");
+  var off = document.getElementById("ids-all-off");
+  if (boxes.length === 0) return;
+
+  function refresh() {
+    var n = boxes.filter(function (b) { return b.checked; }).length;
+    if (count) count.textContent = t("已选 %d 台").replace("%d", n);
+  }
+  if (on) on.addEventListener("click", function () { boxes.forEach(function (b) { b.checked = true; }); refresh(); });
+  if (off) off.addEventListener("click", function () { boxes.forEach(function (b) { b.checked = false; }); refresh(); });
+  boxes.forEach(function (b) { b.addEventListener("change", refresh); });
+  refresh();
+}
+
+// ---------- 设备列表多选（批量下发 WiFi 参数用）----------
+//
+// 复选框用 form="batch-form" 挂到工具栏那个表单上，所以**没有 JS 也能提交**；
+// 这里补四件事：
+//   1. 表头的全选框（只管当前页）；
+//   2. 「已选 N 台」的实时计数（选了没反应最让人心里没底）；
+//   3. 选择记在 sessionStorage —— 概览页可能开着 5 秒自动刷新，一刷新勾选就没了；
+//      翻页看下一批时也不会丢掉上一页选的（分页只是把行藏起来，勾选状态还在）。
+//   4. 提交时清掉这份记录：下发完回到概览页，不该还带着上次的选择。
+function wireBatchSelection() {
+  var form = document.getElementById("batch-form");
+  var all = document.getElementById("dev-check-all");
+  var count = document.getElementById("batch-count");
+  var boxes = Array.prototype.slice.call(document.querySelectorAll(".dev-check"));
+  if (!form || boxes.length === 0) return;
+  var KEY = "acs-batch-ids";
+
+  // 往上找所在的表格行（分页靠行元素的 style.display 控制）
+  function rowOf(box) {
+    var el = box;
+    while (el && el.tagName !== "TR") el = el.parentNode;
+    return el;
+  }
+  function visible(box) {
+    var row = rowOf(box);
+    return !row || row.style.display !== "none";
+  }
+  function save() {
+    try {
+      sessionStorage.setItem(KEY, JSON.stringify(
+        boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; })));
+    } catch (e) { /* 隐私模式写不进去，忽略 */ }
+  }
+  function restore() {
+    var saved;
+    try { saved = JSON.parse(sessionStorage.getItem(KEY) || "[]"); } catch (e) { saved = []; }
+    if (!saved.length) return;
+    boxes.forEach(function (b) { b.checked = saved.indexOf(b.value) >= 0; });
+  }
+  function refresh() {
+    var n = boxes.filter(function (b) { return b.checked; }).length;
+    if (count) count.textContent = t("已选 %d 台").replace("%d", n);
+    if (all) {
+      var vis = boxes.filter(visible);
+      all.checked = vis.length > 0 && vis.every(function (b) { return b.checked; });
+    }
+    var submit = form.querySelector("button[type=submit]");
+    if (submit) submit.disabled = n === 0;
+  }
+
+  if (all) {
+    all.addEventListener("change", function () {
+      boxes.forEach(function (b) { if (visible(b)) b.checked = all.checked; });
+      save();
+      refresh();
+    });
+  }
+  boxes.forEach(function (b) {
+    b.addEventListener("change", function () { save(); refresh(); });
+  });
+  form.addEventListener("submit", function (e) {
+    if (boxes.filter(function (b) { return b.checked; }).length === 0) {
+      e.preventDefault();
+      window.alert(t("先勾选要下发的设备"));
+      return;
+    }
+    try { sessionStorage.removeItem(KEY); } catch (err) { /* 忽略 */ }
+  });
+
+  restore();
+  refresh();
+}
 
 // ---------- 5 秒自动刷新（设备列表页 + 设备详情页，开关状态全局共享）----------
 //

@@ -178,6 +178,46 @@ func (s *Store) WifiParams() (map[int64][]Param, error) {
 	return out, rows.Err()
 }
 
+// OpticalParams 一次性取出**所有设备**的光功率相关参数，按 device_id 分组。
+//
+// 概览页要在列表里直接显示每台设备的收光 / 发光，逐设备查参数会变成 N+1 查询，
+// 所以跟 WifiParams 一样一条 SQL 拿全。
+//
+// 这里只做**粗筛**（名字里含这些片段），真正的判定（是不是光功率、是收还是发）
+// 交给 web.opticalField：命名没有标准，各家写法一大堆，SQL 里写不全；
+// 而且必须能把无线的 `TransmitPower`（发射功率）排除掉 —— 它不是光功率。
+func (s *Store) OpticalParams() (map[int64][]Param, error) {
+	rows, err := s.db.Query(`SELECT device_id, name, value, value_type, writable, source, updated_at
+		FROM device_params
+		WHERE lower(name) LIKE '%rxpower%'
+		   OR lower(name) LIKE '%txpower%'
+		   OR lower(name) LIKE '%rx_power%'
+		   OR lower(name) LIKE '%tx_power%'
+		   OR lower(name) LIKE '%rxoptical%'
+		   OR lower(name) LIKE '%txoptical%'
+		   OR lower(name) LIKE '%opticalpower%'
+		ORDER BY device_id, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[int64][]Param{}
+	for rows.Next() {
+		var devID int64
+		var p Param
+		var wr int
+		var upd string
+		if err := rows.Scan(&devID, &p.Name, &p.Value, &p.ValueType, &wr, &p.Source, &upd); err != nil {
+			return nil, err
+		}
+		p.Writable = wr == 1
+		p.UpdatedAt = parseTS(upd)
+		out[devID] = append(out[devID], p)
+	}
+	return out, rows.Err()
+}
+
 // paramCounts 一次性取出每个设备的参数个数，避免列表页 N+1 查询。
 func (s *Store) paramCounts() (map[int64]int, error) {
 	rows, err := s.db.Query(`SELECT device_id, COUNT(*) FROM device_params GROUP BY device_id`)
