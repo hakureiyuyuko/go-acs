@@ -1552,6 +1552,84 @@ def main():
         cc2 = r.headers.get("Cache-Control") or ""
     check("静态资源每次回源确认（no-cache）", "no-cache" in cc2, cc2)
 
+    print("== 37e. 无线/终端概况：到期自动刷新（不用手动点采集）==")
+    acs_bin2 = os.path.join(workdir, "acs")
+    sim_bin2 = os.path.join(workdir, "cpesim")
+    if not (os.path.exists(acs_bin2) and os.path.exists(sim_bin2)):
+        skip("无线概况自动刷新', '没找到 $WORK/acs 或 $WORK/cpesim")
+    else:
+        import sqlite3
+        port2 = 17582
+        base3 = "http://127.0.0.1:%d" % port2
+        db3 = os.path.join(workdir, "wifirefresh.db")
+        env3 = dict(os.environ)
+        env3.update({
+            "ACS_LISTEN": ":%d" % port2,
+            "ACS_DB": db3,
+            "ACS_LOG_LEVEL": "debug",
+            "ACS_AUTO_REFRESH_WIFI": "2s",   # 为了验收压缩到秒级
+        })
+        env3.pop("ACS_WEB_USER", None)
+        env3.pop("ACS_WEB_PASS", None)
+        log3 = os.path.join(workdir, "wifirefresh.log")
+        f3 = open(log3, "w")
+        proc3 = subprocess.Popen([acs_bin2], env=env3, stdout=f3, stderr=subprocess.STDOUT)
+        cpe3 = None
+        try:
+            ready = False
+            for _ in range(60):
+                try:
+                    with urllib.request.urlopen(base3 + "/", timeout=2) as r:
+                        if r.status == 200:
+                            ready = True
+                            break
+                except Exception:
+                    time.sleep(0.2)
+            if not ready:
+                skip("无线概况自动刷新", "临时实例没起来")
+            else:
+                cpe3 = subprocess.Popen([sim_bin2, "-acs", base3 + "/acs", "-serial", "WIFIREF1",
+                                         "-interval", "2s"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                def wifi_stamp():
+                    """读库里无线参数的最近写入时间 —— 就是界面上那个「采集」时间。"""
+                    try:
+                        con = sqlite3.connect(db3)
+                        row = con.execute(
+                            "SELECT COALESCE(MAX(updated_at), '') FROM device_params "
+                            "WHERE name LIKE '%.WLANConfiguration.%'").fetchone()
+                        con.close()
+                        return row[0] or ""
+                    except Exception:
+                        return ""
+
+                first = ""
+                for _ in range(100):          # 等首采完成
+                    first = wifi_stamp()
+                    if first:
+                        break
+                    time.sleep(0.3)
+                check("首次纳管会自动采集无线概况", bool(first), first)
+                # 什么都不点，等两个刷新间隔
+                time.sleep(8)
+                second = wifi_stamp()
+                check("到期后自动重新采集（采集时间自己往前走）",
+                      bool(second) and second > first, "首采 %s → 现在 %s" % (first, second))
+                f3.flush()
+                logtxt = open(log3, encoding="utf-8", errors="replace").read()
+                check("日志里能看到「无线概况到期，已安排刷新」",
+                      "无线概况到期" in logtxt, "")
+        finally:
+            if cpe3:
+                cpe3.terminate()
+            proc3.terminate()
+            try:
+                proc3.wait(timeout=5)
+            except Exception:
+                proc3.kill()
+            f3.close()
+
     print("== 37. 离线判定：超期先主动探测，探不通才判离线 ==")
     acs_bin = os.path.join(workdir, "acs")
     sim_bin = os.path.join(workdir, "cpesim")

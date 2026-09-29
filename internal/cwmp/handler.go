@@ -126,6 +126,7 @@ type Config struct {
 	LockWait            time.Duration // 同一会话并发请求最多等多久
 	AutoFetchDeviceInfo bool          // Inform 后是否自动去取设备基本信息
 	AutoFetchWiFi       bool          // 首次纳管/BOOTSTRAP 时是否自动采集无线概况（看板用）
+	WiFiRefreshInterval time.Duration // 无线/终端概况自动刷新间隔（0 = 只在首次纳管时采一次）
 	ProbeCapabilities   bool          // 首次纳管时是否探测设备能力（如有没有 FTTR 子设备）
 	MaxBodyBytes        int64
 	LogRawSOAP          bool
@@ -1067,6 +1068,18 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 	// 无线概况（看板上的 2.4G/5G 那一栏）：首次纳管 / BOOTSTRAP 时采一次。
 	// 只取十几个摘要字段（SSID/开关/信道/标准/加密/终端数），不会把
 	// 四百多个 WLAN 参数全拉回来，所以对设备负担很小。
+	// 另外按间隔自动刷新一次：面板上的「采集」时间只有真的读了参数才会动，
+	// 不刷新的话它会一直停在首次纳管那一刻（用户会以为「只有手动点才更新」）。
+	if s.cfg.WiFiRefreshInterval > 0 && !created && !inf.HasEvent("0 BOOTSTRAP") {
+		if last, ok := s.store.LastWifiSummaryAt(deviceID); !ok || time.Since(last) >= s.cfg.WiFiRefreshInterval {
+			if _, err := s.EnqueueFetchWiFi(deviceID); err != nil {
+				s.log.Warn("入队刷新无线概况失败", "device_id", deviceID, "err", err)
+			} else {
+				s.log.Debug("无线概况到期，已安排刷新", "device_id", deviceID, "last", last)
+			}
+		}
+	}
+
 	if s.cfg.AutoFetchWiFi && (created || inf.HasEvent("0 BOOTSTRAP")) {
 		if _, err := s.EnqueueFetchWiFi(deviceID); err != nil {
 			s.log.Warn("入队采集无线概况失败", "device_id", deviceID, "err", err)

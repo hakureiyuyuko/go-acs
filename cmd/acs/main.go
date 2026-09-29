@@ -77,6 +77,7 @@ func run(args []string) error {
 		SessionTimeout:       cfg.SessionTimeout,
 		AutoFetchDeviceInfo:  cfg.AutoFetchInfo,
 		AutoFetchWiFi:        cfg.AutoFetchWiFi,
+		WiFiRefreshInterval:  cfg.AutoRefreshWiFi,
 		ProbeCapabilities:    cfg.ProbeCapabilities,
 		ConnReqEnabled:       cfg.ConnReqEnabled,
 		ConnReqUser:          cfg.ConnReqUser,

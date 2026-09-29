@@ -276,3 +276,23 @@ func (s *Store) FindDeviceBySerial(serial string) (*Device, error) {
 	row := s.db.QueryRow(`SELECT `+devCols+` FROM devices WHERE serial_number = ? LIMIT 1`, serial)
 	return scanDevice(row)
 }
+
+// LastWifiSummaryAt 返回该设备**无线概况参数**最近一次被写入的时间。
+//
+// 面板上每个频段/终端分组旁边那个「采集 23:13:12」就是它 —— 只有真的去读一次设备参数
+// 才会变，所以定期刷新要拿它判断「是不是该再读一次了」。
+// 设备还没采过（或从没上报过无线参数）时返回 ok = false。
+func (s *Store) LastWifiSummaryAt(deviceID int64) (time.Time, bool) {
+	var raw string
+	err := s.db.QueryRow(
+		`SELECT COALESCE(MAX(updated_at), '') FROM device_params
+		 WHERE device_id = ? AND name LIKE '%.WLANConfiguration.%'`, deviceID).Scan(&raw)
+	if err != nil || raw == "" {
+		return time.Time{}, false
+	}
+	t := parseTS(raw)
+	if t.IsZero() {
+		return time.Time{}, false
+	}
+	return t, true
+}
