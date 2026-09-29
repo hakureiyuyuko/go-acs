@@ -1,5 +1,7 @@
 # 轻量 TR-069 ACS
 
+**简体中文** | [English](README-en.md)
+
 单二进制、零外部中间件的 TR-069/CWMP ACS（Go + SQLite），用来管一批光猫 / FTTR 主机：
 **纳管 → 看信息 → 改配置 → 诊断 → 子设备与终端管理**。
 
