@@ -17,7 +17,7 @@
 ## 安装
 
 ```bash
-VERSION=1.2.1                                  # 换成你下载的那个版本
+VERSION=1.2.2                                  # 换成你下载的那个版本
 tar xzf acs-$VERSION-linux-amd64.tar.gz
 cd acs-$VERSION-linux-amd64
 sudo ./install.sh
@@ -55,7 +55,7 @@ sudo ./install.sh --help                             # 全部选项
 ```bash
 sudo ./update.sh                # 拉最新版
 sudo ./update.sh --check        # 只看有没有新版本
-sudo ./update.sh --tag v1.2.1   # 升到指定版本
+sudo ./update.sh --tag v1.2.2   # 升到指定版本
 sudo ./update.sh --file acs-$VERSION-linux-amd64.tar.gz   # 内网/离线，用本地包
 ```
 
