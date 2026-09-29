@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版本号，如 v1.3.0（tag 推上来时以 tag 名为准）
+        required: true
+        type: string
+      prerelease:
+        description: 标为预发布版本
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: 发布前置校验
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: 单元测试
+        env:
+          CGO_ENABLED: '0'
+        run: go test ./...
+
+      - name: S1 端到端验收
+        env:
+          CGO_ENABLED: '0'
+        run: scripts/verify-s1.sh
+
+  release:
+    name: 打发布包并上传
+    needs: check
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: 定版本号
+        id: ver
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          v="${INPUT_VERSION:-}"
+          [ -z "$v" ] && v="${GITHUB_REF_NAME}"
+          case "$v" in v*) ;; *) v="v${v}";; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "plain=${v#v}" >> "$GITHUB_OUTPUT"
+          if printf '%s' "$v" | grep -qE -- '-(rc|beta|alpha|preview)'; then
+            echo "pre=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pre=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "版本：$v" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 打发布包（linux amd64/arm64 + SHA256SUMS）
+        run: scripts/build-release.sh "${{ steps.ver.outputs.version }}"
+
+      # 优先用仓库里写好的发布说明，没有就让 GitHub 按提交记录生成
+      # 注意：仓库里文件名是带 v 的（docs/releases/v1.3.0.md），两种写法都探一遍
+      - name: 准备 Release 说明
+        id: notes
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PLAIN: ${{ steps.ver.outputs.plain }}
+        run: |
+          for n in "docs/releases/$VERSION.md" "docs/releases/$PLAIN.md"; do
+            if [ -f "$n" ]; then
+              cp "$n" dist/RELEASE_NOTES.md
+              echo "path=dist/RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
+              echo "采用 $n" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
+          echo "path=" >> "$GITHUB_OUTPUT"
+          echo "> 没找到 docs/releases/${VERSION}.md，改用 GitHub 自动生成的提交记录" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 产物与校验和
+        run: |
+          ls -la dist
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: ${{ steps.ver.outputs.version }}
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.path == '' }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' || steps.ver.outputs.pre == 'true' }}
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

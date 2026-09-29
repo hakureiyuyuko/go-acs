@@ -3,9 +3,18 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-test:
+  lint:
+    name: 格式与静态检查
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,17 +22,109 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
+          cache: true
 
       - name: gofmt
         run: |
           out=$(gofmt -l . | grep -v '^reference/' || true)
-          if [ -n "$out" ]; then echo "这些文件没格式化："; echo "$out"; exit 1; fi
+          if [ -n "$out" ]; then
+            echo "以下文件没跑 gofmt：" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$out" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
-      - name: vet
+      - name: go vet
         run: go vet ./...
 
-      - name: test
-        run: CGO_ENABLED=0 go test ./...
+  test:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: build
-        run: CGO_ENABLED=0 go build ./cmd/acs && CGO_ENABLED=0 go build ./test/cpesim
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: 跑测试（开竞态检测）
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: 覆盖率摘要
+        run: go tool cover -func=coverage.out | tail -n 1 | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build:
+    name: 构建 ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ''
+          - goos: linux
+            goarch: arm64
+            ext: ''
+          - goos: darwin
+            goarch: arm64
+            ext: ''
+          - goos: windows
+            goarch: amd64
+            ext: '.exe'
+    env:
+      CGO_ENABLED: '0'
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      EXT: ${{ matrix.ext }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      # 只编译Windows/macOS不做发布，目的是提前暴露跨平台编译回归
+      - name: go build
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w" -o "dist/acs$EXT" ./cmd/acs
+          if [ "$GOOS" = linux ]; then
+            go build -trimpath -ldflags "-s -w" -o dist/cpesim ./test/cpesim
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acs-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/acs${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 7
+
+  s1:
+    name: S1 端到端验收
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      # 真实二进制 + 真实 HTTP + 真实 SQLite，CWMP 报文全流程跑一遍
+      - name: scripts/verify-s1.sh
+        run: scripts/verify-s1.sh
