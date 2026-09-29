@@ -203,3 +203,7 @@ docs/               需求文档、发布说明与实现笔记
 本项目由 **Deepseek V4.1 Flash** 辅助开发。
 
 <img src="docs/images/thanks.png" alt="小肥鱼太棒了！" width="300">
+
+## 赞助 Buy me a coffee
+
+**TRC20 TJAHCw3UKdysUnkqDLZxPn39LJ6FigCdoB**
