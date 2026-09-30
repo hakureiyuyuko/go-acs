@@ -12,6 +12,32 @@
 > It is not being ignored, it is batched onto working days. **Security reports go through issues
 > as well**, and I'll get to them as soon as possible on a working day.
 
+### When are the Chinese holidays? (a quick note for readers outside China)
+
+If you are not in China, "working days" can look erratic — the holiday calendar is set by the State
+Council every year and it **moves weekends around** (调休): some Saturdays/Sundays become working days
+while some weekdays become holidays. Here is the rough shape of it:
+
+| Roughly when | Holiday | Typical break |
+| --- | --- | --- |
+| Jan 1 (or the weekend around it) | New Year's Day (元旦) | 1 day, usually stretched into a 3-day weekend |
+| Late Jan – late Feb | **Spring Festival / Chinese New Year (春节)** | ~7–8 days; the whole country quietens down, and a slower tail is common |
+| Early April | Qingming / Tomb-Sweeping (清明节) | 3 days |
+| May 1 | Labour Day (劳动节) | 3–5 days |
+| May or June | Dragon Boat Festival (端午节) | 3 days |
+| September or early October | Mid-Autumn Festival (中秋节) | 3 days; sometimes runs straight into National Day |
+| Oct 1–7 | **National Day (国庆节)**, the "Golden Week" | 7 days |
+
+What this means in practice:
+
+- The lunar-calendar holidays (春节 / 端午节 / 中秋节) fall on **different dates every year**; the exact
+  calendar is published each year, so treat the table above as an approximate season, not as dates.
+- **Expect the slowest replies around Spring Festival (Jan–Feb) and National Day (early Oct)** — both are
+  week-long breaks with a slower week or two on either side. April–September is usually when I get the
+  most done, since there are fewer long holidays in that stretch.
+- If something is genuinely urgent, please say so in the title (e.g. `[urgent]`) and I will try to pick
+  it up at the start of the next working day.
+
 Issues and pull requests are welcome in **Chinese or English**. Any kind of feedback helps:
 bug reports, feature requests, documentation fixes, extra tests, and parameter mappings for
 new ONT models (see [Vendor parameter mappings](#vendor-parameter-mappings-adding-a-new-ont)).
