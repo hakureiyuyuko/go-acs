@@ -221,7 +221,40 @@
   <div class="hint mono">{{T "读数来源"}}：{{.Optical.SourceName}}</div>
   {{end}}
   {{if not .Optical.Has}}
-  <div class="hint">{{T "还没采集到光功率。点上面的按钮入队一次采集，设备下次上报时下发。设备本身不报的话，采完也还是 -。"}}</div>
+  <div class="hint">{{if .Optical.HasCandidate}}
+    {{T "设备报过疑似光功率的参数，但值都不在光模块的合理范围内，所以没显示。展开下面的「光功率诊断」能看到报的是什么。"}}
+    {{else}}
+    {{T "还没采集到光功率。点上面的按钮入队一次采集，设备下次上报时下发。设备本身不报的话，采完也还是 -。"}}
+    {{end}}</div>
+  {{end}}
+
+  {{if .OpticalCands}}
+  <details class="colpick" {{if not .Optical.Has}}open{{end}} style="margin-top:8px">
+    <summary>{{T "光功率诊断"}}</summary>
+    <div class="hint" style="margin:6px 0">{{T "设备上报的疑似光功率参数，以及为什么用/不用它。排查「显示 -」或「数值离谱」时看这里。"}}</div>
+    <table class="grid" style="margin-top:4px">
+      <thead>
+        <tr>
+          <th>{{T "参数名"}}</th>
+          <th>{{T "值"}}</th>
+          <th>{{T "判定"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .OpticalCands}}
+        <tr>
+          <td class="mono">{{.Name}}</td>
+          <td class="mono">{{.Value}}</td>
+          <td>{{if .Won}}<b>{{T "已采用"}}</b>{{else}}{{TS .Note}}{{end}}{{if .Scaled}}
+            <div class="hint">（{{T "疑似私有单位"}} {{.Scaled}}）</div>{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{/* 纯文本版：排查时直接选中复制，比从表格里抄方便得多 */}}
+    <pre class="diagout" style="margin-top:8px">{{range .OpticalCands}}{{if .Won}}[{{T "已采用"}}]{{else}}[{{T "跳过"}}]{{end}} {{.Name}} = {{.Value}}{{if .Note}} — {{TS .Note}}{{end}}{{if .Scaled}} — {{.Scaled}}{{end}}
+{{end}}</pre>
+  </details>
   {{end}}
 
   <h2>{{T "无线（WiFi）"}}</h2>

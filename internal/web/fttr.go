@@ -55,11 +55,11 @@ type FttrNode struct {
 	// 按叶子名后缀认，允许中间多一层（…{i}.Optical.RxPower）。
 	RxPower string
 	TxPower string
-	// RxUpdated / TxUpdated 记这两个读数各自的时间：同一台子设备可能报多个
-	// 疑似光功率的参数，选谁靠「分值 + 时间」比，所以时间要分开存。
-	RxUpdated time.Time
-	TxUpdated time.Time
-	Updated   time.Time
+	// rxHit / txHit 是选值过程的中间态（一台子设备可能报多个疑似光功率的参数，
+	// 选谁靠「分值 + 时间」比），循环结束后才落到上面的 RxPower / TxPower。
+	rxHit   opticalHit
+	txHit   opticalHit
+	Updated time.Time
 }
 
 // FttrOverview 从设备已采集的参数里解析出子设备列表。
@@ -127,21 +127,21 @@ func FttrOverview(params []store.Param) ([]FttrNode, bool) {
 		v := strings.TrimSpace(p.Value)
 		if rx {
 			// 子设备光功率同样可能命中多个私有参数，按分值取最像标准光功率的那个
-			// （跟概览页 OpticalOverview 一个口径）。
-			cur := opticalHit{value: n.RxPower, upd: n.RxUpdated, score: opticalScore(p.Name, field, true, false)}
-			h := opticalHit{value: v, name: p.Name, upd: p.UpdatedAt, score: opticalScore(p.Name, field, true, false)}
-			if cur.better(h) {
-				n.RxPower = v
-				n.RxUpdated = p.UpdatedAt
+			// （跟概览页 OpticalOverview 一个口径）；物理上不可能的值直接不参与。
+			if opticalUnitPlausible(v) {
+				n.rxHit = opticalPick(n.rxHit, opticalHit{
+					value: v, name: p.Name, upd: p.UpdatedAt,
+					score: opticalScore(p.Name, field, true, false),
+				})
 			}
 			continue
 		}
 		if tx {
-			cur := opticalHit{value: n.TxPower, upd: n.TxUpdated, score: opticalScore(p.Name, field, false, true)}
-			h := opticalHit{value: v, name: p.Name, upd: p.UpdatedAt, score: opticalScore(p.Name, field, false, true)}
-			if cur.better(h) {
-				n.TxPower = v
-				n.TxUpdated = p.UpdatedAt
+			if opticalUnitPlausible(v) {
+				n.txHit = opticalPick(n.txHit, opticalHit{
+					value: v, name: p.Name, upd: p.UpdatedAt,
+					score: opticalScore(p.Name, field, false, true),
+				})
 			}
 			continue
 		}
@@ -183,6 +183,8 @@ func FttrOverview(params []store.Param) ([]FttrNode, bool) {
 
 	out := make([]FttrNode, 0, len(byInst))
 	for _, n := range byInst {
+		n.RxPower = n.rxHit.value
+		n.TxPower = n.txHit.value
 		out = append(out, *n)
 	}
 	// 实例号不连续是常态（真机上是 1/2/4），按号排序更符合直觉

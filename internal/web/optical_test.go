@@ -167,6 +167,89 @@ func TestOpticalOverviewPrefersNewerOnTie(t *testing.T) {
 	}
 }
 
+// 【真机回归】中兴那台「报了但值离谱」的设备：两个方向都只有一个超出物理范围的值。
+// 结果是显示 "-"，但必须能区分「设备压根没报」和「报了我们不敢显示」——
+// 这两种排查方向完全不同，HasCandidate 就是用来区分的。
+func TestOpticalOverviewAllImplausibleStillHasCandidate(t *testing.T) {
+	got := OpticalOverview([]store.Param{
+		mkParam("InternetGatewayDevice.Optical.Interface.1.RxPower", "385"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.TxPower", "16687"),
+	})
+	if got.Has() {
+		t.Errorf("值都不合理时不该显示：%+v", got)
+	}
+	if !got.HasCandidate {
+		t.Error("设备报过参数，HasCandidate 应为 true（否则界面会误报成「没采集到」）")
+	}
+}
+
+// 设备一个疑似光功率的参数都没报 → HasCandidate=false，界面提示"没采集到"。
+func TestOpticalOverviewNoCandidate(t *testing.T) {
+	got := OpticalOverview([]store.Param{
+		mkParam("InternetGatewayDevice.DeviceInfo.ModelName", "ZXHN F610GV9"),
+		mkParam("InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.TransmitPower", "100"),
+	})
+	if got.Has() || got.HasCandidate {
+		t.Errorf("没有疑似参数时 HasCandidate 应为 false，得到 %+v", got)
+	}
+}
+
+// 诊断页：要把判定过程摊开 —— 谁被采用、落选的因为什么、有没有换算建议。
+func TestOpticalCandidatesDiagnostics(t *testing.T) {
+	cands := OpticalCandidates([]store.Param{
+		mkParam("InternetGatewayDevice.Optical.Interface.1.RxPower", "-23.4"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.RxPowerPercent", "385"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.TxPower", "2.1"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.TxPowerRaw", "16687"),
+	})
+	if len(cands) != 4 {
+		t.Fatalf("应列出全部 4 个候选（含落选的），得到 %d", len(cands))
+	}
+	byName := map[string]OpticalCandidate{}
+	for _, c := range cands {
+		byName[c.Name] = c
+	}
+	rx := byName["InternetGatewayDevice.Optical.Interface.1.RxPower"]
+	if !rx.Won || rx.Note != "" {
+		t.Errorf("RxPower 应被采用：won=%v note=%q", rx.Won, rx.Note)
+	}
+	pct := byName["InternetGatewayDevice.Optical.Interface.1.RxPowerPercent"]
+	if pct.Won {
+		t.Error("Percent 不该被采用")
+	}
+	if pct.Note != noteImplausible {
+		t.Errorf("Percent 落选原因应是值不合理，得到 %q", pct.Note)
+	}
+	if pct.Scaled == "" {
+		t.Error("385 除以 100 后是合理的 3.85 dBm，应给换算建议")
+	}
+	raw := byName["InternetGatewayDevice.Optical.Interface.1.TxPowerRaw"]
+	if raw.Won || raw.Note != noteImplausible {
+		t.Errorf("TxPowerRaw 应因值不合理落选：won=%v note=%q", raw.Won, raw.Note)
+	}
+	// 采用的排最前
+	if !cands[0].Won {
+		t.Errorf("被采用的应排在最前，第一条是 %s", cands[0].Name)
+	}
+}
+
+// 换算建议只给「换算后确实落在光模块合理范围」的，猜不出就别猜。
+func TestOpticalScalingHint(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"385", "÷100 ≈ 3.85 dBm"},       // 0.01 dBm 单位
+		{"16687", "−÷1000 ≈ -16.69 dBm"}, // 无符号报负数：0.001 dBm 单位
+		{"530", "÷100 ≈ 5.30 dBm"},       // 发光 5.3 dBm
+		{"999999", ""},                   // 怎么除都不合理 → 不给建议
+		{"N/A", ""},                      // 不是数字
+		{"-23.4", ""},                    // 本来就合理，不需要换算
+	}
+	for _, c := range cases {
+		if got := opticalScalingHint(c.in); got != c.want {
+			t.Errorf("opticalScalingHint(%q) = %q，要的是 %q", c.in, got, c.want)
+		}
+	}
+}
+
 // 参数名各家不统一，认的是语义不是枚举：新写法只要设备报了就该认出来，
 // 无线的 TransmitPower 依旧不能算光发射功率。
 func TestOpticalFieldNaming(t *testing.T) {

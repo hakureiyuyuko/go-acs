@@ -635,6 +635,9 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	wan, hasWan := WanOverview(params)
 	// 光功率：跟概览页「收光 / 发光」两列同一套判定
 	optical := OpticalOverview(params)
+	// 光功率诊断：设备报过哪些疑似参数、各是什么值、谁被采用、没被采用的因为什么。
+	// 「设备明明报了参数、界面却是 -」这种现场光看读数查不出原因，所以摊开给看。
+	opticalCands := OpticalCandidates(params)
 
 	// 关联终端树：主机 + 各子设备。真机上主机自己一台终端都没有，终端全在子光猫上，
 	// 所以「终端数」必须把子设备算进来，而且要点得开、能看出是谁连的。
@@ -655,6 +658,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		"FttrOnline":         fttrOnlineCount(fttr),
 		"FttrHasOptical":     fttrHasOptical(fttr),
 		"Optical":            optical,
+		"OpticalCands":       opticalCands,
 		"Wan":                wan,
 		"HasWan":             hasWan,
 		"WanConnected":       wanConnCount(wan),
