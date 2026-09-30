@@ -71,7 +71,7 @@ Download the package for your architecture from
 with one command:
 
 ```bash
-VERSION=1.2.2                                   # replace with the version you downloaded
+VERSION=1.2.3                                   # replace with the version you downloaded
 tar xzf acs-$VERSION-linux-amd64.tar.gz
 cd acs-$VERSION-linux-amd64
 sudo ./install.sh                                                # by default both CWMP and panel use :7547
@@ -99,7 +99,7 @@ go build -o acs ./cmd/acs        # Go 1.27+; CGO_ENABLED=0 for a static binary
 Building release packages:
 
 ```bash
-scripts/build-release.sh v1.2.2   # output in dist/: amd64 + arm64 tarballs and SHA256SUMS
+scripts/build-release.sh v1.2.3   # output in dist/: amd64 + arm64 tarballs and SHA256SUMS
 ```
 
 On the device side, set the ACS URL to `http://<IP>:9090/acs`; real devices have also been seen configured with
@@ -176,7 +176,7 @@ probing progress is cleared.
 
 ```bash
 go test ./...                   # unit tests: protocol parsing / store / web
-bash scripts/verify-s1.sh       # 353 end-to-end checks: simulator drives real HTTP + SOAP, asserted one by one
+bash scripts/verify-s1.sh       # 368 end-to-end checks: simulator drives real HTTP + SOAP, asserted one by one
 bash scripts/verify-interop.sh  # 8 interoperability checks against GenieACS's official JS simulator
 ```
 
