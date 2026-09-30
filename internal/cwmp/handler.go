@@ -751,10 +751,17 @@ func opticalSubtreePaths(root string) []string {
 		return []string{"Device.Optical.", "Device.WANDevice."}
 	case root == "":
 		// 根未知：TR-098 与 TR-181 各来一遍
-		return []string{"InternetGatewayDevice.WANDevice.", "Device.Optical."}
+		return []string{
+			"InternetGatewayDevice.WANDevice.",
+			"InternetGatewayDevice.Optical.",
+			"Device.Optical.",
+			"Device.WANDevice.",
+		}
 	default:
-		// TR-098：光口挂在 WANDevice 下（华为/中兴的私有光功率参数也都在这棵子树里）
-		return []string{root + "WANDevice."}
+		// TR-098：光口主要挂 WANDevice 下（华为/中兴的私有光功率参数多在这棵子树里），
+		// 但实测中兴 ZXHN F610GV9 这类设备还有一棵 InternetGatewayDevice.Optical.
+		// （界面上能看到这个对象节点），所以两棵都枚举 —— 枚举的代价很小。
+		return []string{root + "WANDevice.", root + "Optical."}
 	}
 }
 

@@ -83,6 +83,8 @@ type simulator struct {
 	fttrOptical bool
 	// optical：给主机自己加上光功率参数（模拟上报了收光/发光的光猫）。
 	optical bool
+	// opticalIn：光功率参数放在哪棵子树（wan / optical）。
+	opticalIn string
 	// fttrWireless / fttrWired：把这些实例（1-based 子设备序号）做成无线 / 有线组网，
 	// 用来验证「无线、有线组网不显示光功率」那条规则。
 	fttrWireless map[int]bool
@@ -169,7 +171,10 @@ func main() {
 	var fttrWireless, fttrWired string
 	flag.BoolVar(&fttrOptical, "fttr-optical", false, "给 FTTR 子设备加光功率参数（模拟光纤组网子机）")
 	var optical bool
-	flag.BoolVar(&optical, "optical", false, "给主机加光功率参数（WANPONInterfaceConfig 下的 OpticalRxPower/OpticalTxPower）")
+	flag.BoolVar(&optical, "optical", false, "给主机加光功率参数")
+	var opticalIn string
+	flag.StringVar(&opticalIn, "optical-in", "wan",
+		"主机光功率参数放哪棵子树：wan=WANDevice.1.WANPONInterfaceConfig.（默认）/ optical=Optical.Interface.1.（中兴 ZXHN 这类布局）")
 	flag.StringVar(&fttrWireless, "fttr-wifi", "", "把哪些 FTTR 子设备做成无线组网（子设备序号，逗号分隔，如 1,3）")
 	flag.StringVar(&fttrWired, "fttr-eth", "", "把哪些 FTTR 子设备做成有线组网（子设备序号，逗号分隔）")
 	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
@@ -184,6 +189,7 @@ func main() {
 	s.pingNeedIface = pingNeedIface
 	s.fttrOptical = fttrOptical
 	s.optical = optical
+	s.opticalIn = opticalIn
 	s.fttrWireless = parseIntSet(fttrWireless)
 	s.fttrWired = parseIntSet(fttrWired)
 	s.noWAN = noWAN
@@ -445,9 +451,17 @@ func (s *simulator) buildParams(root, specVersion string) {
 	// 好验证界面不是靠枚举参数名认光功率的：只要设备报了，就能认出来。
 	// 放在 WANDevice 子树下，正好也是「采集光功率」要枚举的那棵子树。
 	if s.optical {
-		pon := root + "WANDevice.1.WANPONInterfaceConfig."
-		set(pon+"OpticalRxPower", "-21.5", "string")
-		set(pon+"OpticalTxPower", "1.8", "string")
+		if s.opticalIn == "optical" {
+			// 中兴 ZXHN F610GV9 这类布局：光口挂在 InternetGatewayDevice.Optical. 下，
+			// 只枚举 WANDevice 子树会整个漏掉。数值特意跟另一棵不同，便于验证来自哪边。
+			o := root + "Optical.Interface.1."
+			set(o+"RxPower", "-23.4", "string")
+			set(o+"TxPower", "2.1", "string")
+		} else {
+			pon := root + "WANDevice.1.WANPONInterfaceConfig."
+			set(pon+"OpticalRxPower", "-21.5", "string")
+			set(pon+"OpticalTxPower", "1.8", "string")
+		}
 	}
 
 	set(ms+"URL", s.acsURL, "string")

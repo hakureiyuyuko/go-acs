@@ -74,11 +74,17 @@ func TestOpticalSubtreePaths(t *testing.T) {
 			}
 		}
 	}
-	if got := opticalSubtreePaths("InternetGatewayDevice."); len(got) != 1 ||
-		got[0] != "InternetGatewayDevice.WANDevice." {
-		t.Errorf("TR-098 只该枚举 WANDevice，得到 %v", got)
+	// TR-098：WANDevice 与 Optical 两棵都要枚举。
+	// 中兴 ZXHN F610GV9 这类设备把光口放在 InternetGatewayDevice.Optical. 下，
+	// 只枚举 WANDevice 会整个漏掉（实测踩过）。
+	got := opticalSubtreePaths("InternetGatewayDevice.")
+	if len(got) != 2 {
+		t.Fatalf("TR-098 应枚举 WANDevice + Optical 两棵，得到 %v", got)
 	}
-	if got := opticalSubtreePaths(""); len(got) < 2 {
-		t.Errorf("根未知时两套命名都要试，得到 %v", got)
+	if got[0] != "InternetGatewayDevice.WANDevice." || got[1] != "InternetGatewayDevice.Optical." {
+		t.Errorf("TR-098 子树路径不对：%v", got)
+	}
+	if got := opticalSubtreePaths(""); len(got) < 4 {
+		t.Errorf("根未知时 TR-098 / TR-181 的四棵都要试，得到 %v", got)
 	}
 }
