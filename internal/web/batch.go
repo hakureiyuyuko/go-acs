@@ -113,17 +113,31 @@ func filterBands(bands []WifiBand, band string) []WifiBand {
 
 // batchFieldValue 取出表单里某个字段要写的值。
 //
-// 返回 ok=false 表示「这一项不改」：密码留空、文本框留空都是这个意思 ——
+// 返回 ok=false 表示「这一项不改」：密码留空、文本框留空、布尔项没表态都是这个意思 ——
 // 批量下发最怕手滑把几十台设备的 SSID 清空，所以空值一律不下发。
+//
+// 【踩过的坑】bool 字段原来是无条件返回 "1"/"0"：勾了「改」但**没勾值**时
+// 返回 "0"，于是「勾了改、忘了勾启用」会被当成「要关掉无线」下发下去；
+// 而勾了值（"1"）时又因为设备原值本来就是 1，被「值没变化」判定吃掉，
+// 表现为「勾了启用却什么都没发生」。现在改成三态：
+//   - 勾了值     → "1"（启用）
+//   - 只有 use_  → "0"（关闭，这是明确的表态）
+//   - 两个都没勾 → ok=false（不改）
+//
+// 但有个浏览器现实：bool 的「值」是个独立 checkbox，用户很可能只勾 use_ 不勾值，
+// 那到底是想关还是忘勾？—— 这个分不出来，所以模板那边会要求「勾了改就必须勾值」，
+// 见 wifi_batch.html 里的 required 校验。
 func batchFieldValue(form url.Values, def wifiFieldDef, field WifiFormField) (string, bool) {
 	key := "v_" + def.key
 	switch def.kind {
 	case "bool":
-		// 勾了「改」、没勾值 = 关
 		if _, present := form[key]; present {
 			return "1", true
 		}
-		return "0", true
+		if _, use := form["use_"+def.key]; use {
+			return "0", true
+		}
+		return "", false
 	default:
 		v := strings.TrimSpace(form.Get(key))
 		if v == "" {
@@ -156,8 +170,18 @@ func batchSets(form url.Values, wifiParams []store.Param, bands []WifiBand) (set
 				continue
 			}
 			v, ok := batchFieldValue(form, def, f)
-			if !ok || v == f.Value {
-				continue // 空值不改；值没变也不下发
+			if !ok {
+				continue // 空值 / 没表态 = 不改
+			}
+			// 布尔字段（启用 / 射频开关这类）**不跳过「值没变化」**。
+			//
+			// 理由：用户勾上「启用无线 SSID」就是想确保它是开着的，
+			// 此时设备原值也常常就是 1 —— 如果按「没变化」跳过，界面上就是
+			// 「勾了、点了下发、什么都没发生」，看着纯粹是功能坏了。
+			// 幂等地重写一次没有任何副作用，所以布尔项一律下发。
+			// 其它字段（SSID / 信道等）仍然只在真的变了才写，少动设备。
+			if def.kind != "bool" && v == f.Value {
+				continue
 			}
 			if seenName[f.Param] {
 				continue

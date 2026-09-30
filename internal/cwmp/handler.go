@@ -1162,6 +1162,19 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		}
 	}
 
+	// 光功率（概览页的「收光 / 发光」两列）：首次纳管时自动采一次。
+	//
+	// 为什么放这里：光功率参数名各家不统一（RxPower / X_HW_RxPower / OpticalRxPower…），
+	// 无法像基本信息那样写进固定名单，只能枚举光口子树。不自动采的话，
+	// 用户看到两列永远是 -，还得每台设备手动点一次。
+	// 只在首次纳管 / BOOTSTRAP 时做：光功率变化慢，没必要每次 Inform 都枚举一遍，
+	// 需要新读数时设备页有「重新采集光功率」按钮。
+	if s.cfg.AutoFetchWiFi && (created || inf.HasEvent("0 BOOTSTRAP")) {
+		if _, err := s.EnqueueFetchOptical(deviceID); err != nil {
+			s.log.Warn("入队采集光功率失败", "device_id", deviceID, "err", err)
+		}
+	}
+
 	// 有诊断在等结果：设备这次 Inform 可能就带着结果回来了
 	// （事件 8 DIAGNOSTICS COMPLETE），也可能什么都没说。
 	// 两种情况都主动读一次 —— 不依赖事件码，因为不是所有设备都会发。

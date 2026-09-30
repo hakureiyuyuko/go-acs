@@ -141,3 +141,48 @@ func hasTh(body, label string) bool {
 }
 
 func headLine(body string) string { return deviceTableHead(body) }
+
+// 面板里的勾选框是「每列一个同名输入框」，浏览器提交上来是 ?cols=serial&cols=rx。
+// 之前只取第一个值，所以不管勾几个都只渲染第一列（表现为「只显示状态」）。
+func TestResolveColsMultiValue(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "acs.db"))
+	if err != nil {
+		t.Fatalf("打开库失败: %v", err)
+	}
+	defer st.Close()
+	if _, _, err := st.UpsertDevice(&store.Device{
+		OUI: "001122", ProductClass: "SimRouter", SerialNumber: "MULTI",
+	}); err != nil {
+		t.Fatalf("造设备失败: %v", err)
+	}
+	mux := http.NewServeMux()
+	if err := Register(mux, st, &stubCtrl{}, Options{}); err != nil {
+		t.Fatalf("挂路由失败: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/?cols=serial&cols=rx&cols=tx", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("应 200，得到 %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"序列号", "收光", "发光"} {
+		if !hasTh(body, want) {
+			t.Errorf("三个都勾了，表头应该有 %q：\n%s", want, headLine(body))
+		}
+	}
+	// 没勾的不该出现
+	if hasTh(body, "软件版本") || hasTh(body, "备注") {
+		t.Errorf("没勾的列不该出现：\n%s", headLine(body))
+	}
+	// cookie 要把三列都记下来（按列序）
+	var raw string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == colsCookie {
+			raw = c.Value
+		}
+	}
+	if raw != "serial,rx,tx" {
+		t.Errorf("cookie 应记下三列，得到 %q", raw)
+	}
+}

@@ -151,16 +151,39 @@ func TestBatchSetsUnchangedSkipped(t *testing.T) {
 }
 
 // 布尔字段：勾了「改」但没勾值 = 关；勾了值 = 开。
+//
+// 注意这里**两个频段都会下发**（2.4G 原值本来就是 1）：
+// 布尔项有意不参与「值没变化就跳过」—— 勾了「启用」就该写一次，
+// 否则界面上是「勾了、点了下发、什么都没发生」，看着像功能坏了。
 func TestBatchSetsBool(t *testing.T) {
 	params := huaweiWifiParams()
 	bands := WifiOverview(params)
 	form := url.Values{"use_radio": {"1"}, "v_radio": {"1"}}
 	sets, _ := batchSets(form, params, bands)
-	if len(sets) != 1 {
-		t.Fatalf("2.4G 本来就是开（RadioEnabled=1），只有 5G 会变，得到 %d：%+v", len(sets), sets)
+	if len(sets) != 2 {
+		t.Fatalf("两个频段的射频开关都要下发，得到 %d：%+v", len(sets), sets)
 	}
-	if sets[0].Value != "1" || !strings.HasSuffix(sets[0].Name, "RadioEnabled") {
-		t.Errorf("布尔字段写错了：%+v", sets[0])
+	for _, s := range sets {
+		if s.Value != "1" || !strings.HasSuffix(s.Name, "RadioEnabled") {
+			t.Errorf("布尔字段写错了：%+v", s)
+		}
+	}
+
+	// 只勾「改」不勾值 = 明确要关
+	form = url.Values{"use_radio": {"1"}}
+	sets, _ = batchSets(form, params, bands)
+	if len(sets) != 2 {
+		t.Fatalf("两个频段都要下发关闭，得到 %d", len(sets))
+	}
+	for _, s := range sets {
+		if s.Value != "0" {
+			t.Errorf("只勾「改」应下发 0，得到 %+v", s)
+		}
+	}
+
+	// 什么都没勾 = 一条都不下发
+	if sets, _ := batchSets(url.Values{}, params, bands); len(sets) != 0 {
+		t.Errorf("没勾任何项不该下发，得到 %+v", sets)
 	}
 }
 
@@ -303,5 +326,50 @@ func TestBatchRunPersisted(t *testing.T) {
 	}
 	if !strings.Contains(body, "已对 1 台设备下发") {
 		t.Error("结果页应显示下发台数")
+	}
+}
+
+// 布尔项此前是无条件返回 "1"/"0"：只勾「改」没勾值 → 下发 "0"，
+// 等于「想启用却把无线关了」；勾了值 → "1"，又因为设备原值本来就是 1
+// 被「值没变化」吃掉，表现为「勾了启用什么都没发生」。现在必须能区分三种情况。
+func TestBatchFieldValueBool(t *testing.T) {
+	def := wifiFieldDef{key: "radio", kind: "bool"}
+	field := WifiFormField{Key: "radio", Kind: "bool", Value: "1"}
+
+	// 1) 勾了值 = 启用
+	form := url.Values{"use_radio": {"1"}, "v_radio": {"1"}}
+	if v, ok := batchFieldValue(form, def, field); !ok || v != "1" {
+		t.Errorf("勾了值应得到 1/true，得到 %q/%v", v, ok)
+	}
+
+	// 2) 只勾了「改」没勾值 = 明确的「关」，要下发 0
+	form = url.Values{"use_radio": {"1"}}
+	if v, ok := batchFieldValue(form, def, field); !ok || v != "0" {
+		t.Errorf("只勾「改」应得到 0/true（明确要关），得到 %q/%v", v, ok)
+	}
+
+	// 3) 两个都没勾 = 不改（绝不能误下发）
+	form = url.Values{}
+	if v, ok := batchFieldValue(form, def, field); ok {
+		t.Errorf("都没勾应表示不改，得到 %q/%v", v, ok)
+	}
+}
+
+// 勾了「改」+ 勾了值，且设备原值就是 1：这不是「没变化」，必须真的下发一条，
+// 否则用户勾了「启用无线 SSID」却什么都不会发生。
+func TestBatchSetsBoolEnableIsNotSwallowed(t *testing.T) {
+	params := huaweiWifiParams() // 2.4G 那路 RadioEnabled 原值就是 1
+	// 频段要用 WifiOverview 算：它才带 Instance，而 batchSets 是按实例号取字段的
+	bands := WifiOverview(params)[:1] // 只要 2.4G 那一路
+	form := url.Values{
+		"use_radio": {"1"},
+		"v_radio":   {"1"},
+	}
+	sets, _ := batchSets(form, params, bands)
+	if len(sets) != 1 {
+		t.Fatalf("应下发 1 个参数（原值就是 1 也要下发，不能被「没变化」吃掉），得到 %d：%+v", len(sets), sets)
+	}
+	if !strings.HasSuffix(sets[0].Name, ".RadioEnabled") || sets[0].Value != "1" {
+		t.Errorf("应把 RadioEnabled 设为 1，得到 %s=%s", sets[0].Name, sets[0].Value)
 	}
 }

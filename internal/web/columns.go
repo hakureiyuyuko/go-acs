@@ -132,7 +132,12 @@ func formatCols(cols map[string]bool) string {
 func (s *Server) resolveCols(w http.ResponseWriter, r *http.Request) map[string]bool {
 	q := r.URL.Query()
 	if q.Has("cols") {
-		cols := parseCols(q.Get("cols"))
+		// 【坑】面板里的勾选框是每个列一个同名的输入框（name="cols"），
+		// 提交后 URL 上是 ?cols=serial&cols=rx&cols=tx —— 多个同名参数。
+		// 之前这里用 q.Get("cols") 只取了**第一个**，所以不管勾几个，
+		// 页面都只按第一列渲染（表现为「点了应用只显示状态」）。
+		// 正确做法是把所有 cols 值拼起来一起解析。
+		cols := parseCols(strings.Join(q["cols"], ","))
 		if cols == nil {
 			cols = map[string]bool{}
 		}

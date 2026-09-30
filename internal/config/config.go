@@ -153,7 +153,7 @@ func Load(args []string) (*Config, error) {
 	fs.Int64Var(&c.MaxBodyBytes, "max-body", c.MaxBodyBytes, "单请求体上限（字节）")
 	fs.BoolVar(&c.LogRawSOAP, "log-soap", c.LogRawSOAP, "是否记录原始 SOAP 报文")
 	fs.BoolVar(&c.AutoFetchInfo, "auto-fetch-info", c.AutoFetchInfo, "Inform 后自动取设备基本信息")
-	fs.BoolVar(&c.AutoFetchWiFi, "auto-fetch-wifi", c.AutoFetchWiFi, "首次纳管/BOOTSTRAP 时自动采集无线概况（看板用）")
+	fs.BoolVar(&c.AutoFetchWiFi, "auto-fetch-wifi", c.AutoFetchWiFi, "首次纳管/BOOTSTRAP 时自动采集无线概况与光功率（看板用）")
 	fs.DurationVar(&c.AutoRefreshWiFi, "auto-refresh-wifi", c.AutoRefreshWiFi,
 		"无线/终端概况自动刷新间隔（面板「采集」时间跟着动；0 = 只在首次纳管时采一次）")
 	fs.BoolVar(&c.ProbeCapabilities, "probe-capabilities", c.ProbeCapabilities, "首次纳管时探测设备能力（如有没有 FTTR 子设备）")
