@@ -1349,3 +1349,66 @@ RadioEnabled                       最后更新 15:26:57   ← 写入后回读�
   日志里有接管记录；占住目标端口再重启 → 报错 + 不换进程 + 设置回滚；修好后再重启成功；
   最后用无头浏览器实证「倒计时到点真的跳到新地址」。
 - `verify-s1.sh` 第 35 节加 5 条（按钮、二次确认、回退说明、405、没有擅自重启），**358/0**。
+
+## 主机收光 / 发光：详情页「基本信息」多了两行（2026-09-30，真机实测）
+
+用户新接了一台 **PON 接入的 V271-20**（联通定制，软件 V5R023C10S200，UA `HW_WAP_CWMP_V02`），
+要求在设备详情页的「基本信息」里加收光 / 发光。做法分两半：**采集**（cwmp）与**辨认**（web）。
+
+### 采集：位置也得枚举，不能只认一个对象名
+
+光功率在 TR-069 里既没有统一参数名、也没有统一位置，所以 `EnqueueFetchOptical`
+枚举 `InternetGatewayDevice.WANDevice.1.` 与 `InternetGatewayDevice.Optical.`
+（TR-181 则是 `Device.Optical.` / `Device.WANDevice.1.`），用 `include` 只留叶子名像功率的参数
+（`.rxpower` / `.txpower` / `.opticalrxpower` / `.x_hw_rxpower`…），然后同一个会话里把值取回来。
+`include` 是关键：整棵 WANDevice 有 364 个名字，但筛完只剩几个，取值名单很小。
+
+**为什么不能只枚举 `WANDevice.1.WANPONInterfaceConfig.`**（TR-098 里 PON 接口的常规位置）：
+这台真机上它直接回 `9005 Invalid parameter name`（对象在树里看得见，但不让枚举）。
+真正的读数在别处：
+
+| 参数 | 值 | 说明 |
+| --- | --- | --- |
+| `…WANDevice.1.X_GponInterafceConfig.RXPower` | `-15` | **收光 -15 dBm**（对象名确实是拼错的 Interafce） |
+| `…WANDevice.1.X_GponInterafceConfig.TXPower` | `0` | 发光（设备自报 0，见下） |
+| `…WANDevice.1.X_GponInterafceConfig.BiasCurrent / SupplyVoltage / TransceiverTemperature` | `29 / 3226 / 43` | 偏流 mA、供电 3.226 V、温度 43 ℃ |
+| `…WANDevice.1.X_CU_WANEdgeONTPInterfaceConfig.OpticalTransceiver.RXPower / TXPower` | `254 / 10000` | **没换算的原始值**，不能当 dBm |
+| `…InternetGatewayDevice.Optical.X_HW_Interface.X_HW_OpmEnable` | `1` | 只是开关 |
+| `…InternetGatewayDevice.X_HW_PonQualityMonitor.*` | `Enable/BERThreshold/MonitorInterval` | 只有开关与门限，没有读数 |
+
+所以整棵 WANDevice 都得摸一遍；同时界面上必须有「值合不合理」这道闸 ——
+否则那对 `254 / 10000` 会显示成 254 dBm，比不显示更糟。
+
+### 辨认：按叶子名认方向，把无线功率与原始值挡在外面
+
+`web.hostOpticalFrom(params)`（`internal/web/optical.go`）：
+
+1. 复用 FTTR 子设备那套 `opticalField`（按**叶子名**认 RxPower / X_HW_RxPower / OpticalRxPower…）；
+2. **排除无线路径**（`.WLANConfiguration.` / `.WiFi.` / `X_HW_APDevice.`）：设备 1 上就有
+   `LANDevice.1.WiFi.X_HW_Txpower = 30`，不排除会把无线发射功率当发光功率；
+3. **值必须在 -40~+10 dBm**（光模块讲得通的区间）：厂家私有的百分比、原始 ADC 值、语音 Tone 的
+   `Power1 = -100` 都被这道闸挡下；
+4. 同一方向多个候选时优先路径里有 `pon` / `optical` 的（这台机器上正好命中 `X_GponInterafceConfig`）；
+5. FTTR 子光猫的功率**不算主机头上**（它们各自在 FTTR 表格里按行显示）。
+
+界面上这两行**永远渲染**（没读到就写 `-`），不跟着「基本信息的空值不展示」走 ——
+否则设备不报时两行直接消失，看的人分不清是「没做这个功能」还是「设备没上报」。
+
+采集时机：首次纳管 / `0 BOOTSTRAP` 自动采一次（跟取基本信息一起），另外详情页的「重新获取」
+也会顺带采一次（`RequestRefresh` 里加了这一句）。
+
+### 遗留问题（**待用户确认**）
+
+这台 V271 的 `TXPower` 报的是 `0`。0 dBm 在合理区间内，所以界面如实显示 `0 dBm`；
+但 GPON 光猫的发光通常在 +2~+3 dBm 附近，0 也可能是固件「没测到就填 0」的占位值 ——
+目前无法从协议层分辨，先如实显示，等第二台同型号设备对照（或用户拿光功率计核对）。
+
+### 验收
+
+- 单测：`internal/web/optical_test.go` 覆盖 10 组情形（常规位置、私有命名、同方向多候选、
+  无线 TransmitPower 干扰、FTTR 子设备干扰、百分比/原始值诱饵、带单位原值、N/A、压根没有）；
+- `verify-s1.sh` 第 38 节（4 项）：模拟器 `-optical` 上报 `RXPower=-15 / TXPower=2` 且**同时**带一对
+  原始值诱饵，断言详情页出现 `收光 -15 dBm`、`发光 2 dBm`，且 `254 dBm / 10000 dBm` 不出现；
+- 真机验证：设备 9（`48575443C2A056B0`）点「重新获取」后，详情页显示「收光 -15 dBm / 发光 0 dBm」。
+- 顺带把 `TestEnglishPagesHaveNoChinese` 扩到**设备详情页**：`收光` / `发光` 这两个词是数据拼出来的
+  （`{{TS .K}}`），模板里扫不到字面量，第一版就漏了英文译文 —— 现在单测与 S1 各有一道闸。

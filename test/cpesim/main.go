@@ -79,6 +79,8 @@ type simulator struct {
 	// ACS 不指定 Interface 时设备一发包就 no route。
 	pingNeedIface string
 
+	// optical：给主机加上 PON 光功率参数（模拟光猫自己上报收/发光）。
+	optical bool
 	// fttrOptical：给 FTTR 子设备加上光功率参数（模拟光纤组网子机）。
 	fttrOptical bool
 	// fttrWireless / fttrWired：把这些实例（1-based 子设备序号）做成无线 / 有线组网，
@@ -166,6 +168,8 @@ func main() {
 	var fttrOptical bool
 	var fttrWireless, fttrWired string
 	flag.BoolVar(&fttrOptical, "fttr-optical", false, "给 FTTR 子设备加光功率参数（模拟光纤组网子机）")
+	var optical bool
+	flag.BoolVar(&optical, "optical", false, "给主机加 PON 光功率参数（模拟光猫自己上报收/发光）")
 	flag.StringVar(&fttrWireless, "fttr-wifi", "", "把哪些 FTTR 子设备做成无线组网（子设备序号，逗号分隔，如 1,3）")
 	flag.StringVar(&fttrWired, "fttr-eth", "", "把哪些 FTTR 子设备做成有线组网（子设备序号，逗号分隔）")
 	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
@@ -179,6 +183,7 @@ func main() {
 	s.diagDelay = diagDelay
 	s.pingNeedIface = pingNeedIface
 	s.fttrOptical = fttrOptical
+	s.optical = optical
 	s.fttrWireless = parseIntSet(fttrWireless)
 	s.fttrWired = parseIntSet(fttrWired)
 	s.noWAN = noWAN
@@ -458,6 +463,20 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(wan+"Uptime", "12345", "unsignedInt")
 		set(wan+"X_HW_VLAN", "41", "unsignedInt")
 		set(wan+"X_HW_SERVICELIST", "INTERNET", "string")
+	}
+
+	// PON 接入的光功率（可选，-optical 打开）：模拟真机 V271-20（PON、联通定制）的怪样子 ——
+	// 读数在一个**名字拼错的私有对象**下（X_GponInterafceConfig），
+	// 而旁边另一个对象报的是没换算的原始值（254 / 10000）。
+	// 界面必须选中前者，后者不能被当成 dBm 显示。
+	// 名字与真机实测一致（2026-09-30）。
+	if s.optical {
+		pon := root + "WANDevice.1.X_GponInterafceConfig."
+		set(pon+"RXPower", "-15", "int")
+		set(pon+"TXPower", "2", "int")
+		set(pon+"TransceiverTemperature", "43", "int")
+		set(root+"WANDevice.1.X_CU_WANEdgeONTPONInterfaceConfig.OpticalTransceiver.RXPower", "254", "unsignedInt")
+		set(root+"WANDevice.1.X_CU_WANEdgeONTPONInterfaceConfig.OpticalTransceiver.TXPower", "10000", "unsignedInt")
 	}
 
 	// 无线参数。

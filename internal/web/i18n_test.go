@@ -4,11 +4,14 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/hakureiyuyuko/go-acs/internal/i18n"
+	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
 // 几个小工具，避免和别的测试文件里的同名助手打架。
@@ -93,15 +96,18 @@ func TestEnglishPagesHaveNoChinese(t *testing.T) {
 	// 顶栏的语言切换（指向 ?lang=xx 的那个链接）里带的是语言自称，检查时排除
 	switcherRe := regexp.MustCompile(`(?s)<a class="ghost" href="\?lang=[^"]*"[^>]*>.*?</a>`)
 	i18nJSONRe := regexp.MustCompile(`(?s)<script>window\.I18N = .*?</script>`)
-	for _, path := range []string{"/?lang=en", "/settings?lang=en"} {
+
+	// assertNoChinese 检查一页英文页面里没有残留中文。
+	// 语言切换按钮上显示的是「语言自己的名字」（中文 / English），这是刻意的；
+	// window.I18N 那份 JSON 的 key 就是中文原文（按设计如此），两处都排除。
+	assertNoChinese := func(t *testing.T, mux http.Handler, path string) {
+		t.Helper()
 		w := doGet(t, mux, path)
 		if w.Code != 200 {
 			t.Errorf("%s 应 200，得到 %d", path, w.Code)
-			continue
+			return
 		}
 		body := w.Body.String()
-		// 语言切换按钮上显示的是「语言自己的名字」（中文 / English），这是刻意的；
-		// window.I18N 那份 JSON 的 key 就是中文原文（按设计如此），也要排除
 		body = switcherRe.ReplaceAllString(body, "")
 		body = i18nJSONRe.ReplaceAllString(body, "")
 		if cjk.MatchString(body) {
@@ -115,6 +121,38 @@ func TestEnglishPagesHaveNoChinese(t *testing.T) {
 			t.Errorf("%s 的英文页面里还有中文：%s", path, strings.Join(samples, " | "))
 		}
 	}
+
+	for _, path := range []string{"/?lang=en", "/settings?lang=en"} {
+		assertNoChinese(t, mux, path)
+	}
+
+	// 设备详情页也要查：那一页的字段大多是**数据拼出来的**（kv 的键、任务结果、分组名…），
+	// 模板里扫不到字面量，最容易漏翻 —— 「收光 / 发光」两行就这样漏过一次。
+	st2, err := store.Open(filepath.Join(t.TempDir(), "acs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st2.Close() })
+	id, _, err := st2.UpsertDevice(&store.Device{
+		OUI: "001122", ProductClass: "SimRouter", SerialNumber: "EN-1",
+		Manufacturer: "Example", ModelName: "Sim", DataModelRoot: "InternetGatewayDevice.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st2.UpsertParams(id, []store.Param{
+		{Name: "InternetGatewayDevice.DeviceInfo.UpTime", Value: "3600"},
+		// 有光功率读数，才会渲染那两行
+		{Name: "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.RXPower", Value: "-15"},
+		{Name: "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.TXPower", Value: "2"},
+	}, "getvalues"); err != nil {
+		t.Fatal(err)
+	}
+	mux2 := http.NewServeMux()
+	if err := Register(mux2, st2, &stubCtrl{}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoChinese(t, mux2, "/devices/"+strconv.FormatInt(id, 10)+"?lang=en")
 }
 
 // 登录页也要能切语言（那一页不需要登录）。

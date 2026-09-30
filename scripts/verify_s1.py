@@ -1782,6 +1782,50 @@ def main():
                 proc.kill()
             logf.close()
 
+    # == 38. 主机收光 / 发光：详情页「基本信息」里那两行 ==
+    print("== 38. 主机收光 / 发光（详情页基本信息）==")
+    sim_bin = os.path.join(workdir, "cpesim")
+    if not os.path.exists(sim_bin):
+        print("   （没有模拟器可执行文件，跳过）")
+    else:
+        # -optical：模拟 PON 光猫自己上报收/发光（同时带一对没换算的原始值当诱饵）
+        sim = start_sim(sim_bin, BASE, "OPTICAL1", "-oui", "0A0B0C", "-interval", "5s", "-optical")
+        try:
+            d = None
+            for _ in range(40):
+                d = next((x for x in api_devices() if x["SerialNumber"] == "OPTICAL1"), None)
+                if d:
+                    break
+                time.sleep(1)
+            check("带光功率的模拟设备已纳管", bool(d), d and d.get("SerialNumber"))
+            h = ""
+            if d:
+                did = d["ID"]
+                # 纳管时会自动采一次；再点「重新获取」确保拿到（这条也会顺带采光功率）
+                for _ in range(3):
+                    post_form(f"/devices/{did}/refresh", {})
+                    got = False
+                    for _ in range(20):
+                        time.sleep(1)
+                        st, h = get(f"/devices/{did}")
+                        if "dBm" in h:
+                            got = True
+                            break
+                    if got:
+                        break
+                st, h = get(f"/devices/{did}")
+                check("「基本信息」里有收光功率", "收光" in h and "-15 dBm" in h, st)
+                check("「基本信息」里有发光功率", "发光" in h and "2 dBm" in h, st)
+                # 同一棵子树里还有个没换算的原始值（254 / 10000），不能当 dBm 显示
+                check("没换算的原始值不会被当成功率",
+                      "254 dBm" not in h and "10000 dBm" not in h, "")
+        finally:
+            sim.terminate()
+            try:
+                sim.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                sim.kill()
+
     print()
     total = _n["pass"] + _n["fail"]
     print(f"结果：通过 {_n['pass']} / 失败 {_n['fail']} / 共 {total}")

@@ -41,7 +41,8 @@ online / probing / offline — and a 5-second auto-refresh toggle in the top-rig
 
 ![Overview](docs/images/overview.png)
 
-Basic information, WAN connections, operations (wake / reboot / delete), notes; the same 5-second auto-refresh
+Basic information (including the host's Rx / Tx optical power), WAN connections, operations (wake / reboot /
+delete), notes; the same 5-second auto-refresh
 toggle (shared with the list page) is in the top-right
 
 ![Device detail](docs/images/device.png)

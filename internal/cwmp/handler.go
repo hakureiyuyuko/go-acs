@@ -241,11 +241,110 @@ func (s *Server) StartJanitor(ctx context.Context) {
 	}()
 }
 
-// RequestRefresh 给外部（Web/REST）用：让某台设备重新上报名单里的基本信息。
+// RequestRefresh 给外部（Web/REST）用：让某台设备重新上报基本信息。
+//
+// 顺带把主机的光功率也采一次（详情页「基本信息」里的收光 / 发光那两行）：
+// 它跟基本信息一起看，而且设备不报光功率时也不会多出东西（枚举不到就完事）。
 func (s *Server) RequestRefresh(deviceID int64) error {
-	_, err := s.EnqueueFetchDeviceInfo(deviceID)
+	if _, err := s.EnqueueFetchDeviceInfo(deviceID); err != nil {
+		return err
+	}
+	_, err := s.EnqueueFetchOptical(deviceID)
 	return err
 }
+
+// EnqueueFetchOptical 入队「采集主机光功率」的任务（详情页「收光 / 发光」两行）。
+//
+// 光功率在 TR-069 里**没有统一参数名，位置也不统一**，所以不猜具体参数名：
+// 枚举光口所在的那几棵子树，用叶子名后缀把「像功率的」筛出来再取值，
+// 设备报什么名字就存什么名字；认方向交给界面（见 web.hostOpticalFrom）。
+// 枚举不到就是设备不报，不是错误。
+func (s *Server) EnqueueFetchOptical(deviceID int64) (int64, error) {
+	d, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	var last int64
+	for _, probe := range opticalProbes(d.DataModelRoot) {
+		id, err := s.enqueueSubtree(deviceID, gpnPayload{
+			Path:      probe.path,
+			Include:   probe.include,
+			ThenFetch: true, // 枚举到名字后，同一个会话里接着把值取回来
+			SkipStore: true, // 只存值，别把光口子树那一堆名字刷进参数表
+			Max:       opticalFetchMax,
+		})
+		if err != nil {
+			return 0, err
+		}
+		last = id
+	}
+	return last, nil
+}
+
+// opticalProbe 是「到哪棵子树里摸光功率」：路径 + 一份叶子名后缀清单。
+// include 为空表示整棵都要（树很小时用）。
+type opticalProbe struct {
+	path    string
+	include []string
+}
+
+// opticalLeafSuffixes 是「像光功率的叶子名」后缀（大小写不敏感，见 filterLeafNames）。
+//
+// 这里只做**粗筛**（把名字捞回来），真正认不认得出收/发光交给 web.opticalField
+// 按语义判 —— 两边的清单要保持同步，改一边记得改另一边。
+var opticalLeafSuffixes = []string{
+	".rxpower", ".txpower",
+	".rxpowerdbm", ".txpowerdbm",
+	".rx_power", ".tx_power",
+	".opticalrxpower", ".opticaltxpower",
+	".rxopticalpower", ".txopticalpower",
+	".opticalpowerrx", ".opticalpowertx",
+	".x_hw_rxpower", ".x_hw_txpower",
+	".x_hw_rxpowerdbm", ".x_hw_txpowerdbm",
+	".receivepower",
+}
+
+// opticalProbes 给出「主机光功率可能在哪几棵子树」。
+//
+// 位置各家不一样，实测过的两种：
+//
+//   - `InternetGatewayDevice.WANDevice.1.` 下挂着私有的 PON 接口对象。真机例
+//     （联通版 V271-20，PON 接入，2026-09-30）：光功率在
+//     `…WANDevice.1.X_GponInterafceConfig.RXPower / TXPower`（对象名确实是拼错的 Interafce），
+//     同一棵里 `X_CU_WANEdgeONTPInterfaceConfig.OpticalTransceiver.RXPower / TXPower`
+//     报的是**没换算的原始值**（254 / 10000）—— 所以整棵 WANDevice 都得摸一遍，
+//     只认某个对象名会漏。
+//   - `InternetGatewayDevice.Optical.` / `Device.Optical.`：另开一棵 Optical 树的做法。
+//
+// 为什么敢枚举整棵 WANDevice：include 只留叶子名像功率的参数，取值名单很小
+// （枚举本身一次响应，几百个名字），不会把几百个参数值拉回来。
+//
+// 另外记录一条：`InternetGatewayDevice.Optical.` 下面这台只有 X_HW_Interface.X_HW_OpmEnable，
+// `X_HW_PonQualityMonitor.` 只有开关与门限 —— 没有读数，所以这两处不单独发任务。
+func opticalProbes(root string) []opticalProbe {
+	wan := func(prefix string) opticalProbe {
+		return opticalProbe{path: prefix + "WANDevice.1.", include: opticalLeafSuffixes}
+	}
+	switch root {
+	case "Device.":
+		// TR-181：光接口在 Device.Optical. 下
+		return []opticalProbe{{path: "Device.Optical."}, wan("Device.")}
+	case "InternetGatewayDevice.":
+		return []opticalProbe{wan("InternetGatewayDevice."), {path: "InternetGatewayDevice.Optical."}}
+	case "":
+		// 根未知：两套都试（枚举不到就是什么都没有，不会报错）
+		return []opticalProbe{
+			wan("InternetGatewayDevice."),
+			{path: "InternetGatewayDevice.Optical."},
+			{path: "Device.Optical."},
+			wan("Device."),
+		}
+	}
+	return []opticalProbe{wan(root), {path: root + "Optical."}}
+}
+
+// opticalFetchMax 是单次取值的条数上限，防止设备把整棵子树都倒回来。
+const opticalFetchMax = 200
 
 // FetchSubtree 给外部（Web/REST）用：枚举某个参数子树下的所有参数并把值取回来。
 func (s *Server) FetchSubtree(deviceID int64, path string, exclude []string, max int) error {
@@ -1055,6 +1154,12 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		if created || inf.HasEvent("0 BOOTSTRAP") || root == "" || !s.hasDeviceInfo(deviceID) {
 			if _, err := s.EnqueueFetchDeviceInfo(deviceID); err != nil {
 				s.log.Warn("入队取设备信息失败", "device_id", deviceID, "err", err)
+			}
+			// 顺手采一次光功率（详情页「基本信息」的收光 / 发光）：
+			// 光功率参数名各家不统一，只能枚举光口子树；只在首次纳管 / BOOTSTRAP 采一次
+			// （光功率变化很慢），需要新读数时详情页点「重新获取」。
+			if _, err := s.EnqueueFetchOptical(deviceID); err != nil {
+				s.log.Warn("入队采集光功率失败", "device_id", deviceID, "err", err)
 			}
 		}
 	}

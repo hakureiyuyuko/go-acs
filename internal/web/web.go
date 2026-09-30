@@ -1060,7 +1060,24 @@ func basicInfo(d *store.Device, params []store.Param) []kv {
 			kept = append(kept, x)
 		}
 	}
+
+	// 收光 / 发光（主机自己的）：单独放在最后，而且**没读到就写 -**，
+	// 不跟着上面那条「空值不展示」走 —— 否则设备不报时这两行直接消失，
+	// 看的人分不清是「没做这个功能」还是「设备没上报」。
+	opt := hostOpticalFrom(params)
+	kept = append(kept,
+		kv{"收光", orDash(opt.Rx)},
+		kv{"发光", orDash(opt.Tx)},
+	)
 	return kept
+}
+
+// orDash 空值显示成 "-"（如实呈现：没读到就是没读到，不编数）。
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
 
 // defaultFetchPath 给「读取参数子树」表单一个合理的默认值。

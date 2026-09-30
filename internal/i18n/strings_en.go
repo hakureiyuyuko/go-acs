@@ -357,6 +357,10 @@ func init() {
 		"确认密码":    "Confirm password",
 		"保存":      "Save",
 
+		// ---- 设备详情页：主机收光 / 发光（基本信息里那两行）----
+		"收光": "Rx power",
+		"发光": "Tx power",
+
 		// ---- 无线编辑页 ----
 		"无线设置 ·": "Wi-Fi settings ·",
 		"无线设置":   "Wi-Fi settings",
