@@ -36,7 +36,8 @@ gateways: **onboard → inspect → configure → diagnose → manage sub-device
 > Data comes from the CPE simulator bundled with this repository; no real device information is included.
 
 Overview: device list (online status, serial number, software version, data model, last inform time, number of
-collected parameters, wireless client count; filterable by online / offline, with three states —
+collected parameters, wireless client count — plus Rx / Tx optical power columns whenever any device reports
+them; filterable by online / offline, with three states —
 online / probing / offline — and a 5-second auto-refresh toggle in the top-right) plus wireless overview
 
 ![Overview](docs/images/overview.png)

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -149,33 +150,94 @@ func (s *Store) HasObjectNodes(deviceID int64) (bool, error) {
 // 看板要展示每台设备的 2.4G/5G 概况，逐设备查参数会变成 N+1 查询，
 // 所以这里一条 SQL 拿全（数据量小时完全够用；设备规模很大时应换成物化视图或
 // 单独一张 wifi_summary 表，见 NFR-3）。
+// WifiParams 取全库无线参数，按 device_id 分组。
+//
+// 只做这一件事的调用点用这个；列表页要同时用无线概况与光功率，
+// 走 SummaryParams（同一条扫描里一起拿，省一次全表筛）。
 func (s *Store) WifiParams() (map[int64][]Param, error) {
+	wifi, _, err := s.SummaryParams()
+	return wifi, err
+}
+
+// SummaryParams 一次取出「列表页要用的两类参数」：无线概况 + 主机光功率。
+//
+// 为什么合并在一条查询里：两者都只能靠**名字子串**筛（参数名各家不一样，
+// 没法用索引），而设备列表页 5 秒就会自己刷一次 —— 分成两条查询等于把这个
+// 开销翻倍。分类交给调用方（wifi 走 WifiOverview，光功率走 hostOpticalFrom）。
+func (s *Store) SummaryParams() (wifi, optical map[int64][]Param, err error) {
 	rows, err := s.db.Query(`SELECT device_id, name, value, value_type, writable, source, updated_at
 		FROM device_params
 		WHERE name LIKE '%WLANConfiguration.%'
 		   OR name LIKE '%WiFi.Radio.%'
 		   OR name LIKE '%WiFi.SSID.%'
 		   OR name LIKE '%WiFi.AccessPoint.%'
+		   OR lower(name) LIKE '%.rxpower'
+		   OR lower(name) LIKE '%.txpower'
+		   OR lower(name) LIKE '%.rxpowerdbm'
+		   OR lower(name) LIKE '%.txpowerdbm'
+		   OR lower(name) LIKE '%.rx_power'
+		   OR lower(name) LIKE '%.tx_power'
+		   OR lower(name) LIKE '%.opticalrxpower'
+		   OR lower(name) LIKE '%.opticaltxpower'
+		   OR lower(name) LIKE '%.rxopticalpower'
+		   OR lower(name) LIKE '%.txopticalpower'
+		   OR lower(name) LIKE '%.opticalpowerrx'
+		   OR lower(name) LIKE '%.opticalpowertx'
+		   OR lower(name) LIKE '%.x_hw_rxpower'
+		   OR lower(name) LIKE '%.x_hw_txpower'
+		   OR lower(name) LIKE '%.x_hw_rxpowerdbm'
+		   OR lower(name) LIKE '%.x_hw_txpowerdbm'
+		   OR lower(name) LIKE '%.receivepower'
 		ORDER BY device_id, name`)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 
-	out := map[int64][]Param{}
+	wifi = map[int64][]Param{}
+	optical = map[int64][]Param{}
 	for rows.Next() {
 		var devID int64
 		var p Param
 		var wr int
 		var upd string
 		if err := rows.Scan(&devID, &p.Name, &p.Value, &p.ValueType, &wr, &p.Source, &upd); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		p.Writable = wr == 1
 		p.UpdatedAt = parseTS(upd)
-		out[devID] = append(out[devID], p)
+		if isOpticalName(p.Name) {
+			optical[devID] = append(optical[devID], p)
+			continue
+		}
+		wifi[devID] = append(wifi[devID], p)
 	}
-	return out, rows.Err()
+	return wifi, optical, rows.Err()
+}
+
+// isOpticalName 判断参数名是不是「像光功率」的（跟 internal/cwmp 的
+// opticalLeafSuffixes、web.opticalField 同一口径，改一边记得改另一边）。
+func isOpticalName(name string) bool {
+	low := strings.ToLower(name)
+	for _, suf := range opticalNameSuffixes {
+		if strings.HasSuffix(low, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+// opticalNameSuffixes 与 cwmp.opticalLeafSuffixes 对应（那边用于枚举取值，这里用于筛选）。
+var opticalNameSuffixes = []string{
+	".rxpower", ".txpower",
+	".rxpowerdbm", ".txpowerdbm",
+	".rx_power", ".tx_power",
+	".opticalrxpower", ".opticaltxpower",
+	".rxopticalpower", ".txopticalpower",
+	".opticalpowerrx", ".opticalpowertx",
+	".x_hw_rxpower", ".x_hw_txpower",
+	".x_hw_rxpowerdbm", ".x_hw_txpowerdbm",
+	".receivepower",
 }
 
 // paramCounts 一次性取出每个设备的参数个数，避免列表页 N+1 查询。

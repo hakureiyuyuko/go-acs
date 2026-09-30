@@ -73,7 +73,9 @@
       <tr>
         <th>{{T "状态"}}</th><th>{{T "名称"}}</th><th>{{T "备注"}}</th><th>{{T "序列号"}}</th>
         <th>{{T "软件版本"}}</th><th>{{T "数据模型"}}</th><th>{{T "最后上报"}}</th><th>{{T "参数"}}</th>
-        <th>{{T "无线终端"}}</th><th></th>
+        <th>{{T "无线终端"}}</th>
+        {{if .HasOptical}}<th>{{T "收光"}}</th><th>{{T "发光"}}</th>{{end}}
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -89,6 +91,11 @@
         <td class="mono">{{fmtTime $d.LastInformAt}}</td>
         <td class="mono">{{$d.ParamCount}}</td>
         <td class="mono">{{index $.ClientCounts $d.ID}}</td>
+        {{if $.HasOptical}}
+        {{$o := index $.Optical $d.ID}}
+        <td class="mono">{{if $o.Rx}}{{$o.Rx}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td class="mono">{{if $o.Tx}}{{$o.Tx}}{{else}}<span class="hint">-</span>{{end}}</td>
+        {{end}}
         <td>
           <form method="post" action="/devices/{{$d.ID}}/wifi">
             <button type="submit" class="ghost" {{if not $d.Online}}disabled

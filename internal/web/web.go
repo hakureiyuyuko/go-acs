@@ -318,10 +318,22 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 无线概况：一次查询拿全设备的无线参数，再按设备/频段整理
-	wifiParams, err := s.store.WifiParams()
+	// 无线概况 + 主机光功率：一次查询拿全（两者都只能按名字子串筛，合并省一次扫描）
+	wifiParams, opticalParams, err := s.store.SummaryParams()
 	if err != nil {
-		wifiParams = map[int64][]store.Param{}
+		wifiParams, opticalParams = map[int64][]store.Param{}, map[int64][]store.Param{}
+	}
+	// 收光 / 发光：只在**列表里真有设备报过**这两列时才显示
+	// （跟 FTTR / WAN 区块一个规矩：设备不报就不摆空列）
+	opticalByDevice := map[int64]HostOptical{}
+	hasOptical := false
+	for id, ps := range opticalParams {
+		o := hostOpticalFrom(ps)
+		if !o.Has() {
+			continue
+		}
+		opticalByDevice[id] = o
+		hasOptical = true
 	}
 
 	// 搜索：服务端过滤（结果可以分享 URL，也不依赖 JS）。
@@ -366,6 +378,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"Stats":        stats,
 		"WiFi":         wifiByDevice,
 		"ClientCounts": clientCounts,
+		"Optical":      opticalByDevice,
+		"HasOptical":   hasOptical,
 		"Query":        q,
 		"State":        state,
 		"AuthOn":       s.authEnabled(),

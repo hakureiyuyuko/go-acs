@@ -456,6 +456,9 @@ def main():
           and "待办任务" not in cards and "失败任务" not in cards,
           re.sub(r"\s+", " ", cards)[:200])
     check("看板有频段/射频列", "频段" in html and "射频" in html)
+    # 收光/发光两列：列表里没有设备报过就不显示（跟 FTTR/WAN 区块一个规矩）
+    check("没有设备上报光功率时不出现「收光 / 发光」列",
+          "<th>收光</th>" not in html and "<th>发光</th>" not in html, "")
 
     print("== 13. 无线概况是自动采集的（不用手工点）==")
     d98 = [d for d in api_devices() if d["SerialNumber"] == "VERIFY098"]
@@ -1825,6 +1828,13 @@ def main():
                 # 同一棵子树里还有个没换算的原始值（254 / 10000），不能当 dBm 显示
                 check("没换算的原始值不会被当成功率",
                       "254 dBm" not in h and "10000 dBm" not in h, "")
+                # 同一个设备也要出现在**列表页**：有设备报光功率时那两列才显示
+                st, ihtml = get("/")
+                check("列表页出现「收光 / 发光」两列",
+                      "<th>收光</th>" in ihtml and "<th>发光</th>" in ihtml, "")
+                check("列表页显示收 / 发光读数",
+                      "-15 dBm" in ihtml and "2 dBm" in ihtml, "")
+                check("列表页不把没换算的原始值当成功率", "254 dBm" not in ihtml, "")
         finally:
             sim.terminate()
             try:
