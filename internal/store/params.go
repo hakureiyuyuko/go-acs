@@ -187,15 +187,13 @@ func (s *Store) WifiParams() (map[int64][]Param, error) {
 // 交给 web.opticalField：命名没有标准，各家写法一大堆，SQL 里写不全；
 // 而且必须能把无线的 `TransmitPower`（发射功率）排除掉 —— 它不是光功率。
 func (s *Store) OpticalParams() (map[int64][]Param, error) {
+	// 这里故意查得宽（凡是跟「光 / 功率」沾边的都捞回来），具体是不是光功率、
+	// 是收还是发，交给 web.opticalField 按语义判 —— 参数名各家不统一，
+	// 在 SQL 里枚举写法只会漏。
 	rows, err := s.db.Query(`SELECT device_id, name, value, value_type, writable, source, updated_at
 		FROM device_params
-		WHERE lower(name) LIKE '%rxpower%'
-		   OR lower(name) LIKE '%txpower%'
-		   OR lower(name) LIKE '%rx_power%'
-		   OR lower(name) LIKE '%tx_power%'
-		   OR lower(name) LIKE '%rxoptical%'
-		   OR lower(name) LIKE '%txoptical%'
-		   OR lower(name) LIKE '%opticalpower%'
+		WHERE lower(name) LIKE '%optical%'
+		   OR lower(name) LIKE '%power%'
 		ORDER BY device_id, name`)
 	if err != nil {
 		return nil, err

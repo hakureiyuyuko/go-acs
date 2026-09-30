@@ -81,6 +81,8 @@ type simulator struct {
 
 	// fttrOptical：给 FTTR 子设备加上光功率参数（模拟光纤组网子机）。
 	fttrOptical bool
+	// optical：给主机自己加上光功率参数（模拟上报了收光/发光的光猫）。
+	optical bool
 	// fttrWireless / fttrWired：把这些实例（1-based 子设备序号）做成无线 / 有线组网，
 	// 用来验证「无线、有线组网不显示光功率」那条规则。
 	fttrWireless map[int]bool
@@ -166,6 +168,8 @@ func main() {
 	var fttrOptical bool
 	var fttrWireless, fttrWired string
 	flag.BoolVar(&fttrOptical, "fttr-optical", false, "给 FTTR 子设备加光功率参数（模拟光纤组网子机）")
+	var optical bool
+	flag.BoolVar(&optical, "optical", false, "给主机加光功率参数（WANPONInterfaceConfig 下的 OpticalRxPower/OpticalTxPower）")
 	flag.StringVar(&fttrWireless, "fttr-wifi", "", "把哪些 FTTR 子设备做成无线组网（子设备序号，逗号分隔，如 1,3）")
 	flag.StringVar(&fttrWired, "fttr-eth", "", "把哪些 FTTR 子设备做成有线组网（子设备序号，逗号分隔）")
 	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
@@ -179,6 +183,7 @@ func main() {
 	s.diagDelay = diagDelay
 	s.pingNeedIface = pingNeedIface
 	s.fttrOptical = fttrOptical
+	s.optical = optical
 	s.fttrWireless = parseIntSet(fttrWireless)
 	s.fttrWired = parseIntSet(fttrWired)
 	s.noWAN = noWAN
@@ -435,6 +440,15 @@ func (s *simulator) buildParams(root, specVersion string) {
 	set(di+"ProvisioningCode", "0000", "string")
 	set(di+"UpTime", "3600", "unsignedInt")
 	set(di+"FirstUseDate", "2026-01-01T00:00:00Z", "dateTime")
+
+	// 主机自己的光功率（可选）。刻意用**非常规写法**命名（WANPON + OpticalRxPower），
+	// 好验证界面不是靠枚举参数名认光功率的：只要设备报了，就能认出来。
+	// 放在 WANDevice 子树下，正好也是「采集光功率」要枚举的那棵子树。
+	if s.optical {
+		pon := root + "WANDevice.1.WANPONInterfaceConfig."
+		set(pon+"OpticalRxPower", "-21.5", "string")
+		set(pon+"OpticalTxPower", "1.8", "string")
+	}
 
 	set(ms+"URL", s.acsURL, "string")
 	set(ms+"Username", s.user, "string")

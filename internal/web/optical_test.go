@@ -1,6 +1,10 @@
 package web
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hakureiyuyuko/go-acs/internal/store"
@@ -83,5 +87,88 @@ func TestWithDbm(t *testing.T) {
 	}
 	if got := withDbm("-19.0dBm"); got != "-19.0dBm" {
 		t.Errorf("已经带单位的不该重复补，得到 %q", got)
+	}
+}
+
+// 参数名各家不统一，认的是语义不是枚举：新写法只要设备报了就该认出来，
+// 无线的 TransmitPower 依旧不能算光发射功率。
+func TestOpticalFieldNaming(t *testing.T) {
+	cases := []struct {
+		name string
+		rx   bool
+		tx   bool
+	}{
+		{"RxPower", true, false},
+		{"X_HW_RxPower", true, false},
+		{"rx_power", true, false},
+		{"OpticalPowerRx", true, false},
+		{"ReceiveOpticalPower", true, false},
+		{"PonRxPower", true, false},
+		{"WANPONInterfaceConfig.OpticalRxPower", true, false},
+		{"TxPower", false, true},
+		{"X_HW_TxPower", false, true},
+		{"tx_power", false, true},
+		{"OpticalPowerTx", false, true},
+		{"TransmitOpticalPower", false, true},
+		{"PonTxPower", false, true},
+		{"WANPONInterfaceConfig.OpticalTxPower", false, true},
+		// 不该认的
+		{"TransmitPower", false, false}, // 无线发射功率
+		{"TransmitPowerSupported", false, false},
+		{"PowerConsumption", false, false}, // 有 power 但跟光无关
+		{"RxBytes", false, false},
+		{"OpticalModuleType", false, false}, // 有 optical 但不是功率
+	}
+	for _, c := range cases {
+		rx, tx := opticalField(c.name)
+		if rx != c.rx || tx != c.tx {
+			t.Errorf("opticalField(%q) = rx %v / tx %v，要的是 rx %v / tx %v",
+				c.name, rx, tx, c.rx, c.tx)
+		}
+	}
+}
+
+// 设备页要有「采集光功率」这个入口，否则概览页两列永远只能是 -：
+// 纳管时采的基本信息里没有光功率，得让人能手动补一次。
+func TestDevicePageHasOpticalButton(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "acs.db"))
+	if err != nil {
+		t.Fatalf("打开库失败: %v", err)
+	}
+	defer st.Close()
+	if _, _, err := st.UpsertDevice(&store.Device{
+		OUI: "001122", ProductClass: "SimRouter", SerialNumber: "OPT-TEST",
+	}); err != nil {
+		t.Fatalf("造设备失败: %v", err)
+	}
+	if err := st.UpsertParams(1, []store.Param{
+		mkParam("InternetGatewayDevice.WANDevice.1.WANPONInterfaceConfig.OpticalRxPower", "-21.5"),
+		mkParam("InternetGatewayDevice.WANDevice.1.WANPONInterfaceConfig.OpticalTxPower", "1.8"),
+	}, "getvalues"); err != nil {
+		t.Fatalf("写参数失败: %v", err)
+	}
+	mux := http.NewServeMux()
+	if err := Register(mux, st, &stubCtrl{}, Options{}); err != nil {
+		t.Fatalf("挂路由失败: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/devices/1", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("应 200，得到 %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "/devices/1/optical") {
+		t.Error("设备页应有「采集光功率」的入口（POST /devices/{id}/optical）")
+	}
+	if !strings.Contains(body, "-21.5 dBm") || !strings.Contains(body, "1.8 dBm") {
+		t.Error("设备页应显示已采集到的收光/发光")
+	}
+
+	// 点按钮：入队后跳回设备页
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, httptest.NewRequest("POST", "/devices/1/optical", nil))
+	if w2.Code != http.StatusSeeOther {
+		t.Errorf("POST 应 303 跳回设备页，得到 %d", w2.Code)
 	}
 }

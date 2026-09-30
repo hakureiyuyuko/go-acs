@@ -178,19 +178,36 @@ func FttrOverview(params []store.Param) ([]FttrNode, bool) {
 
 // opticalField 判断一个字段（可带层级）是不是光功率字段，是收还是发。
 //
-// 命名没有统一标准，所以按**叶子名**认：RxPower / RxPowerDbm / OpticalRxPower /
-// X_HW_RxPower…。注意不能把 TransmitPower 误当成光发射功率 —— 它是无线发射功率。
+// 命名没有统一标准（RxPower / X_HW_RxPower / OpticalPowerRx / ReceiveOpticalPower /
+// PonRxPower…），枚举名字永远列不全，所以改成**按语义辨认**：
+//
+//  1. 叶子名（去掉下划线/横杠/空格后）必须含 power —— 不是功率就不谈光功率；
+//  2. 还得有「光」的意味：含 optical / pon，或者是常见的 rxpower / txpower 写法；
+//  3. 方向看 rx / receive（收）与 tx / transmit（发）。
+//
+// 特别注意：无线的发射功率叫 TransmitPower，**不是**光发射功率，
+// 凡是 transmitpower 且不带 optical 的一律不算（它既没有光语义也没有 tx 写法）。
 func opticalField(field string) (rx, tx bool) {
 	leaf := strings.ToLower(strings.TrimSpace(field))
 	if i := strings.LastIndex(leaf, "."); i >= 0 {
 		leaf = leaf[i+1:]
 	}
-	switch leaf {
-	case "rxpower", "rxpowerdbm", "opticalrxpower", "rxopticalpower",
-		"x_hw_rxpower", "x_hw_rxpowerdbm", "opticalpowerrx", "rx_power":
+	norm := strings.NewReplacer("_", "", "-", "", " ", "").Replace(leaf)
+	if norm == "" || !strings.Contains(norm, "power") {
+		return false, false
+	}
+	// 无线的发射功率：不带 optical 就不是光功率
+	if strings.Contains(norm, "transmitpower") && !strings.Contains(norm, "optical") {
+		return false, false
+	}
+	optical := strings.Contains(norm, "optical") || strings.Contains(norm, "pon")
+	if !optical && !strings.Contains(norm, "rxpower") && !strings.Contains(norm, "txpower") {
+		return false, false
+	}
+	switch {
+	case strings.Contains(norm, "rx") || strings.Contains(norm, "receive") || strings.Contains(norm, "incoming"):
 		return true, false
-	case "txpower", "txpowerdbm", "opticaltxpower", "txopticalpower",
-		"x_hw_txpower", "x_hw_txpowerdbm", "opticalpowertx", "tx_power":
+	case strings.Contains(norm, "tx") || strings.Contains(norm, "transmit") || strings.Contains(norm, "outgoing"):
 		return false, true
 	}
 	return false, false

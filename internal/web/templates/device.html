@@ -208,6 +208,19 @@
   <div class="hint">{{T "还没跑过诊断。填个 IP 或域名，点「诊断」就行。"}}</div>
   {{end}}
 
+  <h2>{{T "光功率"}}</h2>
+  <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px">
+    <form method="post" action="/devices/{{.Device.ID}}/optical">
+      <button type="submit">{{T "重新采集光功率"}}</button>
+    </form>
+    <span class="hint">{{T "收光"}} <b>{{if .Optical.Rx}}{{TS .Optical.Rx}}{{else}}-{{end}}</b> ·
+      {{T "发光"}} <b>{{if .Optical.Tx}}{{TS .Optical.Tx}}{{else}}-{{end}}</b>{{if .Optical.SourceText}}
+      · {{TS .Optical.SourceText}}{{end}}</span>
+  </div>
+  {{if not .Optical.Has}}
+  <div class="hint">{{T "还没采集到光功率。点上面的按钮入队一次采集，设备下次上报时下发。设备本身不报的话，采完也还是 -。"}}</div>
+  {{end}}
+
   <h2>{{T "无线（WiFi）"}}</h2>
   <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px">
     <form method="post" action="/devices/{{.Device.ID}}/wifi">

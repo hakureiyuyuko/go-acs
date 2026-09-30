@@ -29,6 +29,7 @@ func (c *stubCtrl) FetchSubtree(int64, string, []string, int) error {
 	return nil
 }
 func (c *stubCtrl) FetchWiFi(int64) error                    { return nil }
+func (c *stubCtrl) FetchOptical(int64) error                 { return nil }
 func (c *stubCtrl) FetchNames(int64, string, bool) error     { return nil }
 func (c *stubCtrl) WakeDevice(int64) (string, error)         { return "已唤醒", nil }
 func (c *stubCtrl) SetParameters(int64, []store.Param) error { return nil }

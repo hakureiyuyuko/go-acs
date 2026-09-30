@@ -247,6 +247,12 @@ func (s *Server) RequestRefresh(deviceID int64) error {
 	return err
 }
 
+// FetchOptical 给外部（Web/REST）用：采集光功率（看板上的「收光 / 发光」两列）。
+func (s *Server) FetchOptical(deviceID int64) error {
+	_, err := s.EnqueueFetchOptical(deviceID)
+	return err
+}
+
 // FetchSubtree 给外部（Web/REST）用：枚举某个参数子树下的所有参数并把值取回来。
 func (s *Server) FetchSubtree(deviceID int64, path string, exclude []string, max int) error {
 	_, err := s.EnqueueFetchSubtree(deviceID, path, exclude, max)
@@ -705,6 +711,65 @@ var hostsSuffixes = []string{
 	".VendorClassID", // 有时能看出型号（如 HUAWEI:FTTR_EdgeONT:K251-20）
 	".HostNumberOfEntries",
 }
+
+// EnqueueFetchOptical 入队「采集光功率」的任务。
+//
+// 光功率**没有统一参数名**（RxPower / X_HW_RxPower / OpticalPowerRx /
+// ReceiveOpticalPower / PonRxPower… 各家私有），所以这里**不猜具体参数名**：
+// 只枚举光口所在的子树，设备报什么名字就存什么名字，界面再按语义辨认
+// （见 web.opticalField）。设备不支持就是枚举不到，不会编数字出来。
+func (s *Server) EnqueueFetchOptical(deviceID int64) (int64, error) {
+	d, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	var last int64
+	for _, path := range opticalSubtreePaths(d.DataModelRoot) {
+		id, err := s.enqueueSubtree(deviceID, gpnPayload{
+			Path:      path,
+			ThenFetch: true, // 枚举到名字后同一会话里接着把值取回来
+			SkipStore: true, // 只存值，不把几百个子树节点名塞进参数表
+			Exclude:   opticalExcludeSubstrings,
+			Max:       opticalFetchMax,
+		})
+		if err != nil {
+			return 0, err
+		}
+		last = id
+	}
+	return last, nil
+}
+
+// opticalSubtreePaths 给出光口可能所在的子树。
+//
+// 数据模型根未知时两套都试：设备会回答它支持哪一棵，枚举不到就什么都没有
+// —— 界面上收光/发光保持显示 -，而不是编一个数。
+func opticalSubtreePaths(root string) []string {
+	switch {
+	case root == "Device.":
+		// TR-181：光接口在 Device.Optical.；部分设备也走 Device.WANDevice.
+		return []string{"Device.Optical.", "Device.WANDevice."}
+	case root == "":
+		// 根未知：TR-098 与 TR-181 各来一遍
+		return []string{"InternetGatewayDevice.WANDevice.", "Device.Optical."}
+	default:
+		// TR-098：光口挂在 WANDevice 下（华为/中兴的私有光功率参数也都在这棵子树里）
+		return []string{root + "WANDevice."}
+	}
+}
+
+// opticalExcludeSubstrings 是枚举时跳过的参数名片段。
+// 这几张表既大又跟光功率无关，没必要为找两个读数把它们全拉回来。
+var opticalExcludeSubstrings = []string{
+	"PortMapping",      // 端口映射表
+	"AssociatedDevice", // 关联终端表
+	"Host.",            // 主机列表
+	"IPv6",             // IPv6 前缀表（真机上能有好几百个）
+	"WANDSLLinkConfig",
+}
+
+// opticalFetchMax 是这次取值名单的上限，防止设备把整棵子树都回给我们。
+const opticalFetchMax = 400
 
 // hostsSubtreePath 给出「主机列表」的子树路径。
 // 数据模型根未知时按 TR-098 猜一个 —— 枚举不到东西不会报错，只是终端名显示 N/A。

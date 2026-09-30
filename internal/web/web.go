@@ -34,6 +34,8 @@ type Controller interface {
 	FetchSubtree(deviceID int64, path string, exclude []string, max int) error
 	// FetchWiFi 采集无线概况（看板上的 2.4G/5G 那一栏）。
 	FetchWiFi(deviceID int64) error
+	// FetchOptical 采集光功率（看板上的「收光 / 发光」两列）。
+	FetchOptical(deviceID int64) error
 	// FetchNames 只枚举参数名不取值（浏览参数树）。
 	FetchNames(deviceID int64, path string, nextLevel bool) error
 	// WakeDevice 主动唤醒设备（发 Connection Request），返回给用户看的一句话。
@@ -143,6 +145,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 	mux.HandleFunc("POST /devices/{id}/delete", guard(s.handleDeviceDelete))
 	mux.HandleFunc("POST /devices/{id}/fetch", guard(s.handleFetch))
 	mux.HandleFunc("POST /devices/{id}/wifi", guard(s.handleWifi))
+	mux.HandleFunc("POST /devices/{id}/optical", guard(s.handleOptical))
 	mux.HandleFunc("GET /devices/{id}/wifi/{inst}", guard(s.handleWifiEdit))
 	mux.HandleFunc("POST /devices/{id}/wifi/{inst}", guard(s.handleWifiSave))
 	// 批量下发无线参数：从概览页勾选多台设备后进来
@@ -153,6 +156,7 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 	mux.HandleFunc("POST /api/devices/{id}/fetch", guard(s.apiFetch))
 	mux.HandleFunc("POST /api/devices/{id}/names", guard(s.apiFetchNames))
 	mux.HandleFunc("POST /api/devices/{id}/wifi", guard(s.apiWifi))
+	mux.HandleFunc("POST /api/devices/{id}/optical", guard(s.apiOptical))
 	return nil
 }
 
@@ -629,6 +633,8 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	fttr, hasFttr := FttrOverview(params)
 	// WAN 连接：同样，没这类参数就不渲染
 	wan, hasWan := WanOverview(params)
+	// 光功率：跟概览页「收光 / 发光」两列同一套判定
+	optical := OpticalOverview(params)
 
 	// 关联终端树：主机 + 各子设备。真机上主机自己一台终端都没有，终端全在子光猫上，
 	// 所以「终端数」必须把子设备算进来，而且要点得开、能看出是谁连的。
@@ -648,6 +654,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		"HasFttr":            hasFttr,
 		"FttrOnline":         fttrOnlineCount(fttr),
 		"FttrHasOptical":     fttrHasOptical(fttr),
+		"Optical":            optical,
 		"Wan":                wan,
 		"HasWan":             hasWan,
 		"WanConnected":       wanConnCount(wan),
@@ -837,6 +844,44 @@ func (s *Server) handleWifi(w http.ResponseWriter, r *http.Request) {
 		_ = s.ctrl.FetchWiFi(id)
 	}
 	http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+// handleOptical 处理界面上的「采集光功率」按钮。
+func (s *Server) handleOptical(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if s.ctrl != nil {
+		if err := s.ctrl.FetchOptical(id); err != nil {
+			http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10)+"?err=1&msg="+
+				url.QueryEscape("采集光功率没入队："+err.Error()), http.StatusSeeOther)
+			return
+		}
+	}
+	http.Redirect(w, r, "/devices/"+strconv.FormatInt(id, 10)+"?msg="+
+		url.QueryEscape("已入队采集光功率，设备下次上报时下发"), http.StatusSeeOther)
+}
+
+func (s *Server) apiOptical(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSONError(w, fmt.Errorf("设备 ID 非法"), http.StatusBadRequest)
+		return
+	}
+	if s.ctrl == nil {
+		writeJSONError(w, fmt.Errorf("未接入控制接口"), http.StatusInternalServerError)
+		return
+	}
+	if err := s.ctrl.FetchOptical(id); err != nil {
+		writeJSONError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"queued": true,
+		"note":   "任务会在设备下次 Inform 时下发；枚举光口子树，设备报什么光功率参数就存什么",
+	})
 }
 
 func (s *Server) apiWifi(w http.ResponseWriter, r *http.Request) {
