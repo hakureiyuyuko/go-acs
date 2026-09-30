@@ -177,6 +177,8 @@ type Server struct {
 	// ConnectionRequest 凭据是否已下发过（这两个参数设备不回读，只能自己记）
 	connReqMu   sync.Mutex
 	connReqDone map[int64]bool
+	// connReqRetry 是写 CR 凭据失败后的重试间隔（0 = 用 connReqTaskRetry；测试里调小）
+	connReqRetry time.Duration
 }
 
 // NewServer 构造 CWMP 服务端。

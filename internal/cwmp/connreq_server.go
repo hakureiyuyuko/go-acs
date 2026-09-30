@@ -1,8 +1,10 @@
 package cwmp
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
@@ -36,38 +38,90 @@ func lookupMgmt(params []store.Param, leaf string) string {
 	return ""
 }
 
+// connReqTaskRetry 是「上一次写 ConnectionRequest 凭据失败后，隔多久再试一次」。
+//
+// 新设备接入时这一步必须自己走完（否则唤醒永远是 401），但也不能每轮 Inform 都刷一条任务，
+// 所以失败后隔一段时间重试，并且最多试 connReqMaxAttempts 次。
+const (
+	connReqTaskRetry   = 10 * time.Minute
+	connReqMaxAttempts = 3
+)
+
+// connReqState 是「设备上的 ConnectionRequest 凭据到底规范了没有」的判定结果。
+type connReqState int
+
+const (
+	// connReqUnknown：历史里没有我们写 CR 凭据的记录（新设备，或者记录被裁掉了）
+	connReqUnknown connReqState = iota
+	// connReqSatisfied：写成功过，而且写的就是当前这套账号密码
+	connReqSatisfied
+	// connReqInFlight：已经有一条在排队 / 正在执行，等它出结果
+	connReqInFlight
+	// connReqRetryLater：上次失败了，还没到重试时间
+	connReqRetryLater
+	// connReqGivingUp：连着失败到上限了，别再刷任务（日志里会说明）
+	connReqGivingUp
+)
+
 // EnsureConnReqCredentials 保证设备上的 ConnectionRequest 账号密码就是我们要用的那套。
 //
 // 为什么必须我们写：真机（华为）对 ConnectionRequestURL 要求 HTTP Digest，
-// 而 ConnectionRequestUsername/Password 它**不回读**（实测都是空串），
-// 但这两个参数是**可写**的。不写进去，我们发出去的唤醒请求永远 401。
+// 而 ConnectionRequestPassword 设备**不回读**（实测回空串），但两个参数都是**可写**的。
+// 不写进去，我们发出去的唤醒请求永远 401 —— 所以这是纳管流程的一部分，新设备接进来
+// 在**同一次会话**里就会下发（见 onInform 里的调用点）。
 //
-// 只在设备当前值与我们配置的不一致时才下发，避免每轮 BOOTSTRAP 都白写一次。
+// 判「有没有规范好」不能只看库里的值：密码压根读不回来，库里永远是空。
+// 所以看**任务历史**里我们上一次写它的结果 —— 成功且写的就是当前这套才算数；
+// 失败了隔一会儿重试（设备忙、临时拒绝都遇到过），重试到上限就停手并告警，
+// 不把任务历史刷满。
 func (s *Server) EnsureConnReqCredentials(deviceID int64) {
 	if !s.cfg.ConnReqEnabled || s.cfg.ConnReqUser == "" {
 		return
 	}
-	// 进程内记一笔：这两个参数设备不回读，我们无从从库里确认它已经生效，
-	// 只能自己记「已经下发过了」。重启后每台设备会再下发一次，代价可接受。
+	// 进程内快速路径：本进程已经确认过「设备上就是这套凭据」就不再查库
 	s.connReqMu.Lock()
 	if s.connReqDone == nil {
 		s.connReqDone = map[int64]bool{}
 	}
-	if s.connReqDone[deviceID] {
-		s.connReqMu.Unlock()
+	done := s.connReqDone[deviceID]
+	s.connReqMu.Unlock()
+	if done {
 		return
 	}
-	s.connReqMu.Unlock()
-	// 看库里已知的值 —— 不能只看本次 Inform 带的那几个参数（Inform 只带一小部分）
+
+	// 设备自己上报的用户名（这个能回读）跟我们不一致 → 不管历史如何都必须重写：
+	// 凭据是设备侧真正生效的那份，跟「我们上次写过」不是一回事（运营商可能改过）。
 	params, err := s.store.ListParams(deviceID)
 	if err != nil {
 		return
 	}
 	curUser := lookupMgmt(params, pConnReqUser)
-	curPass := lookupMgmt(params, pConnReqPass)
-	if curUser == s.cfg.ConnReqUser && curPass == s.cfg.ConnReqPass {
+	mismatch := curUser != "" && curUser != s.cfg.ConnReqUser
+	if mismatch {
+		s.log.Info("设备上的 ConnectionRequest 用户名与我们配置的不一致，重新下发",
+			"device_id", deviceID, "device_user", curUser, "want", s.cfg.ConnReqUser)
+	}
+
+	state, attempts := s.connReqTaskState(deviceID)
+	switch state {
+	case connReqInFlight:
+		// 已经在写了，等它出结果（不一致也先等这条落地）
+		return
+	case connReqSatisfied:
+		if !mismatch {
+			s.connReqMu.Lock()
+			s.connReqDone[deviceID] = true
+			s.connReqMu.Unlock()
+			return
+		}
+	case connReqRetryLater:
+		return
+	case connReqGivingUp:
+		s.log.Warn("写 ConnectionRequest 凭据连续失败，不再重试（该设备暂时无法被主动唤醒）",
+			"device_id", deviceID, "attempts", attempts, "user", s.cfg.ConnReqUser)
 		return
 	}
+
 	d, err := s.store.GetDevice(deviceID)
 	if err != nil {
 		return
@@ -80,11 +134,102 @@ func (s *Server) EnsureConnReqCredentials(deviceID int64) {
 		s.log.Warn("下发 ConnectionRequest 凭据失败", "device_id", deviceID, "err", err)
 		return
 	}
-	s.connReqMu.Lock()
-	s.connReqDone[deviceID] = true
-	s.connReqMu.Unlock()
-	s.log.Info("已入队：把 ConnectionRequest 凭据写进设备（设备不回读，所以得我们自己 provision）",
-		"device_id", deviceID, "user", s.cfg.ConnReqUser)
+	if attempts > 0 {
+		s.log.Info("重试写入 ConnectionRequest 凭据（上次失败）",
+			"device_id", deviceID, "attempt", attempts+1, "user", s.cfg.ConnReqUser)
+	} else {
+		s.log.Info("已入队：把 ConnectionRequest 凭据写进设备（设备不回读密码，所以得我们自己 provision）",
+			"device_id", deviceID, "user", s.cfg.ConnReqUser)
+	}
+}
+
+// connReqTaskState 看这台设备最近一次「写 ConnectionRequest 凭据」的任务怎么样了。
+// 判断依据是任务历史而不是库里的参数值：密码设备不回读，库里永远是空串，
+// 拿它当判据会把「已经写好了」一直误判成「还没写」。
+//
+// 返回状态与「已经失败过几次」。
+func (s *Server) connReqTaskState(deviceID int64) (connReqState, int) {
+	tasks, err := s.store.ListTasks(deviceID, 50)
+	if err != nil {
+		// 读不到历史就当没写过：宁可多写一次（幂等），也不要因为读库失败而让唤醒坏掉
+		return connReqUnknown, 0
+	}
+	failed := 0
+	for _, t := range tasks {
+		if t.Kind != TaskSetParameterValues {
+			continue
+		}
+		p, ok := decodeConnReqSet(t.Payload)
+		if !ok {
+			continue // 不是写 CR 凭据的那条
+		}
+		switch t.Status {
+		case "done":
+			if p.matches(s.cfg.ConnReqUser, s.cfg.ConnReqPass) {
+				return connReqSatisfied, failed
+			}
+			// 写成功了，但写的是旧值（比如刚改过 connreq 配置）→ 当作没写过，重写
+			return connReqUnknown, failed
+		case "pending", "running":
+			return connReqInFlight, failed
+		default: // failed
+			// 继续往下数：连着失败几次决定要不要停手
+			failed++
+			if failed == 1 && time.Since(t.CreatedAt) < s.connReqRetryInterval() {
+				// 刚失败不久：先等着，别每轮 Inform 都刷任务
+				return connReqRetryLater, failed
+			}
+		}
+	}
+	switch {
+	case failed >= connReqMaxAttempts:
+		return connReqGivingUp, failed
+	case failed > 0:
+		return connReqUnknown, failed
+	}
+	return connReqUnknown, 0
+}
+
+// connReqSet 是我们写进设备的那两个参数。
+type connReqSet struct {
+	user, pass string
+}
+
+// connReqRetryInterval 是失败重试间隔（测试里可以把 Server.connReqRetry 调小）。
+func (s *Server) connReqRetryInterval() time.Duration {
+	if s.connReqRetry > 0 {
+		return s.connReqRetry
+	}
+	return connReqTaskRetry
+}
+
+// matches 判断这次写进去的是不是当前配置的这套。
+func (c connReqSet) matches(user, pass string) bool {
+	return c.user == user && c.pass == pass
+}
+
+// decodeConnReqSet 从 SetParameterValues 的 payload 里认出「写 ConnectionRequest 凭据」的任务。
+//
+// payload 是我们自己拼的 JSON，按参数名后缀匹配即可（TR-098 / TR-181 都能认）。
+func decodeConnReqSet(payload string) (connReqSet, bool) {
+	var p spvPayload
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return connReqSet{}, false
+	}
+	var out connReqSet
+	seen := false
+	for _, v := range p.Values {
+		low := strings.ToLower(v.Name)
+		switch {
+		case strings.HasSuffix(low, "."+strings.ToLower(pConnReqUser)):
+			out.user = v.Value
+			seen = true
+		case strings.HasSuffix(low, "."+strings.ToLower(pConnReqPass)):
+			out.pass = v.Value
+			seen = true
+		}
+	}
+	return out, seen
 }
 
 // WakeDevice 主动唤醒一台设备（发 Connection Request），返回给用户看的一句话结果。
