@@ -325,10 +325,14 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	// 收光 / 发光：只在**列表里真有设备报过**这两列时才显示
 	// （跟 FTTR / WAN 区块一个规矩：设备不报就不摆空列）
+	aliases, err := s.store.EnabledAliases()
+	if err != nil {
+		aliases = nil
+	}
 	opticalByDevice := map[int64]HostOptical{}
 	hasOptical := false
 	for id, ps := range opticalParams {
-		o := hostOpticalFrom(ps)
+		o := hostOpticalFrom(aliases, ps)
 		if !o.Has() {
 			continue
 		}
@@ -611,6 +615,13 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		wifiParams = map[int64][]store.Param{}
 	}
 
+	// 厂商私有参数 → 面板字段的映射（光模块读数用）。
+	// 读不到就退回叶子名启发式，页面上少几行，不影响别的。
+	aliases, err := s.store.EnabledAliases()
+	if err != nil {
+		aliases = nil
+	}
+
 	var diag *store.Task
 	diagHost := ""
 	diagIface := ""
@@ -662,7 +673,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		"DiagRunning":        diag != nil && (diag.Status == store.TaskRunning || diag.Status == store.TaskPending),
 		"Notice":             strings.TrimSpace(r.URL.Query().Get("msg")),
 		"NoticeErr":          r.URL.Query().Get("err") == "1",
-		"Basic":              basicInfo(d, params),
+		"Basic":              basicInfo(d, params, aliases),
 		"Params":             params,
 		"Tasks":              tasks,
 		"TaskHistoryLimit":   s.store.TaskHistoryLimit(),
@@ -1026,7 +1037,7 @@ func writeJSONError(w http.ResponseWriter, err error, code int) {
 
 // basicInfo 组装详情页顶部「最基本的设备信息」。
 // 数据模型根未知时不做猜测，直接按已有参数原样展示。
-func basicInfo(d *store.Device, params []store.Param) []kv {
+func basicInfo(d *store.Device, params []store.Param, aliases []store.ParamAlias) []kv {
 	idx := make(map[string]string, len(params))
 	for _, p := range params {
 		idx[p.Name] = p.Value
@@ -1075,14 +1086,26 @@ func basicInfo(d *store.Device, params []store.Param) []kv {
 		}
 	}
 
-	// 收光 / 发光（主机自己的）：单独放在最后，而且**没读到就写 -**，
-	// 不跟着上面那条「空值不展示」走 —— 否则设备不报时这两行直接消失，
-	// 看的人分不清是「没做这个功能」还是「设备没上报」。
-	opt := hostOpticalFrom(params)
-	kept = append(kept,
-		kv{"收光", orDash(opt.Rx)},
-		kv{"发光", orDash(opt.Tx)},
-	)
+	// 光模块读数（收光 / 发光 / 温度 / 电压 / 偏流）：单独放在最后。
+	//
+	// 显示口径：**只要这台设备报过其中任意一项，就把这几行都列出来**，没报的那几项写 -。
+	// 一项都不报就整组不显示 —— 跟 FTTR / WAN 区块一个规矩，不给没有光口的设备
+	// 摆五行动 `-` 的空壳。
+	//
+	// 取值走映射表（各家私有参数名 + 原始值换算），没登记过的机型退回叶子名启发式。
+	fields := ResolvePanelFields(aliases, params)
+	anyReported := false
+	for _, f := range fields {
+		if strings.TrimSpace(f.Value) != "" {
+			anyReported = true
+			break
+		}
+	}
+	if anyReported {
+		for _, f := range fields {
+			kept = append(kept, kv{f.Field.Label, orDash(f.Value)})
+		}
+	}
 	return kept
 }
 

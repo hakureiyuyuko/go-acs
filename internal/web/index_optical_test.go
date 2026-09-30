@@ -78,7 +78,8 @@ func TestIndexShowsOpticalColumnsOnlyWhenReported(t *testing.T) {
 	if !strings.Contains(body2, "<th>收光</th>") || !strings.Contains(body2, "<th>发光</th>") {
 		t.Fatalf("有设备上报光功率时应该出现这两列")
 	}
-	if !strings.Contains(body2, "-15 dBm") || !strings.Contains(body2, "2 dBm") {
+	// 有寄存器原始值（254）时用它换算出来的精确读数；没有时才用整数近似值
+	if !strings.Contains(body2, "-15.95 dBm") || !strings.Contains(body2, "2.00 dBm") {
 		t.Errorf("报了的设备该显示读数：%s", body2)
 	}
 	if strings.Contains(body2, "254 dBm") {

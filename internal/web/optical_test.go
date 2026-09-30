@@ -23,7 +23,7 @@ func TestHostOpticalFrom(t *testing.T) {
 				p("InternetGatewayDevice.WANDevice.1.WANPONInterfaceConfig.OpticalRxPower", "-21.5"),
 				p("InternetGatewayDevice.WANDevice.1.WANPONInterfaceConfig.OpticalTxPower", "1.8"),
 			},
-			rx: "-21.5 dBm", tx: "1.8 dBm",
+			rx: "-21.50 dBm", tx: "1.80 dBm",
 			rxName: "InternetGatewayDevice.WANDevice.1.WANPONInterfaceConfig.OpticalRxPower",
 		},
 		{
@@ -40,7 +40,7 @@ func TestHostOpticalFrom(t *testing.T) {
 				p("InternetGatewayDevice.Optical.RxPowerRef", "-25.0"), // 先遇到，但不是光口
 				p("InternetGatewayDevice.WANDevice.1.WANPONInterfaceConfig.OpticalRxPower", "-21.5"),
 			},
-			rx: "-21.5 dBm", tx: "",
+			rx: "-21.50 dBm", tx: "",
 		},
 		{
 			what: "无线的发射功率不能被当成发光功率",
@@ -74,14 +74,14 @@ func TestHostOpticalFrom(t *testing.T) {
 				p("InternetGatewayDevice.Optical.Interface.1.TxPowerRaw", "16687"),
 				p("InternetGatewayDevice.Optical.Interface.1.TxPower", "2.1"),
 			},
-			rx: "-23.4 dBm", tx: "2.1 dBm",
+			rx: "-23.40 dBm", tx: "2.10 dBm",
 		},
 		{
 			what: "设备回了带单位的原值也能规整",
 			params: []store.Param{
-				p("InternetGatewayDevice.Optical.Interface.1.RxPower", "-23.4 dBm"),
+				p("InternetGatewayDevice.Optical.Interface.1.RxPower", "-23.40 dBm"),
 			},
-			rx: "-23.4 dBm",
+			rx: "-23.40 dBm",
 		},
 		{
 			what: "非数字（N/A / 空）不显示",
@@ -101,7 +101,7 @@ func TestHostOpticalFrom(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		got := hostOpticalFrom(c.params)
+		got := hostOpticalFrom(nil, c.params)
 		if got.Rx != c.rx || got.Tx != c.tx {
 			t.Errorf("%s：得到 Rx=%q Tx=%q，想要 Rx=%q Tx=%q", c.what, got.Rx, got.Tx, c.rx, c.tx)
 		}
@@ -116,18 +116,18 @@ func TestHostOpticalFrom(t *testing.T) {
 
 func TestOpticalValuePlausible(t *testing.T) {
 	ok := map[string]bool{
-		"-21.5":     true,
-		"2.1":       true,
-		"-40":       true,
-		"10":        true,
-		"-23.4 dBm": true,
-		"385":       false, // 私有百分比
-		"16687":     false, // 原始 ADC 值
-		"-100":      false, // 语音 Tone 那种量级
-		"":          false,
-		"-":         false,
-		"N/A":       false,
-		"abc":       false,
+		"-21.5":      true,
+		"2.1":        true,
+		"-40":        true,
+		"10":         true,
+		"-23.40 dBm": true,
+		"385":        false, // 私有百分比
+		"16687":      false, // 原始 ADC 值
+		"-100":       false, // 语音 Tone 那种量级
+		"":           false,
+		"-":          false,
+		"N/A":        false,
+		"abc":        false,
 	}
 	for v, want := range ok {
 		if got := opticalValuePlausible(v); got != want {

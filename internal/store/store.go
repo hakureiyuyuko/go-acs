@@ -112,6 +112,49 @@ var migrations = []string{
 	// 老版本的库跳过这一步（老库 user_version=2，只会执行 #3 及以后）。
 	`ALTER TABLE devices ADD COLUMN probe_count INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE devices ADD COLUMN probe_at TEXT NOT NULL DEFAULT ''`,
+	// 5：厂商私有参数 → 面板标准字段 的映射表（含原始值换算）。
+	//
+	// 为什么放库里：光功率/温度/电压这些参数**各家名字都不一样**，华为、中兴、烽火
+	// 各写各的；更坑的是同一台设备上还有按光模块寄存器（SFF-8472）编码的**原始值**
+	// （如 RXPower=254 其实是 -15.95 dBm）。这些知识写在代码里就得改代码、发版；
+	// 放库里以后支持一台新光猫只需加几行数据。
+	//
+	// field：面板字段规范名（见 internal/web 的 panelFields：rx_power / tx_power /
+	//        temperature / voltage / bias_current）
+	// match_contains / match_suffix：参数名（小写）必须满足的包含/后缀条件（两者都空 = 不匹配任何参数）
+	// decode：原始值换算（identity / dbm_01uw / div256 / mv / mv01 / ua2 …）
+	// priority：同一字段命中多条时数字大的优先（精确的原始值 > 整数级近似值）
+	`CREATE TABLE IF NOT EXISTS param_aliases (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  field          TEXT NOT NULL,
+  vendor         TEXT NOT NULL DEFAULT '',
+  match_contains TEXT NOT NULL DEFAULT '',
+  match_suffix   TEXT NOT NULL DEFAULT '',
+  decode         TEXT NOT NULL DEFAULT 'identity',
+  priority       INTEGER NOT NULL DEFAULT 0,
+  note           TEXT NOT NULL DEFAULT '',
+  enabled        INTEGER NOT NULL DEFAULT 1,
+  updated_at     TEXT NOT NULL DEFAULT '',
+  UNIQUE (field, match_contains, match_suffix)
+)`,
+	// 6：种子映射。
+	//
+	// 全是 2026-09-30 在真机上对出来的（联通版 V271-20，PON，V5R023C10S200）：
+	// `X_CU_WANEdgeONTPONInterfaceConfig.OpticalTransceiver.*` 那组是光模块寄存器原始值，
+	// 换算后与设备自己页面的读数**完全一致**（收光 -15.95 dBm / 发光 0.00 dBm /
+	// 温度 43.0 ℃ / 电压 3.226 V / 偏流 29.0 mA）；`X_GponInterafceConfig.*` 那组是
+	// 同一台设备的整数近似值（精确到个位），所以优先用前者。
+	`INSERT OR IGNORE INTO param_aliases (field, vendor, match_contains, match_suffix, decode, priority, note, updated_at) VALUES
+  ('rx_power',     'Huawei', 'opticaltransceiver.', '.rxpower',                'dbm_01uw', 20, '光模块寄存器原始值：254 → -15.95 dBm（与设备自己页面一致）', ''),
+  ('tx_power',     'Huawei', 'opticaltransceiver.', '.txpower',                'dbm_01uw', 20, '光模块寄存器原始值：10000 → 0.00 dBm', ''),
+  ('temperature',  'Huawei', 'opticaltransceiver.', '.temperature',            'div256',   20, '11008 → 43.0 ℃', ''),
+  ('voltage',      'Huawei', 'opticaltransceiver.', '.vcc',                    'mv01',     20, '32260 → 3.226 V', ''),
+  ('bias_current', 'Huawei', 'opticaltransceiver.', '.txbias',                 'ua2',      20, '14500 → 29.0 mA', ''),
+  ('rx_power',     'Huawei', 'x_gponinterafceconfig.', '.rxpower',             'identity', 10, '整数近似值（精确到个位）：-15', ''),
+  ('tx_power',     'Huawei', 'x_gponinterafceconfig.', '.txpower',             'identity', 10, '整数近似值：0', ''),
+  ('temperature',  'Huawei', 'x_gponinterafceconfig.', '.transceivertemperature', 'identity', 10, '43（℃）', ''),
+  ('voltage',      'Huawei', 'x_gponinterafceconfig.', '.supplyvoltage',       'mv',       10, '3226 mV → 3.226 V', ''),
+  ('bias_current', 'Huawei', 'x_gponinterafceconfig.', '.biascurrent',         'identity', 10, '29（mA）', '')`,
 }
 
 // migrate 把库升到当前版本。幂等：已升过的直接跳过。

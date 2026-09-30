@@ -358,8 +358,11 @@ func init() {
 		"保存":      "Save",
 
 		// ---- 设备详情页：主机收光 / 发光（基本信息里那两行）----
-		"收光": "Rx power",
-		"发光": "Tx power",
+		"收光":    "Rx power",
+		"发光":    "Tx power",
+		"光模块温度": "Optical module temperature",
+		"光模块电压": "Optical module voltage",
+		"光模块偏流": "Optical module bias current",
 
 		// ---- 无线编辑页 ----
 		"无线设置 ·": "Wi-Fi settings ·",

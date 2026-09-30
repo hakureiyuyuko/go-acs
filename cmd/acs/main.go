@@ -24,6 +24,14 @@ import (
 )
 
 func main() {
+	// 子命令：`acs alias …` 管理「厂商私有参数 → 面板字段」的映射表（不进服务端主流程）。
+	if len(os.Args) > 1 && os.Args[1] == "alias" {
+		if err := runAlias(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "失败:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "启动失败:", err)
 		os.Exit(1)

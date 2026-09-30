@@ -27,6 +27,10 @@ gateways: **onboard → inspect → configure → diagnose → manage sub-device
   when all probes fail (a powered-off device sends no TR-069 notification, so this is the only way to confirm)
 - **Operable**: persistent task queue, one-click device wake-up, reboot / delete device, a dedicated panel login
   page (session cookie, with logout), and retention limits for task and inform history
+- **Vendor-specific parameters have a mapping table**: every vendor names optical power / temperature
+  differently (and some report raw optical-module register values), so those mappings live in the
+  database (`param_aliases`) — supporting a new ONT is a few rows of data (`acs alias add`), and
+  unregistered models still fall back to leaf-name heuristics rather than showing nothing or invented numbers
 - **No command line needed to change listen ports**: after editing the addresses on the settings page, click
   “Restart the service now” and the process swaps itself (unchanged ports hand their sockets to the new
   process, so device informs never drop; a port that won't come up is rolled back on the spot)
@@ -42,8 +46,8 @@ online / probing / offline — and a 5-second auto-refresh toggle in the top-rig
 
 ![Overview](docs/images/overview.png)
 
-Basic information (including the host's Rx / Tx optical power), WAN connections, operations (wake / reboot /
-delete), notes; the same 5-second auto-refresh
+Basic information (including optical module readings: Rx / Tx power, temperature, voltage, bias current),
+WAN connections, operations (wake / reboot / delete), notes; the same 5-second auto-refresh
 toggle (shared with the list page) is in the top-right
 
 ![Device detail](docs/images/device.png)

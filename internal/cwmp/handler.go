@@ -295,6 +295,7 @@ type opticalProbe struct {
 // 这里只做**粗筛**（把名字捞回来），真正认不认得出收/发光交给 web.opticalField
 // 按语义判 —— 两边的清单要保持同步，改一边记得改另一边。
 var opticalLeafSuffixes = []string{
+	// 功率
 	".rxpower", ".txpower",
 	".rxpowerdbm", ".txpowerdbm",
 	".rx_power", ".tx_power",
@@ -304,6 +305,12 @@ var opticalLeafSuffixes = []string{
 	".x_hw_rxpower", ".x_hw_txpower",
 	".x_hw_rxpowerdbm", ".x_hw_txpowerdbm",
 	".receivepower",
+	// 光模块工作状态（温度/电压/偏流）：读数在同一个对象里，
+	// 一并取回来（真机 43 ℃ / 3.226 V / 29 mA，与设备自己页面一致）。
+	// 只在这两棵光口子树里按后缀筛，所以不会把别处的温度/电压误收进来。
+	".temperature", ".transceivertemperature",
+	".vcc", ".supplyvoltage",
+	".txbias", ".biascurrent",
 }
 
 // opticalProbes 给出「主机光功率可能在哪几棵子树」。

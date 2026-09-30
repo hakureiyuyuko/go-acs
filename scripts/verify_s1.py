@@ -1807,6 +1807,16 @@ def main():
                     break
                 time.sleep(1)
             check("带光功率的模拟设备已纳管", bool(d), d and d.get("SerialNumber"))
+
+            # 映射表（厂商私有参数 → 面板字段）得在库里，且种了华为那款光猫的实测映射
+            con = sqlite3.connect(f"file:{workdir}/acs.db?mode=ro", uri=True)
+            n_alias = con.execute("SELECT COUNT(*) FROM param_aliases WHERE enabled = 1").fetchone()[0]
+            decodes = {r[0] for r in con.execute(
+                "SELECT DISTINCT decode FROM param_aliases WHERE field IN ('rx_power','temperature','voltage')")}
+            con.close()
+            check("映射表 param_aliases 有种子数据", n_alias >= 10, n_alias)
+            check("种子映射带上了原始值换算规则",
+                  "dbm_01uw" in decodes and "div256" in decodes and "mv01" in decodes, decodes)
             h = ""
             if d:
                 did = d["ID"]
@@ -1823,17 +1833,23 @@ def main():
                     if got:
                         break
                 st, h = get(f"/devices/{did}")
-                check("「基本信息」里有收光功率", "收光" in h and "-15 dBm" in h, st)
-                check("「基本信息」里有发光功率", "发光" in h and "2 dBm" in h, st)
-                # 同一棵子树里还有个没换算的原始值（254 / 10000），不能当 dBm 显示
-                check("没换算的原始值不会被当成功率",
-                      "254 dBm" not in h and "10000 dBm" not in h, "")
+                # 光模块寄存器原始值要按映射表（param_aliases）换算成真实读数，
+                # 数值与设备自己页面一致：254 → -15.95 dBm、10000 → 0.00 dBm…
+                check("「基本信息」里有收光功率（按映射换算）", "收光" in h and "-15.95 dBm" in h, st)
+                check("「基本信息」里有发光功率（按映射换算）", "发光" in h and "0.00 dBm" in h, st)
+                check("「基本信息」里有光模块温度", "光模块温度" in h and "43.0 ℃" in h, st)
+                check("「基本信息」里有光模块电压", "光模块电压" in h and "3.226 V" in h, st)
+                check("「基本信息」里有光模块偏流", "光模块偏流" in h and "29.00 mA" in h, st)
+                # 原始寄存器值不能直接当 dBm/℃ 显示
+                check("没换算的原始值不会被当成读数",
+                      "254 dBm" not in h and "10000 dBm" not in h
+                      and "11008 ℃" not in h and "32260 V" not in h, "")
                 # 同一个设备也要出现在**列表页**：有设备报光功率时那两列才显示
                 st, ihtml = get("/")
                 check("列表页出现「收光 / 发光」两列",
                       "<th>收光</th>" in ihtml and "<th>发光</th>" in ihtml, "")
                 check("列表页显示收 / 发光读数",
-                      "-15 dBm" in ihtml and "2 dBm" in ihtml, "")
+                      "-15.95 dBm" in ihtml and "0.00 dBm" in ihtml, "")
                 check("列表页不把没换算的原始值当成功率", "254 dBm" not in ihtml, "")
         finally:
             sim.terminate()

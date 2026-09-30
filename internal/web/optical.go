@@ -1,7 +1,6 @@
 package web
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/hakureiyuyuko/go-acs/internal/store"
@@ -53,32 +52,19 @@ var opticalGoodPath = []string{"pon", "optical", "opm", ".optic"}
 //  4. 同一方向多个候选：优先路径里有 pon/optical 的，其次取先遇到的。
 //
 // 都认不出就返回空，界面不显示这两行或显示 -，**不编数字**。
-func hostOpticalFrom(params []store.Param) HostOptical {
+// hostOpticalFrom 从设备已采集的参数里认出主机自己的收光 / 发光。
+//
+// 优先走**映射表**（store.ParamAlias：各家私有参数名 + 原始值换算，验证过的机型都在库里），
+// 没命中任何映射的新机型退回兜底启发式（按叶子名认方向，见 heuristicValue）。
+// 两条路都不成就是空，界面显示 -，**不编数字**。
+func hostOpticalFrom(aliases []store.ParamAlias, params []store.Param) HostOptical {
 	var out HostOptical
-	var rxScore, txScore int
-	for _, p := range params {
-		rx, tx := opticalField(p.Name)
-		if !rx && !tx {
-			continue
-		}
-		low := strings.ToLower(p.Name)
-		if containsAny(low, opticalDenyPath) {
-			continue
-		}
-		v := strings.TrimSpace(p.Value)
-		if !opticalValuePlausible(v) {
-			continue
-		}
-		shown := withDbm(v)
-		score := 1
-		if containsAny(low, opticalGoodPath) {
-			score = 2
-		}
-		if rx && score > rxScore {
-			out.Rx, out.RxName, rxScore = shown, p.Name, score
-		}
-		if tx && score > txScore {
-			out.Tx, out.TxName, txScore = shown, p.Name, score
+	for _, rf := range ResolvePanelFields(aliases, params) {
+		switch rf.Field.Key {
+		case "rx_power":
+			out.Rx, out.RxName = rf.Value, rf.Name
+		case "tx_power":
+			out.Tx, out.TxName = rf.Value, rf.Name
 		}
 	}
 	return out
@@ -97,13 +83,12 @@ func containsAny(s string, subs []string) bool {
 //
 // 光功率大致落在 -40 ~ +10 dBm（再高要烧模块，再低基本收不到光）。
 // 落在这个区间外的，多半不是功率本身（百分比、原始寄存器值），不显示。
+//
+// 注意：现在这道闸的主战场搬到了 ResolvePanelFields（每个字段都有自己的区间）；
+// 这个函数留给 FTTR 子设备那套与测试用。
 func opticalValuePlausible(v string) bool {
-	s := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(v), "dBm"))
-	if s == "" || s == "-" || strings.EqualFold(s, "n/a") {
-		return false
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+	f, ok := decodeRaw("identity", v)
+	if !ok {
 		return false
 	}
 	return f >= -40 && f <= 10

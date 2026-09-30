@@ -471,12 +471,21 @@ func (s *simulator) buildParams(root, specVersion string) {
 	// 界面必须选中前者，后者不能被当成 dBm 显示。
 	// 名字与真机实测一致（2026-09-30）。
 	if s.optical {
+		// 整数近似值那一组（真机是 -15 / 0 / 43 / 3226 / 29）
 		pon := root + "WANDevice.1.X_GponInterafceConfig."
 		set(pon+"RXPower", "-15", "int")
-		set(pon+"TXPower", "2", "int")
+		set(pon+"TXPower", "0", "int")
 		set(pon+"TransceiverTemperature", "43", "int")
-		set(root+"WANDevice.1.X_CU_WANEdgeONTPONInterfaceConfig.OpticalTransceiver.RXPower", "254", "unsignedInt")
-		set(root+"WANDevice.1.X_CU_WANEdgeONTPONInterfaceConfig.OpticalTransceiver.TXPower", "10000", "unsignedInt")
+		set(pon+"SupplyVoltage", "3226", "int")
+		set(pon+"BiasCurrent", "29", "int")
+		// 光模块寄存器原始值那一组（SFF-8472 编码，界面要按映射表换算：
+		// 收光 -15.95 dBm / 发光 0.00 dBm / 43.0 ℃ / 3.226 V / 29.0 mA）
+		tr := root + "WANDevice.1.X_CU_WANEdgeONTPONInterfaceConfig.OpticalTransceiver."
+		set(tr+"RXPower", "254", "int")
+		set(tr+"TXPower", "10000", "int")
+		set(tr+"Temperature", "11008", "int")
+		set(tr+"Vcc", "32260", "int")
+		set(tr+"TXBias", "14500", "int")
 	}
 
 	// 无线参数。
