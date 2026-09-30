@@ -32,7 +32,10 @@ type WifiBand struct {
 	On     bool // 射频是否开着
 	HaveOn bool // 是否知道开关状态（设备没报就不知道）
 
-	Empty bool // 实例存在但没采到任何字段
+	// Empty 表示这个实例存在但没采到任何字段（SSID/信道/标准/状态全空）。
+	// WifiOverview 会把这种实例**丢掉不显示** —— 真机上的假实例（射频对象被
+	// 当成 SSID 实例）就是这么冒出来的，见 wifiEnrichOnly。
+	Empty bool
 
 	// ClientsAll / SubClients：终端数的「合计」与其中来自 FTTR 子设备的部分。
 	// **必须把子设备的终端算进来**：真机上主机自己的 WLAN 一台终端都没有，
@@ -40,7 +43,7 @@ type WifiBand struct {
 	ClientsAll int
 	SubClients int
 	// ModalID 非空时，「终端」那一格可以点开对应频段的终端弹窗。
-	// 同一频段有多行（真机上有一行没 SSID 的空实例）时，子机数量只算在有 SSID 的那行，
+	// 同一实例可能在参数里出现多次（不同字段多个参数），子机数量只算在有 SSID 的那一行，
 	// 否则同一台子设备会被重复计入。
 	ModalID string
 	// HasClientsBtn：这一格是渲染成按钮还是纯数字 —— 只有真有终端时才做成按钮。
@@ -53,7 +56,20 @@ type WifiBand struct {
 // 比如 PreSharedKey.1.KeyPassphrase；只取最后一段会把这种参数整个漏掉。
 // 同时兼容 TR-098 的 WLANConfiguration.{i}.x 与 TR-181 的
 // WiFi.Radio.{i}.x / WiFi.SSID.{i}.x / WiFi.AccessPoint.{i}.x。
-var wifiInstanceRe = regexp.MustCompile(`(?i)(?:WLANConfiguration|Radio|SSID|AccessPoint)\.(\d+)\.(.+)$`)
+var wifiInstanceRe = regexp.MustCompile(`(?i)(WLANConfiguration|Radio|SSID|AccessPoint)\.(\d+)\.(.+)$`)
+
+// wifiEnrichOnly 判断这个容器是不是「只能用来补充已有实例」的。
+//
+// Radio. / AccessPoint. 是**射频 / 接入点**一级的对象，不是「一个 SSID」：
+// TR-181 里它们跟 SSID.{i} 同实例号，合并进来正好；但华为的 TR-098 设备另有
+// `LANDevice.1.WiFi.Radio.{i}`（射频对象，编号是 1/2），跟 `WLANConfiguration.{i}`
+// 的编号（真机是 1/5）**不是一回事** —— 按实例号硬合并就会凭空多出一行
+// 「5G ｜ - ｜ 开 ｜ -」（用户看到的就是这个）。
+// 所以它们只允许补充已有实例，不能自己造一行。
+func wifiEnrichOnly(container string) bool {
+	c := strings.ToLower(container)
+	return c == "radio" || c == "accesspoint"
+}
 
 // isSubDeviceWifi 判断这个参数是不是 FTTR 子设备自己的无线参数。
 //
@@ -71,9 +87,9 @@ func WifiOverview(params []store.Param) []WifiBand {
 	}
 	byInst := map[int]*acc{}
 
-	touch := func(a *acc, p store.Param) {
-		if p.UpdatedAt.After(a.band.Updated) {
-			a.band.Updated = p.UpdatedAt
+	touch := func(a *acc, upd time.Time) {
+		if upd.After(a.band.Updated) {
+			a.band.Updated = upd
 		}
 	}
 
@@ -86,23 +102,8 @@ func WifiOverview(params []store.Param) []WifiBand {
 		return a
 	}
 
-	for _, p := range params {
-		if isSubDeviceWifi(p.Name) {
-			continue
-		}
-		m := wifiInstanceRe.FindStringSubmatch(p.Name)
-		if m == nil {
-			continue
-		}
-		inst, err := strconv.Atoi(m[1])
-		if err != nil {
-			continue
-		}
-		field := strings.ToLower(m[2])
-		a := get(inst)
-		touch(a, p)
-		v := strings.TrimSpace(p.Value)
-
+	// apply 把一个字段落到某个实例上。
+	apply := func(a *acc, field, v string) {
 		switch field {
 		case "ssid":
 			// TR-181 里 Device.WiFi.SSID.{i}.SSID 也是这个字段名，直接取
@@ -151,6 +152,50 @@ func WifiOverview(params []store.Param) []WifiBand {
 		}
 	}
 
+	// 射频 / 接入点参数先攒着，等主循环建完实例再补充（参数顺序是数据库给的，
+	// 可能先遇到 Radio.2 再遇到 SSID.2）
+	type pendingField struct {
+		inst  int
+		field string
+		value string
+		upd   time.Time
+	}
+	var pending []pendingField
+
+	for _, p := range params {
+		if isSubDeviceWifi(p.Name) {
+			continue
+		}
+		m := wifiInstanceRe.FindStringSubmatch(p.Name)
+		if m == nil {
+			continue
+		}
+		inst, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		field := strings.ToLower(m[3])
+		v := strings.TrimSpace(p.Value)
+
+		if wifiEnrichOnly(m[1]) {
+			pending = append(pending, pendingField{inst: inst, field: field, value: v, upd: p.UpdatedAt})
+			continue
+		}
+		a := get(inst)
+		touch(a, p.UpdatedAt)
+		apply(a, field, v)
+	}
+
+	// 补充：射频 / 接入点的字段只落到**已经存在**的实例上，不自己造行
+	for _, e := range pending {
+		a, ok := byInst[e.inst]
+		if !ok {
+			continue
+		}
+		touch(a, e.upd)
+		apply(a, e.field, e.value)
+	}
+
 	out := make([]WifiBand, 0, len(byInst))
 	for _, a := range byInst {
 		b := a.band
@@ -158,6 +203,10 @@ func WifiOverview(params []store.Param) []WifiBand {
 		b.Label = bandLabel(b.Band, b.Instance)
 		b.Note = bandNote(b.Label, b.Band)
 		b.Empty = b.SSID == "" && b.Channel == "" && b.Standard == "" && b.Status == ""
+		// 什么都没有的实例不显示（不摆空壳）——真机上的假实例就是这么冒出来的
+		if b.Empty {
+			continue
+		}
 		out = append(out, b)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -228,14 +277,15 @@ func wifiInstanceParams(inst int, params []store.Param) []wifiParam {
 			continue
 		}
 		loc := wifiInstanceRe.FindStringSubmatchIndex(p.Name)
-		if loc == nil || len(loc) < 6 {
+		// 三组：容器名 / 实例号 / 剩余路径（见 wifiInstanceRe）
+		if loc == nil || len(loc) < 8 {
 			continue
 		}
-		n, err := strconv.Atoi(p.Name[loc[2]:loc[3]])
+		n, err := strconv.Atoi(p.Name[loc[4]:loc[5]])
 		if err != nil || n != inst {
 			continue
 		}
-		out = append(out, wifiParam{P: p, Rel: strings.ToLower(p.Name[loc[4]:loc[5]])})
+		out = append(out, wifiParam{P: p, Rel: strings.ToLower(p.Name[loc[6]:loc[7]])})
 	}
 	return out
 }
@@ -256,6 +306,10 @@ func matchCandidate(rel, candidate string) bool {
 }
 
 // WifiInstances 返回参数里出现过的所有无线实例号（升序）。
+//
+// 只认 SSID 那一级的实例（WLANConfiguration.{i} / TR-181 SSID.{i}）：射频对象
+// （华为 TR-098 的 WiFi.Radio.{i}）编号跟 SSID 实例号不是一回事，把它算进来会多出
+// 一个没有内容的「实例」，详情页上就多一行点开来什么都没有的空行。
 func WifiInstances(params []store.Param) []int {
 	seen := map[int]bool{}
 	for _, p := range params {
@@ -263,10 +317,10 @@ func WifiInstances(params []store.Param) []int {
 			continue
 		}
 		m := wifiInstanceRe.FindStringSubmatch(p.Name)
-		if m == nil {
+		if m == nil || wifiEnrichOnly(m[1]) {
 			continue
 		}
-		if n, err := strconv.Atoi(m[1]); err == nil {
+		if n, err := strconv.Atoi(m[2]); err == nil {
 			seen[n] = true
 		}
 	}

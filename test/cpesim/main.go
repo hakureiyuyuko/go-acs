@@ -559,6 +559,15 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(wlan+"5.AssociatedDevice.1.RSSI", "-52", "string")
 		set(wlan+"5.AssociatedDevice.1.FrequencyWidth", "160MHz", "string")
 
+		// 射频对象（真机华为 HN8145X6N / V271-20 都有）：`LANDevice.1.WiFi.Radio.{i}`，
+		// 编号是 1/2，跟 SSID 实例号（1/5）**对不上**。以前按实例号硬合并，
+		// 会凭空多出一行「5G ｜ - ｜ 开 ｜ -」的无效显示（用户 2026-09-30 截图就是这个）。
+		radio := root + "LANDevice.1.WiFi.Radio."
+		set(radio+"1.Enable", "1", "boolean")
+		set(radio+"1.OperatingFrequencyBand", "2.4GHz", "string")
+		set(radio+"2.Enable", "1", "boolean")
+		set(radio+"2.OperatingFrequencyBand", "5GHz", "string")
+
 		// 主机列表（TR-098）：终端名靠它按 MAC 对出来（关联终端表里通常没有名字）
 		hosts := root + "LANDevice.1.Hosts."
 		set(hosts+"Host.1.MACAddress", "02:00:00:00:00:B1", "string")

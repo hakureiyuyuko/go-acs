@@ -467,6 +467,12 @@ def main():
               [n for n in names if "WLAN" in n][:3])
         check("自动采集到了频段（X_HW_RFBand）",
               any(n.endswith("X_HW_RFBand") for n in names))
+        # 射频对象（WiFi.Radio.{i}）的编号跟 SSID 实例号对不上（真机是 1/2 与 1/5），
+        # 按实例号硬合并会凭空造出一个「5G ｜ - ｜ 开 ｜ -」的假实例（用户截图见过）
+        st, dhtml = get(f"/devices/{d98[0]['ID']}")
+        sec = dhtml.split("无线（WiFi）", 1)[1].split("<h2>", 1)[0] if "无线（WiFi）" in dhtml else ""
+        check("无线概况不把射频对象当成 SSID 实例", "/wifi/2" not in sec, sec[:160])
+        check("无线概况仍然列出 1 与 5 两个实例", "/wifi/1" in sec and "/wifi/5" in sec, "")
         # 只取摘要字段 + 关联终端（弹窗要看「谁连上来」），
         # 不能把整棵几百个参数的子树拉回来。条数会随已连终端数变化，所以上限给得宽松：
         # 只有在明显把整棵子树都拉回来时才算失败。
