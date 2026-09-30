@@ -1,6 +1,6 @@
 [Unit]
 Description=轻量 TR-069 ACS（CWMP 管理光猫 / FTTR）
-Documentation=https://github.com/qwe3017/go-acs
+Documentation=https://github.com/hakureiyuyuko/go-acs
 After=network-online.target
 Wants=network-online.target
 

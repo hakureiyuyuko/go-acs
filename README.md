@@ -5,7 +5,7 @@
 单二进制、零外部中间件的 TR-069/CWMP ACS（Go + SQLite），用来管一批光猫 / FTTR 主机：
 **纳管 → 看信息 → 改配置 → 诊断 → 子设备与终端管理**。
 
-![CI](https://github.com/qwe3017/go-acs/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/hakureiyuyuko/go-acs/actions/workflows/ci.yml/badge.svg)
 ![Go](https://img.shields.io/badge/Go-1.27-00ADD8)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -56,7 +56,7 @@ FTTR 子设备与网络诊断：子设备的型号、组网模式、光功率与
 
 ## 安装（Release 包）
 
-从 [Releases](https://github.com/qwe3017/go-acs/releases) 下对应架构的包，解压后一条命令装成 systemd 服务：
+从 [Releases](https://github.com/hakureiyuyuko/go-acs/releases) 下对应架构的包，解压后一条命令装成 systemd 服务：
 
 ```bash
 VERSION=1.2.2                                   # 换成你下载的那个版本
@@ -89,15 +89,19 @@ go build -o acs ./cmd/acs        # Go 1.27+；CGO_ENABLED=0 可得到静态二�
 scripts/build-release.sh v1.2.2   # 产物在 dist/：amd64 + arm64 的 tar.gz 与 SHA256SUMS
 ```
 
-CI 与发版都在 GitHub Actions 里：
+CI 在 GitHub Actions 里：
 
 | 工作流 | 触发时机 | 干什么 |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | 每次 push / PR | gofmt + `go vet`、`-race` 单测与覆盖率、linux/darwin/windows 交叉编译、S1 端到端验收 |
-| `.github/workflows/release.yml` | push `v*` tag（也可手动触发） | 先跑 vet + 单测 + S1，通过后才打 amd64/arm64 发布包与 SHA256SUMS，自动建 Release 上传 |
 
-发版就是打个 tag：`git tag v1.3.0 && git push origin v1.3.0`。Release 说明优先取 `docs/releases/v1.3.0.md`，
-文件不存在时退回 GitHub 自动生成的提交记录；版本号带 `-rc` / `-beta` / `-alpha` 会自动标成预发布。
+**发版是手动确认的**，不走 tag 自动触发 —— 什么时候发、发哪个版本，由维护者决定：
+
+```bash
+scripts/build-release.sh v1.2.2   # 产物在 dist/：amd64 + arm64 的 tar.gz 与 SHA256SUMS
+```
+
+产物核对无误后，由维护者手动建 Release 上传。发布说明写在 `docs/releases/<版本>.md`。
 
 设备侧的 ACS URL 填 `http://<IP>:9090/acs`；真机里也见过配成根路径 `/` 的，所以两者都收。
 面板挪到独立端口（`-web-listen :8080`）时，CWMP 那侧**任何路径都受理**，不用担心运营商定制设备的路径写法。

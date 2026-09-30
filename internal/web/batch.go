@@ -111,40 +111,44 @@ func filterBands(bands []WifiBand, band string) []WifiBand {
 	return out
 }
 
-// batchFieldValue 取出表单里某个字段要写的值。
+// batchFieldValue 取出表单里某个字段要写的值，以及这一项到底改不改。
 //
-// 返回 ok=false 表示「这一项不改」：密码留空、文本框留空、布尔项没表态都是这个意思 ——
-// 批量下发最怕手滑把几十台设备的 SSID 清空，所以空值一律不下发。
+// 返回 write=false 表示「这一项不动」：密码留空、文本框留空、布尔项选了「不改」，
+// 都是这个意思 —— 批量下发最怕手滑把几十台设备的 SSID 清空，所以空值一律不下发。
 //
-// 【踩过的坑】bool 字段原来是无条件返回 "1"/"0"：勾了「改」但**没勾值**时
-// 返回 "0"，于是「勾了改、忘了勾启用」会被当成「要关掉无线」下发下去；
-// 而勾了值（"1"）时又因为设备原值本来就是 1，被「值没变化」判定吃掉，
-// 表现为「勾了启用却什么都没发生」。现在改成三态：
-//   - 勾了值     → "1"（启用）
-//   - 只有 use_  → "0"（关闭，这是明确的表态）
-//   - 两个都没勾 → ok=false（不改）
+// 【布尔项是三态，不再拆成两个复选框】
 //
-// 但有个浏览器现实：bool 的「值」是个独立 checkbox，用户很可能只勾 use_ 不勾值，
-// 那到底是想关还是忘勾？—— 这个分不出来，所以模板那边会要求「勾了改就必须勾值」，
-// 见 wifi_batch.html 里的 required 校验。
-func batchFieldValue(form url.Values, def wifiFieldDef, field WifiFormField) (string, bool) {
+//	值 "1" → 启用
+//	值 "0" → 关闭
+//	空 / 没这个参数 → 不改
+//
+// 为什么必须三态：早先是「改」和「值」两个并列的独立复选框，
+// 只勾「改」不勾值时服务端分不出「想关」还是「忘勾」—— 于是前端把这种提交
+// 拦下来弹窗，结果**批量关不掉无线**（只能开），和单设备页（取消勾选就写 0）
+// 不一致。用一个 select 让使用者明确三选一，服务端就不用猜，前端也不用拦。
+//
+// 非布尔字段仍然沿用「先勾『改』再填值」：那种字段的空值是有意义的
+// （比如信道留空 = 不碰），两个控件分工清楚。
+func batchFieldValue(form url.Values, def wifiFieldDef) (string, bool) {
 	key := "v_" + def.key
-	switch def.kind {
-	case "bool":
-		if _, present := form[key]; present {
+	if def.kind == "bool" {
+		switch strings.TrimSpace(form.Get(key)) {
+		case "1":
 			return "1", true
-		}
-		if _, use := form["use_"+def.key]; use {
+		case "0":
 			return "0", true
 		}
-		return "", false
-	default:
-		v := strings.TrimSpace(form.Get(key))
-		if v == "" {
-			return "", false
-		}
-		return v, true
+		return "", false // 空 / 没提交 = 不改
 	}
+	// 其它字段：先勾「改」才算表态
+	if _, on := form["use_"+def.key]; !on {
+		return "", false
+	}
+	v := strings.TrimSpace(form.Get(key))
+	if v == "" {
+		return "", false
+	}
+	return v, true
 }
 
 // batchSets 拼出一台设备这次要写的全部参数。
@@ -158,8 +162,11 @@ func batchSets(form url.Values, wifiParams []store.Param, bands []WifiBand) (set
 	for _, b := range bands {
 		fields := WifiForm(b.Instance, wifiParams)
 		for _, def := range wifiFieldDefs {
-			if _, on := form["use_"+def.key]; !on {
-				continue
+			// 布尔项的「改不改」由它自己的三态 select 决定；
+			// 其它字段要先勾「改」（use_）才算表态。
+			v, write := batchFieldValue(form, def)
+			if !write {
+				continue // 没表态 = 不改
 			}
 			f, ok := findWifiField(fields, def.key)
 			if !ok {
@@ -168,10 +175,6 @@ func batchSets(form url.Values, wifiParams []store.Param, bands []WifiBand) (set
 					missing = append(missing, def.label)
 				}
 				continue
-			}
-			v, ok := batchFieldValue(form, def, f)
-			if !ok {
-				continue // 空值 / 没表态 = 不改
 			}
 			// 布尔字段（启用 / 射频开关这类）**不跳过「值没变化」**。
 			//

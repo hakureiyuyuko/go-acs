@@ -211,45 +211,14 @@ function wireModals() {
 function wireConfirms() {
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (e) {
-      // 布尔项（启用/禁用这种）单独一个 checkbox 当「值」，很容易只勾了「改」
-      // 却忘了勾值 —— 那种情况到底是想关还是忘勾，服务端分不出来，
-      // 所以宁可拦下来让用户明确表态，也不要悄悄把无线关掉。
-      var missing = boolFieldsMissingValue(form);
-      if (missing.length) {
-        e.preventDefault();
-        window.alert(t("这些项勾了「改」但没勾「启用」，请补上或取消勾选：") + missing.join("、"));
-        return;
-      }
+      // 布尔项现在是三态 select（不改 / 启用 / 关闭），使用者已经明确表态了，
+      // 这里不再替他判断 —— 早先拦「只勾改不勾值」那道闸把「批量关掉无线」
+      // 也一起拦没了，跟单设备页（取消勾选就写 0）对不上。
       if (!window.confirm(form.getAttribute("data-confirm"))) {
         e.preventDefault();
       }
     });
   });
-}
-
-// boolFieldsMissingValue 找出「只勾了 use_ 没勾值」的布尔项，返回它们的中文标签。
-//
-// 标签从表头那一列的 .wlabel 里取（那是模板渲染好的当前语言文本），
-// 这样英文界面下提示也是英文。
-function boolFieldsMissingValue(form) {
-  var out = [];
-  form.querySelectorAll("input.bool-value").forEach(function (valBox) {
-    if (valBox.checked) return;
-    var key = valBox.getAttribute("name"); // v_xxx
-    var useBox = form.querySelector('input[name="use_' + key.slice(2) + '"]');
-    if (!useBox || !useBox.checked) return;
-    var row = valBox.parentNode;
-    while (row && row !== form && !(row.classList && row.classList.contains("wrow"))) {
-      row = row.parentNode;
-    }
-    var label = "";
-    if (row) {
-      var el = row.querySelector(".wlabel span");
-      if (el) label = el.textContent.trim();
-    }
-    out.push(label || key.slice(2));
-  });
-  return out;
 }
 
 // ---------- 日间 / 夜间模式 ----------

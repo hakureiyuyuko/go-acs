@@ -67,6 +67,12 @@
                {{if index $.Selected $d.ID}}checked{{end}}>
         <span>{{$d.DisplayName}}</span>
         <span class="mono hint">{{$d.SerialNumber}}</span>
+        {{/* 离线设备照样能勾（服务端照旧入队，下发完顺手唤醒一次），
+             但得让人知道自己在给哪些离线设备排队 —— 跟详情页「离线设备按钮变灰」
+             是两回事，这里刻意不禁用，只标注。 */}}
+        {{if $d.Probing}}<span class="badge probing" title='{{T "超过 %d 秒周期的 2 倍没上报，已主动探测 %d 次" $d.PeriodicInterval $d.ProbeCount}}'>{{T "探测中"}}</span>
+        {{else if $d.Online}}<span class="badge on">{{T "在线"}}</span>
+        {{else}}<span class="badge off" title="{{T "离线设备也可以勾选：任务会排队，下发后顺手唤醒一次"}}">{{T "离线"}}</span>{{end}}
       </label>
       {{end}}
     </div>
@@ -93,21 +99,30 @@
     {{range $f := .Fields}}
     <div class="wrow">
       <div class="wlabel">
+        {{if eq $f.Kind "bool"}}
+        {{/* 布尔项是三态：改不改由右边那个 select 一锤定音。
+             这里不再放「改」勾选框 —— 「改」+「值」两个并列复选框会让
+             「只勾改不勾值」分不出是想关还是忘勾，最后只能靠前端拦，
+             结果批量关不掉无线，和单设备页（取消勾选就写 0）对不上。 */}}
+        <span>{{TS $f.Label}}</span>
+        {{else}}
         <label class="chk">
           <input type="checkbox" class="use-check" name="use_{{$f.Key}}" value="1">
           <span>{{TS $f.Label}}</span>
         </label>
+        {{end}}
         {{if lt $f.Support $f.Combos}}
         <div class="hint">{{T "%d / %d 个频段支持" $f.Support $f.Combos}}</div>
         {{end}}
       </div>
       <div class="winput">
         {{if eq $f.Kind "bool"}}
-          <label class="chk">
-            <input type="checkbox" class="bool-value" name="v_{{$f.Key}}" value="1">
-            <span>{{T "启用"}}</span>
-          </label>
-          <span class="hint">{{T "要改这一项就必须勾「启用」（想让无线关掉时，勾上面再勾这里，然后把本项也勾上）"}}</span>
+          <select name="v_{{$f.Key}}" class="bool-tri">
+            <option value="">{{T "（不改）"}}</option>
+            <option value="1">{{T "启用"}}</option>
+            <option value="0">{{T "停用"}}</option>
+          </select>
+          <span class="hint">{{T "默认「不改」；要打开选「启用」，要关掉选「停用」。"}}</span>
         {{else if eq $f.Kind "select"}}
           <select name="v_{{$f.Key}}">
             <option value="">{{T "（不改）"}}</option>

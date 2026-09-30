@@ -1,7 +1,7 @@
 # 轻量 TR-069 ACS —— 安装包
 
 单二进制、零外部中间件的 TR-069/CWMP ACS（管理光猫 / FTTR 主机）。
-项目与源码：https://github.com/qwe3017/go-acs
+项目与源码：https://github.com/hakureiyuyuko/go-acs
 
 ## 包里有什么
 

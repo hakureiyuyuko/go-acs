@@ -27,6 +27,13 @@ type ColDef struct {
 }
 
 // overviewColDefs 的顺序就是表格里的列顺序。
+//
+// 【默认勾哪些】只勾这个特性之前就有的那几列；ip / rx / tx 是这轮新增的，
+// **默认不勾**：
+//   - 这个特性的动机就是「真机上十来列就得横向滚」，默认全勾反而更宽，跟动机对着干；
+//   - rx / tx 勾了才查光功率，而那条查询是按名字 LIKE 粗筛的全表扫
+//     （47 万行量级约 390ms/次），叠上 5 秒自动刷新和单连接，默认全勾等于
+//     每次打开概览页都去跟写入瓶颈抢那一条连接 —— 见 wantOptical。
 var overviewColDefs = []ColDef{
 	{Key: "status", Label: "状态", On: true},
 	{Key: "note", Label: "备注", On: true},
@@ -35,10 +42,10 @@ var overviewColDefs = []ColDef{
 	{Key: "model", Label: "数据模型", On: true},
 	{Key: "lastinform", Label: "最后上报", On: true},
 	{Key: "params", Label: "参数", On: true},
-	{Key: "ip", Label: "上报 IP", On: true},
+	{Key: "ip", Label: "上报 IP", On: false},
 	{Key: "clients", Label: "无线终端", On: true},
-	{Key: "rx", Label: "收光", On: true, Hint: "设备上报的接收光功率（没上报显示 -）"},
-	{Key: "tx", Label: "发光", On: true, Hint: "设备上报的发送光功率（没上报显示 -）"},
+	{Key: "rx", Label: "收光", On: false, Hint: "设备上报的接收光功率（没上报显示 -）"},
+	{Key: "tx", Label: "发光", On: false, Hint: "设备上报的发送光功率（没上报显示 -）"},
 }
 
 // colDefsFor 给模板用的列定义（已按当前语言译好标签与提示）。

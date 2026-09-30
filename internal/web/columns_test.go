@@ -24,9 +24,16 @@ func TestParseCols(t *testing.T) {
 	if len(def) == 0 {
 		t.Error("default 应解析出至少一列")
 	}
-	for _, k := range []string{"status", "serial", "clients", "rx", "tx"} {
+	for _, k := range []string{"status", "serial", "clients", "lastinform", "params"} {
 		if !def[k] {
 			t.Errorf("默认应包含 %q：%+v", k, def)
+		}
+	}
+	// 新增的三列默认不勾：默认全勾会让表格更宽（跟「列太宽要横向滚」的动机对着干），
+	// 而且 rx / tx 勾了就要跑一次全表扫的光功率查询 —— 默认不该每次打开概览页都跑。
+	for _, k := range []string{"ip", "rx", "tx"} {
+		if def[k] {
+			t.Errorf("新增列 %q 默认不该勾：%+v", k, def)
 		}
 	}
 	got := parseCols("serial,rx, tx")

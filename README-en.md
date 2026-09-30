@@ -5,7 +5,7 @@
 A single-binary, zero-external-dependency TR-069/CWMP ACS (Go + SQLite) for managing a fleet of ONTs / FTTR
 gateways: **onboard → inspect → configure → diagnose → manage sub-devices and clients**.
 
-![CI](https://github.com/qwe3017/go-acs/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/hakureiyuyuko/go-acs/actions/workflows/ci.yml/badge.svg)
 ![Go](https://img.shields.io/badge/Go-1.27-00ADD8)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -68,7 +68,7 @@ Settings: listen addresses for the ACS and the panel, plus the panel login crede
 ## Install (release package)
 
 Download the package for your architecture from
-[Releases](https://github.com/qwe3017/go-acs/releases), extract it, and install it as a systemd service
+[Releases](https://github.com/hakureiyuyuko/go-acs/releases), extract it, and install it as a systemd service
 with one command:
 
 ```bash
@@ -103,16 +103,20 @@ Building release packages:
 scripts/build-release.sh v1.2.2   # output in dist/: amd64 + arm64 tarballs and SHA256SUMS
 ```
 
-CI and releases both run in GitHub Actions:
+CI runs in GitHub Actions:
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | every push / PR | gofmt + `go vet`, `-race` tests with coverage, linux/darwin/windows cross builds, S1 end-to-end verification |
-| `.github/workflows/release.yml` | pushing a `v*` tag (also manual) | runs vet + tests + S1 first, then builds amd64/arm64 packages + SHA256SUMS and publishes the Release |
 
-Cutting a release is just a tag: `git tag v1.3.0 && git push origin v1.3.0`. Release notes are taken from
-`docs/releases/v1.3.0.md` when present, otherwise GitHub generates them from commits. Versions containing
-`-rc` / `-beta` / `-alpha` are flagged as pre-releases.
+**Releases are cut manually**, not triggered by a tag — the maintainer decides what to ship and when:
+
+```bash
+scripts/build-release.sh v1.2.2   # output in dist/: amd64 + arm64 tarballs and SHA256SUMS
+```
+
+The maintainer publishes the Release by hand once the artifacts check out. Release notes live in
+`docs/releases/<version>.md`.
 
 On the device side, set the ACS URL to `http://<IP>:9090/acs`; real devices have also been seen configured with
 the root path `/`, so both are accepted. When the panel is moved to its own port (`-web-listen :8080`), the CWMP

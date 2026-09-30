@@ -158,7 +158,9 @@ func TestBatchSetsUnchangedSkipped(t *testing.T) {
 func TestBatchSetsBool(t *testing.T) {
 	params := huaweiWifiParams()
 	bands := WifiOverview(params)
-	form := url.Values{"use_radio": {"1"}, "v_radio": {"1"}}
+
+	// 三态 select 选「启用」→ 写 1
+	form := url.Values{"v_radio": {"1"}}
 	sets, _ := batchSets(form, params, bands)
 	if len(sets) != 2 {
 		t.Fatalf("两个频段的射频开关都要下发，得到 %d：%+v", len(sets), sets)
@@ -169,19 +171,27 @@ func TestBatchSetsBool(t *testing.T) {
 		}
 	}
 
-	// 只勾「改」不勾值 = 明确要关
-	form = url.Values{"use_radio": {"1"}}
+	// 三态 select 选「停用」→ 写 0。
+	// 【评审要点】批量必须真的关得掉无线：早先服务端有这条分支，
+	// 但前端把「勾了改没勾值」的提交拦了，结果批量只能开不能关，
+	// 与单设备页（取消勾选就写 0）不一致。
+	form = url.Values{"v_radio": {"0"}}
 	sets, _ = batchSets(form, params, bands)
 	if len(sets) != 2 {
-		t.Fatalf("两个频段都要下发关闭，得到 %d", len(sets))
+		t.Fatalf("两个频段都要下发停用，得到 %d：%+v", len(sets), sets)
 	}
 	for _, s := range sets {
 		if s.Value != "0" {
-			t.Errorf("只勾「改」应下发 0，得到 %+v", s)
+			t.Errorf("选「停用」应下发 0，得到 %+v", s)
 		}
 	}
 
-	// 什么都没勾 = 一条都不下发
+	// 选「（不改）」= 一条都不下发
+	form = url.Values{"v_radio": {""}}
+	if sets, _ := batchSets(form, params, bands); len(sets) != 0 {
+		t.Errorf("选「不改」不该下发，得到 %+v", sets)
+	}
+	// 什么都没提交 = 一条都不下发
 	if sets, _ := batchSets(url.Values{}, params, bands); len(sets) != 0 {
 		t.Errorf("没勾任何项不该下发，得到 %+v", sets)
 	}
@@ -334,24 +344,40 @@ func TestBatchRunPersisted(t *testing.T) {
 // 被「值没变化」吃掉，表现为「勾了启用什么都没发生」。现在必须能区分三种情况。
 func TestBatchFieldValueBool(t *testing.T) {
 	def := wifiFieldDef{key: "radio", kind: "bool"}
-	field := WifiFormField{Key: "radio", Kind: "bool", Value: "1"}
 
-	// 1) 勾了值 = 启用
-	form := url.Values{"use_radio": {"1"}, "v_radio": {"1"}}
-	if v, ok := batchFieldValue(form, def, field); !ok || v != "1" {
-		t.Errorf("勾了值应得到 1/true，得到 %q/%v", v, ok)
+	// 布尔项是一整个三态 select，「改不改」全看它的值 ——
+	// 不再有「改」+「值」两个并列复选框那种分不清是「想关」还是「忘勾」的情况。
+	cases := []struct {
+		form url.Values
+		want string
+		ok   bool
+	}{
+		{url.Values{"v_radio": {"1"}}, "1", true},   // 启用
+		{url.Values{"v_radio": {"0"}}, "0", true},   // 停用
+		{url.Values{"v_radio": {""}}, "", false},    // （不改）
+		{url.Values{}, "", false},                   // 没提交
+		{url.Values{"v_radio": {"yes"}}, "", false}, // 非法值当「不改」，不能猜
 	}
-
-	// 2) 只勾了「改」没勾值 = 明确的「关」，要下发 0
-	form = url.Values{"use_radio": {"1"}}
-	if v, ok := batchFieldValue(form, def, field); !ok || v != "0" {
-		t.Errorf("只勾「改」应得到 0/true（明确要关），得到 %q/%v", v, ok)
+	for _, c := range cases {
+		v, ok := batchFieldValue(c.form, def)
+		if v != c.want || ok != c.ok {
+			t.Errorf("batchFieldValue(%v) = %q/%v，要的是 %q/%v", c.form, v, ok, c.want, c.ok)
+		}
 	}
+}
 
-	// 3) 两个都没勾 = 不改（绝不能误下发）
-	form = url.Values{}
-	if v, ok := batchFieldValue(form, def, field); ok {
-		t.Errorf("都没勾应表示不改，得到 %q/%v", v, ok)
+// 非布尔字段仍然沿用「先勾『改』再填值」：不勾「改」就算填了值也不下发，
+// 免得手滑把几十台设备的 SSID 改掉。
+func TestBatchFieldValueNonBoolNeedsUseCheck(t *testing.T) {
+	def := wifiFieldDef{key: "ssid", kind: "text"}
+	if v, ok := batchFieldValue(url.Values{"v_ssid": {"NeWifi"}}, def); ok {
+		t.Errorf("没勾「改」就不该下发，得到 %q/%v", v, ok)
+	}
+	if v, ok := batchFieldValue(url.Values{"use_ssid": {"1"}}, def); ok {
+		t.Errorf("勾了「改」但值留空 = 不修改，得到 %q/%v", v, ok)
+	}
+	if v, ok := batchFieldValue(url.Values{"use_ssid": {"1"}, "v_ssid": {"NeWifi"}}, def); !ok || v != "NeWifi" {
+		t.Errorf("勾了「改」且填了值应下发，得到 %q/%v", v, ok)
 	}
 }
 
@@ -361,10 +387,7 @@ func TestBatchSetsBoolEnableIsNotSwallowed(t *testing.T) {
 	params := huaweiWifiParams() // 2.4G 那路 RadioEnabled 原值就是 1
 	// 频段要用 WifiOverview 算：它才带 Instance，而 batchSets 是按实例号取字段的
 	bands := WifiOverview(params)[:1] // 只要 2.4G 那一路
-	form := url.Values{
-		"use_radio": {"1"},
-		"v_radio":   {"1"},
-	}
+	form := url.Values{"v_radio": {"1"}}
 	sets, _ := batchSets(form, params, bands)
 	if len(sets) != 1 {
 		t.Fatalf("应下发 1 个参数（原值就是 1 也要下发，不能被「没变化」吃掉），得到 %d：%+v", len(sets), sets)
