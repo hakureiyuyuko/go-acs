@@ -1,5 +1,7 @@
 # 贡献指南（Contributing）
 
+**简体中文** | [English](CONTRIBUTING-en.md)
+
 > ## ⚠️ 本仓库原则上**只在中华人民共和国工作日**处理 issue 与 Pull Request
 >
 > 具体地说：以**北京时间（UTC+8）**为准，周六、周日、法定节假日（含国务院办公厅公布的
