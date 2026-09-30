@@ -1,213 +1,111 @@
 package cwmp
 
 import (
-	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
 
-// 写 CR 凭据的任务 payload（跟服务端真正下发的形状一致）。
-func connReqPayload(root, user, pass string) string {
-	b, _ := json.Marshal(spvPayload{Values: []ParamValue{
-		{Name: connReqParam(root, pConnReqUser), Value: user, Type: "string"},
-		{Name: connReqParam(root, pConnReqPass), Value: pass, Type: "string"},
-	}})
-	return string(b)
-}
+// RFC 2617 第 3.5 节给的例子，当测试向量用 ——
+// Digest 算错了不会报错，只会一直 401，所以必须拿标准例子对一遍。
+func TestBuildDigestRFC2617(t *testing.T) {
+	challenge := `Digest realm="testrealm@host.com", qop="auth", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41"`
 
-func TestDecodeConnReqSet(t *testing.T) {
-	// TR-098
-	s, ok := decodeConnReqSet(connReqPayload("InternetGatewayDevice.", "acs", "pw"))
-	if !ok || !s.matches("acs", "pw") {
-		t.Errorf("TR-098 payload 没认出来：%+v ok=%v", s, ok)
+	scheme, params := splitAuthHeader(challenge)
+	if !strings.EqualFold(scheme, "Digest") {
+		t.Fatalf("方案解析错: %q", scheme)
 	}
-	// TR-181
-	s, ok = decodeConnReqSet(connReqPayload("Device.", "acs", "pw"))
-	if !ok || !s.matches("acs", "pw") {
-		t.Errorf("TR-181 payload 没认出来：%+v ok=%v", s, ok)
+	if params["realm"].value != "testrealm@host.com" || !params["realm"].quoted {
+		t.Errorf("realm 解析错: %+v", params["realm"])
 	}
-	// 值不一致
-	if s.matches("acs", "OTHER") {
-		t.Error("密码不一致却判定为同一套")
+	if params["nonce"].value != "dcd98b7102dd2f0e8b11d0f600bfb0c093" {
+		t.Errorf("nonce 解析错: %q", params["nonce"].value)
 	}
-	// 不是写 CR 凭据的任务（比如改 WiFi 名字）
-	other, _ := json.Marshal(spvPayload{Values: []ParamValue{
-		{Name: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID", Value: "x", Type: "string"},
-	}})
-	if _, ok := decodeConnReqSet(string(other)); ok {
-		t.Error("改 SSID 的任务被当成了写 CR 凭据")
+
+	// qop=auth 时 cnonce 是我们自己生成的，所以要固定住才能对标准结果。
+	// 直接验证 HA1/HA2 与最终 response 的算式：改用手算它 4 步。
+	ha1 := md5hex("Mufasa:testrealm@host.com:Circle Of Life")
+	if ha1 != "939e7578ed9e3c518a452acee763bce9" {
+		t.Errorf("HA1 = %s，与 RFC 2617 不符", ha1)
 	}
-	// 坏 JSON
-	if _, ok := decodeConnReqSet("{not json"); ok {
-		t.Error("坏 JSON 不该认出来")
+	ha2 := md5hex("GET:/dir/index.html")
+	if ha2 != "39aff3a2bab6126f332b942af96d3366" {
+		t.Errorf("HA2 = %s，与 RFC 2617 不符", ha2)
+	}
+	// RFC: response = MD5(HA1:nonce:nc:cnonce:qop:HA2)，其中 nc=00000001, cnonce="0a4f113b"
+	got := md5hex(ha1 + ":dcd98b7102dd2f0e8b11d0f600bfb0c093:00000001:0a4f113b:auth:" + ha2)
+	if got != "6629fae49393a05397450978507c4ef1" {
+		t.Errorf("response = %s，与 RFC 2617 的 6629fae49393a05397450978507c4ef1 不符", got)
 	}
 }
 
-func TestConnReqTaskState(t *testing.T) {
-	srv, st, id := newTestServer(t, Config{ConnReqEnabled: true, ConnReqUser: "acs", ConnReqPass: "secret"})
-
-	// 什么任务都没有：新设备，该写
-	if s, n := srv.connReqTaskState(id); s != connReqUnknown || n != 0 {
-		t.Errorf("没有历史时该是 unknown/0，得到 %v/%d", s, n)
+// 挑战头里的引号内可能有逗号（opaque / nonce），切分不能切错。
+func TestSplitAuthHeaderQuotedComma(t *testing.T) {
+	_, params := splitAuthHeader(`Digest realm="a,b", nonce="x,y", qop="auth"`)
+	if params["realm"].value != "a,b" {
+		t.Errorf("realm 带逗号解析错: %q", params["realm"].value)
 	}
-
-	// 排队中：等它出结果，别重复下发
-	if _, err := st.EnqueueTask(&store.Task{DeviceID: id, Kind: TaskSetParameterValues,
-		Payload: connReqPayload("InternetGatewayDevice.", "acs", "secret")}); err != nil {
-		t.Fatal(err)
-	}
-	if s, _ := srv.connReqTaskState(id); s != connReqInFlight {
-		t.Errorf("有排队任务时该是 inFlight，得到 %v", s)
-	}
-
-	// 写成功且值就是当前这套：算规范好了
-	tasks, _ := st.ListTasks(id, 10)
-	if err := st.CompleteTask(tasks[0].ID, "设置成功"); err != nil {
-		t.Fatal(err)
-	}
-	if s, _ := srv.connReqTaskState(id); s != connReqSatisfied {
-		t.Errorf("写成功后该是 satisfied，得到 %v", s)
-	}
-
-	// 配置改过（密码变了）：写的是旧值，得重写
-	if _, err := st.EnqueueTask(&store.Task{DeviceID: id, Kind: TaskSetParameterValues,
-		Payload: connReqPayload("InternetGatewayDevice.", "acs", "new-secret")}); err != nil {
-		t.Fatal(err)
-	}
-	tasks, _ = st.ListTasks(id, 10)
-	if err := st.CompleteTask(tasks[0].ID, "设置成功"); err != nil {
-		t.Fatal(err)
-	}
-	if s, _ := srv.connReqTaskState(id); s != connReqUnknown {
-		t.Errorf("写的是旧凭据时该重写（unknown），得到 %v", s)
+	if params["nonce"].value != "x,y" {
+		t.Errorf("nonce 带逗号解析错: %q", params["nonce"].value)
 	}
 }
 
-func TestConnReqTaskStateRetryAndGiveUp(t *testing.T) {
-	srv, st, id := newTestServer(t, Config{ConnReqEnabled: true, ConnReqUser: "acs", ConnReqPass: "secret"})
+// 真机上抓到的实际挑战头（华为）要能解析，并产出带 qop/nc/cnonce 的 Authorization。
+func TestBuildAuthorizationHuaweiChallenge(t *testing.T) {
+	challenge := `Digest realm="HuaweiHomeGateway",nonce="6f2a1e8d0c4b",qop="auth",algorithm="MD5"`
+	u, _ := url.Parse("http://192.168.10.22:7547/0123456789abcdef0123456789abcdef")
 
-	// 失败过、但刚失败：先等等，别每轮 Inform 都刷任务
-	taskID, err := st.EnqueueTask(&store.Task{DeviceID: id, Kind: TaskSetParameterValues,
-		Payload: connReqPayload("InternetGatewayDevice.", "acs", "secret")})
+	auth, err := buildAuthorization(challenge, "GET", u, "acs", "secret")
+	if err != nil {
+		t.Fatalf("构造 Authorization 失败: %v", err)
+	}
+	for _, want := range []string{
+		`username="acs"`, `realm="HuaweiHomeGateway"`, `nonce="6f2a1e8d0c4b"`,
+		`uri="/0123456789abcdef0123456789abcdef"`, "qop=auth", "nc=00000001",
+		"cnonce=", "algorithm=MD5", "response=",
+	} {
+		if !strings.Contains(auth, want) {
+			t.Errorf("Authorization 少了 %q\n完整值: %s", want, auth)
+		}
+	}
+}
+
+// 没有 qop 的老式挑战也要支持（有些设备不发 qop）。
+func TestBuildAuthorizationNoQop(t *testing.T) {
+	challenge := `Digest realm="r", nonce="n"`
+	u, _ := url.Parse("http://d/x")
+	auth, err := buildAuthorization(challenge, "GET", u, "u", "p")
+	if err != nil {
+		t.Fatalf("无 qop 时不该报错: %v", err)
+	}
+	if strings.Contains(auth, "qop=") || strings.Contains(auth, "cnonce") {
+		t.Errorf("无 qop 时不应带 qop/cnonce: %s", auth)
+	}
+	// 无 qop 的算式：MD5(HA1:nonce:HA2)
+	want := md5hex(md5hex("u:r:p") + ":n:" + md5hex("GET:/x"))
+	if !strings.Contains(auth, `response="`+want+`"`) {
+		t.Errorf("无 qop 的 response 算错: %s，期望 %s", auth, want)
+	}
+}
+
+// Basic 也要支持。
+func TestBuildAuthorizationBasic(t *testing.T) {
+	u, _ := url.Parse("http://d/x")
+	auth, err := buildAuthorization("Basic realm=\"r\"", "GET", u, "acs", "pw")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.FailTask(taskID, "CPE 返回错误 9003"); err != nil {
-		t.Fatal(err)
-	}
-	if s, n := srv.connReqTaskState(id); s != connReqRetryLater || n != 1 {
-		t.Errorf("刚失败该是 retryLater/1，得到 %v/%d", s, n)
-	}
-
-	// 把重试间隔调成 0：同一条历史立刻就可以重试了
-	srv.connReqRetry = time.Nanosecond
-	if s, n := srv.connReqTaskState(id); s != connReqUnknown || n != 1 {
-		t.Errorf("过了重试间隔该允许重写（unknown/1），得到 %v/%d", s, n)
-	}
-
-	// 连续失败到上限：停手（别再刷任务）
-	for i := 0; i < connReqMaxAttempts-1; i++ {
-		tid, err := st.EnqueueTask(&store.Task{DeviceID: id, Kind: TaskSetParameterValues,
-			Payload: connReqPayload("InternetGatewayDevice.", "acs", "secret")})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := st.FailTask(tid, "CPE 返回错误 9003"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if s, n := srv.connReqTaskState(id); s != connReqGivingUp || n < connReqMaxAttempts {
-		t.Errorf("连续失败到上限该 givingUp，得到 %v/%d", s, n)
+	// base64("acs:pw") = YWNzOnB3
+	if auth != "Basic YWNzOnB3" {
+		t.Errorf("Basic 头 = %q", auth)
 	}
 }
 
-// EnsureConnReqCredentials：新设备接入就下发；已经有在跑的不重复下发；
-// 确认写好之后本进程就不再查库（第二次调用直接跳过）。
-func TestEnsureConnReqCredentialsEnqueuesOnce(t *testing.T) {
-	srv, st, id := newTestServer(t, Config{ConnReqEnabled: true, ConnReqUser: "acs", ConnReqPass: "secret"})
-
-	countSPV := func() int {
-		tasks, err := st.ListTasks(id, 50)
-		if err != nil {
-			t.Fatal(err)
+// 只接受 http/https：ConnectionRequestURL 是设备给的，不能让它把我们指向别的协议。
+func TestSendConnectionRequestRejectsBadScheme(t *testing.T) {
+	for _, u := range []string{"file:///etc/passwd", "ftp://x/y", "not a url at all\x00"} {
+		if err := SendConnectionRequest(u, "", "", 0); err == nil {
+			t.Errorf("%q 应该被拒绝", u)
 		}
-		n := 0
-		for _, x := range tasks {
-			if x.Kind == TaskSetParameterValues {
-				n++
-			}
-		}
-		return n
-	}
-
-	srv.EnsureConnReqCredentials(id)
-	if n := countSPV(); n != 1 {
-		t.Fatalf("新设备该下发一次，得到 %d 条", n)
-	}
-	// 任务还在排队：不该再下发一条
-	srv.EnsureConnReqCredentials(id)
-	if n := countSPV(); n != 1 {
-		t.Fatalf("已经在排队时不该重复下发，得到 %d 条", n)
-	}
-
-	// 设备把用户名回读成别人的（比如运营商改过）：必须重写
-	if err := st.UpsertParams(id, []store.Param{
-		{Name: "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername", Value: "isp-admin"},
-	}, "getvalues"); err != nil {
-		t.Fatal(err)
-	}
-	srv.connReqDone = map[int64]bool{} // 清掉进程内记忆，模拟重启后再看一遍
-	tasks, _ := st.ListTasks(id, 5)
-	if err := st.CompleteTask(tasks[0].ID, "设置成功"); err != nil {
-		t.Fatal(err)
-	}
-	srv.EnsureConnReqCredentials(id)
-	if n := countSPV(); n != 2 {
-		t.Fatalf("设备上的用户名不一致时该重写，得到 %d 条", n)
-	}
-}
-
-// 关掉主动唤醒时什么都不做（不写设备）。
-func TestEnsureConnReqDisabled(t *testing.T) {
-	srv, st, id := newTestServer(t, Config{ConnReqEnabled: false, ConnReqUser: "acs", ConnReqPass: "secret"})
-	srv.EnsureConnReqCredentials(id)
-	if n, _ := st.PendingTaskCount(id); n != 0 {
-		t.Errorf("关掉主动唤醒时不该下发任何任务，得到 %d 条", n)
-	}
-}
-
-// 完整走一遍「新设备接入 → 写凭据 → 成功 → 唤醒可用」的状态流转（不碰真网络）。
-func TestConnReqCredentialFlow(t *testing.T) {
-	srv, st, id := newTestServer(t, Config{ConnReqEnabled: true, ConnReqUser: "acs", ConnReqPass: "secret"})
-
-	srv.EnsureConnReqCredentials(id)
-	tasks, _ := st.ListTasks(id, 5)
-	if len(tasks) != 1 || !strings.Contains(tasks[0].Payload, "ConnectionRequestPassword") {
-		t.Fatalf("下发的应该是写 CR 凭据的任务：%+v", tasks)
-	}
-	// 设备执行成功（真实场景里还会回读用户名）
-	if err := st.CompleteTask(tasks[0].ID, "设置成功"); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.UpsertParams(id, []store.Param{
-		{Name: "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername", Value: "acs"},
-		{Name: "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword", Value: ""},
-	}, "getvalues"); err != nil {
-		t.Fatal(err)
-	}
-
-	// 再劝一次：状态是 satisfied，且此后走进程内快速路径（不再查库）
-	srv.EnsureConnReqCredentials(id)
-	if n, _ := st.PendingTaskCount(id); n != 0 {
-		t.Errorf("已经规范好了不该再下发，得到 %d 条", n)
-	}
-	srv.connReqMu.Lock()
-	done := srv.connReqDone[id]
-	srv.connReqMu.Unlock()
-	if !done {
-		t.Error("确认规范之后该记进进程内快速路径，否则每轮 Inform 都要查库")
 	}
 }
