@@ -163,7 +163,7 @@ func TestFttrOverviewOpticalAndMode(t *testing.T) {
 		n[x.Instance] = x
 	}
 
-	if got := n[1].OpticalPower(); got != "Rx -19.2 dBm / Tx 2.5 dBm" {
+	if got := n[1].OpticalPower(); got != "Rx -19.20 dBm / Tx 2.50 dBm" {
 		t.Errorf("光纤组网的光功率显示不对：%q", got)
 	}
 	if got := n[1].ModeText(); got != "光纤组网" {
@@ -188,7 +188,7 @@ func TestFttrOverviewOpticalAndMode(t *testing.T) {
 	if got := n[4].ModeText(); got != "repeater" {
 		t.Errorf("判不出组网模式时应显示原值，得到 %q", got)
 	}
-	if got := n[4].OpticalPower(); got != "Rx -21.7 dBm" {
+	if got := n[4].OpticalPower(); got != "Rx -21.70 dBm" {
 		t.Errorf("嵌套写法的光功率没认出来：%q", got)
 	}
 	if n[4].TxPower != "" {

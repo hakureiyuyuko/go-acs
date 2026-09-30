@@ -393,6 +393,8 @@ func init() {
 		"设备上报的接收光功率（没上报显示 -）": "Receive optical power reported by the device (“-” when not reported)",
 		"设备上报的发送光功率（没上报显示 -）": "Transmit optical power reported by the device (“-” when not reported)",
 		"来自子设备 %d": "from sub-device %d",
+		"读数来源":     "Reading source",
+		"来源":       "Source",
 		"重新采集光功率":  "Re-collect optical power",
 		"这些项勾了「改」但没勾「启用」，请补上或取消勾选：":                         "These fields are checked for change but their value is not set. Tick the value or uncheck the field:",
 		"要改这一项就必须勾「启用」（想让无线关掉时，勾上面再勾这里，然后把本项也勾上）":           "To change this you must also tick the value box (to turn wireless off, tick the field above and this one)",

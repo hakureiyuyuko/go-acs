@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hakureiyuyuko/go-acs/internal/store"
 )
@@ -20,7 +21,7 @@ func TestOpticalOverviewHost(t *testing.T) {
 		mkParam("InternetGatewayDevice.WANDevice.1.X_HW_RxPower", "-21.5"),
 		mkParam("InternetGatewayDevice.WANDevice.1.X_HW_TxPower", "2.5"),
 	})
-	if got.Rx != "-21.5 dBm" || got.Tx != "2.5 dBm" {
+	if got.Rx != "-21.50 dBm" || got.Tx != "2.50 dBm" {
 		t.Errorf("主机光功率 = Rx %q / Tx %q", got.Rx, got.Tx)
 	}
 	if got.SourceText != "" {
@@ -39,7 +40,7 @@ func TestOpticalOverviewFallsBackToSubDevice(t *testing.T) {
 		mkParam("InternetGatewayDevice.X_HW_APDevice.2.X_HW_TxPower", "2.0"),
 		mkParam("InternetGatewayDevice.X_HW_APDevice.1.X_HW_RxPower", "-19.0"),
 	})
-	if got.Rx != "-19.0 dBm" {
+	if got.Rx != "-19.00 dBm" {
 		t.Errorf("应取实例号最小的那台子设备，得到 %q", got.Rx)
 	}
 	if got.SourceText != "来自子设备 1" {
@@ -53,7 +54,7 @@ func TestOpticalOverviewHostWins(t *testing.T) {
 		mkParam("InternetGatewayDevice.X_HW_APDevice.1.X_HW_RxPower", "-19.0"),
 		mkParam("InternetGatewayDevice.WANDevice.1.Optical.RxPower", "-23.1"),
 	})
-	if got.Rx != "-23.1 dBm" || got.SourceText != "" {
+	if got.Rx != "-23.10 dBm" || got.SourceText != "" {
 		t.Errorf("主机优先失效：Rx %q / 来源 %q", got.Rx, got.SourceText)
 	}
 }
@@ -81,12 +82,88 @@ func TestOpticalOverviewEmpty(t *testing.T) {
 }
 
 // 设备把单位一起报回来了（真机上见过 "−19.0dBm" 这种写法）就别再补一个。
+// 读数一律固定两位小数。
 func TestWithDbm(t *testing.T) {
-	if got := withDbm("-19.0"); got != "-19.0 dBm" {
-		t.Errorf("纯数字应补单位，得到 %q", got)
+	cases := []struct{ in, want string }{
+		{"-19.0", "-19.00 dBm"},
+		{"-19.0dBm", "-19.00 dBm"}, // 设备自带单位，别补成 "-19.00 dBm dBm"
+		{"-14", "-14.00 dBm"},
+		{"-14.58", "-14.58 dBm"},
+		{"2.5", "2.50 dBm"},
+		{"-21.5 ", "-21.50 dBm"}, // 前后空白
+		{"", ""},                 // 没值就是空
+		// 解析不出数字的原样返回，**不能**当成 0 —— 那会看起来像真实读数
+		{"N/A", "N/A"},
+		{"--", "--"},
+		{"", ""},
 	}
-	if got := withDbm("-19.0dBm"); got != "-19.0dBm" {
-		t.Errorf("已经带单位的不该重复补，得到 %q", got)
+	for _, c := range cases {
+		if got := withDbm(c.in); got != c.want {
+			t.Errorf("withDbm(%q) = %q，要的是 %q", c.in, got, c.want)
+		}
+	}
+}
+
+// 【真机回归】中兴 ZXHN F610GV9：同一台猫上有多个带 power 的参数，
+// 私有的百分比/原始值（385、16687）把真正的光功率顶掉了。
+// 修复后必须选中语义最像标准光功率的那个，且跟库里返回顺序无关。
+func TestOpticalOverviewPrefersRealReadingOverVendorPrivateValue(t *testing.T) {
+	// 顺序刻意让私有值排前面 —— 旧的"第一个命中就赢"就是这么错的
+	params := []store.Param{
+		mkParam("InternetGatewayDevice.Optical.Interface.1.TxPowerPercent", "385"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.TxPowerRaw", "16687"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.RxPowerPercent", "23"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.RxPower", "-23.4"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.TxPower", "2.1"),
+	}
+	got := OpticalOverview(params)
+	if got.Rx != "-23.40 dBm" || got.Tx != "2.10 dBm" {
+		t.Errorf("没选中真正的光功率：Rx %q / Tx %q（来源 %q）", got.Rx, got.Tx, got.SourceName)
+	}
+	if got.SourceName != "InternetGatewayDevice.Optical.Interface.1.RxPower" {
+		t.Errorf("来源参数标错了：%q", got.SourceName)
+	}
+
+	// 同样的参数换个顺序，结果必须一致（旧实现会随查询顺序漂移）
+	shuffled := []store.Param{params[3], params[1], params[4], params[0], params[2]}
+	if again := OpticalOverview(shuffled); again.Rx != got.Rx || again.Tx != got.Tx {
+		t.Errorf("取值随参数顺序变了：%q/%q vs %q/%q", again.Rx, again.Tx, got.Rx, got.Tx)
+	}
+}
+
+// 值明显不可能是光功率（百分比、原始 ADC 值）时宁可不算，
+// 也不能把 385 dBm / 16687 dBm 这种物理上不存在的数显示出来。
+func TestOpticalOverviewRejectsImplausibleValues(t *testing.T) {
+	got := OpticalOverview([]store.Param{
+		mkParam("InternetGatewayDevice.Optical.Interface.1.RxPower", "385"),
+		mkParam("InternetGatewayDevice.Optical.Interface.1.TxPower", "16687"),
+	})
+	if got.Has() {
+		t.Errorf("超出光模块物理范围的值不该显示：%+v", got)
+	}
+	// 边界：正常范围要保留（-40 ~ +10 dBm 是真实读数区）
+	for _, v := range []string{"-40", "-3.5", "10", "0"} {
+		g := OpticalOverview([]store.Param{mkParam("InternetGatewayDevice.Optical.Interface.1.RxPower", v)})
+		if !g.Has() {
+			t.Errorf("%s dBm 是正常读数，不该被过滤", v)
+		}
+	}
+}
+
+// 同一方向两个候选分值相同时，取更新时间更晚的那个（重采过的才准）。
+func TestOpticalOverviewPrefersNewerOnTie(t *testing.T) {
+	old := mkParam("InternetGatewayDevice.Optical.Interface.1.RxPower", "-23.4")
+	old.UpdatedAt = time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	fresh := mkParam("InternetGatewayDevice.Optical.Interface.1.OpticalRxPower", "-24.1")
+	fresh.UpdatedAt = time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+
+	got := OpticalOverview([]store.Param{old, fresh})
+	if got.Rx != "-24.10 dBm" {
+		t.Errorf("分值相同时应取更新的读数，得到 %q", got.Rx)
+	}
+	// 反过来排也一样
+	if again := OpticalOverview([]store.Param{fresh, old}); again.Rx != got.Rx {
+		t.Errorf("结果随顺序变了：%q vs %q", again.Rx, got.Rx)
 	}
 }
 
@@ -161,7 +238,7 @@ func TestDevicePageHasOpticalButton(t *testing.T) {
 	if !strings.Contains(body, "/devices/1/optical") {
 		t.Error("设备页应有「采集光功率」的入口（POST /devices/{id}/optical）")
 	}
-	if !strings.Contains(body, "-21.5 dBm") || !strings.Contains(body, "1.8 dBm") {
+	if !strings.Contains(body, "-21.50 dBm") || !strings.Contains(body, "1.80 dBm") {
 		t.Error("设备页应显示已采集到的收光/发光")
 	}
 

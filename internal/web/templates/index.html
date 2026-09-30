@@ -152,10 +152,10 @@
         <td class="mono">{{index $.ClientCounts $d.ID}}</td>
         {{end}}
         {{if index $.Cols "rx"}}
-        <td class="mono" {{if $opt.SourceText}}title="{{TS $opt.SourceText}}"{{end}}>{{if $opt.Rx}}{{$opt.Rx}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td class="mono" {{if $opt.SourceName}}title="{{TS "来源"}}：{{$opt.SourceName}}{{if $opt.SourceText}} · {{TS $opt.SourceText}}{{end}}"{{end}}>{{if $opt.Rx}}{{$opt.Rx}}{{else}}<span class="hint">-</span>{{end}}</td>
         {{end}}
         {{if index $.Cols "tx"}}
-        <td class="mono" {{if $opt.SourceText}}title="{{TS $opt.SourceText}}"{{end}}>{{if $opt.Tx}}{{$opt.Tx}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td class="mono" {{if $opt.SourceName}}title="{{TS "来源"}}：{{$opt.SourceName}}{{if $opt.SourceText}} · {{TS $opt.SourceText}}{{end}}"{{end}}>{{if $opt.Tx}}{{$opt.Tx}}{{else}}<span class="hint">-</span>{{end}}</td>
         {{end}}
         <td>
           <form method="post" action="/devices/{{$d.ID}}/wifi">

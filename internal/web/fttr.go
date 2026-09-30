@@ -55,7 +55,11 @@ type FttrNode struct {
 	// 按叶子名后缀认，允许中间多一层（…{i}.Optical.RxPower）。
 	RxPower string
 	TxPower string
-	Updated time.Time
+	// RxUpdated / TxUpdated 记这两个读数各自的时间：同一台子设备可能报多个
+	// 疑似光功率的参数，选谁靠「分值 + 时间」比，所以时间要分开存。
+	RxUpdated time.Time
+	TxUpdated time.Time
+	Updated   time.Time
 }
 
 // FttrOverview 从设备已采集的参数里解析出子设备列表。
@@ -122,11 +126,23 @@ func FttrOverview(params []store.Param) ([]FttrNode, bool) {
 		}
 		v := strings.TrimSpace(p.Value)
 		if rx {
-			n.RxPower = v
+			// 子设备光功率同样可能命中多个私有参数，按分值取最像标准光功率的那个
+			// （跟概览页 OpticalOverview 一个口径）。
+			cur := opticalHit{value: n.RxPower, upd: n.RxUpdated, score: opticalScore(p.Name, field, true, false)}
+			h := opticalHit{value: v, name: p.Name, upd: p.UpdatedAt, score: opticalScore(p.Name, field, true, false)}
+			if cur.better(h) {
+				n.RxPower = v
+				n.RxUpdated = p.UpdatedAt
+			}
 			continue
 		}
 		if tx {
-			n.TxPower = v
+			cur := opticalHit{value: n.TxPower, upd: n.TxUpdated, score: opticalScore(p.Name, field, false, true)}
+			h := opticalHit{value: v, name: p.Name, upd: p.UpdatedAt, score: opticalScore(p.Name, field, false, true)}
+			if cur.better(h) {
+				n.TxPower = v
+				n.TxUpdated = p.UpdatedAt
+			}
 			continue
 		}
 		// 按**叶子名后缀**匹配：不同型号的字段名有出入，用后缀更耐用
@@ -306,12 +322,28 @@ func (n FttrNode) OpticalPower() string {
 	return strings.Join(parts, " / ")
 }
 
-// withDbm 给纯数字补上单位（设备一般只回数字，有的会连单位一起回）。
+// withDbm 把设备回的读数规整成「-14.00 dBm」这样显示。
+//
+// 设备回的原值什么样都有：`-14`、`-14.0`、`-14.580`、`"-14 dBm"`、甚至空。
+// 统一：
+//   - 纯数字（可带单位）→ 解析成浮点，固定两位小数，再补 dBm
+//   - 解析不出数字（设备回了 "N/A"、"-"、非法值）→ 原样返回，
+//     不能拿 0 去顶 —— 那会看起来像一个真实的读数
 func withDbm(v string) string {
-	if _, err := strconv.ParseFloat(v, 64); err == nil {
-		return v + " dBm"
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return ""
 	}
-	return v
+	// 去掉设备自己带的单位，剩下的部分尝试当数字解析
+	num := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "dBm"))
+	if num == "" {
+		return s
+	}
+	f, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return s
+	}
+	return strconv.FormatFloat(f, 'f', 2, 64) + " dBm"
 }
 
 // fttrHasOptical 判断整列要不要渲染：一个都没读到就整列不显示（跟 WAN / FTTR 一个规矩）。

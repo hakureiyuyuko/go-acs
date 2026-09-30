@@ -1064,12 +1064,12 @@ def main():
         sec = h.split("FTTR 子设备", 1)[1].split("<h2>", 1)[0] if "FTTR 子设备" in h else ""
         check("子设备表有「组网」列", "<th>组网</th>" in sec, st)
         check("子设备确实上报了光功率时，才出现「光功率」列", "<th>光功率</th>" in sec, st)
-        check("光纤组网那台显示收 / 发光功率", "Rx -19.0 dBm / Tx 2.5 dBm" in sec, sec[-200:])
+        check("光纤组网那台显示收 / 发光功率", "Rx -26.00 dBm / Tx 2.50 dBm" in sec, sec[-200:])
         check("无线组网那台显示组网方式与信号", "无线组网（信号 -45）" in sec, st)
         check("有线组网那台显示组网方式", "有线组网" in sec, st)
         check("判不出组网模式时原样显示设备自报值", "repeater" in sec, st)
         # 无线 / 有线组网的两台：**设备回了光功率也不显示**（它们没有光口）
-        check("无线 / 有线组网不显示光功率", "-20.0" not in sec and "-21.0" not in sec, sec[-300:])
+        check("无线 / 有线组网不显示光功率", "-27.0" not in sec and "-28.0" not in sec, sec[-300:])
         check("组网列的悬停提示用能读的话说明设备上报了什么",
               "设备上报：wifi" in sec and "信号 -45" in sec, st)
 

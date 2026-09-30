@@ -457,6 +457,14 @@ func (s *simulator) buildParams(root, specVersion string) {
 			o := root + "Optical.Interface.1."
 			set(o+"RxPower", "-23.4", "string")
 			set(o+"TxPower", "2.1", "string")
+			// 【真机还原】这台猫同期还报了一堆带 power 的私有参数，
+			// 值在物理上不可能是光功率（385 / 16687）。界面必须选中上面那两个真值，
+			// 不能被这些诱饵顶掉 —— 这就是「中兴显示 385 dBm / 16687 dBm」的现场。
+			// 参数名刻意排在真值之前（字典序），复现旧实现"第一个命中就赢"的错法。
+			set(o+"RxPowerPercent", "23", "unsignedInt")
+			set(o+"TxPowerPercent", "385", "unsignedInt")
+			set(o+"TxPowerRaw", "16687", "unsignedInt")
+			set(o+"PowerAlarmThreshold", "-30", "int")
 		} else {
 			pon := root + "WANDevice.1.WANPONInterfaceConfig."
 			set(pon+"OpticalRxPower", "-21.5", "string")
@@ -640,8 +648,12 @@ func (s *simulator) buildParams(root, specVersion string) {
 
 		// 光功率（可选）：注意**无论哪种组网都加上**，这样才能验证
 		// “无线组网即使有参数也不显示光功率”那条规则。
+		//
+		// 数值必须落在光模块的真实范围里（约 -40 ~ +10 dBm）：界面会过滤掉
+		// 物理上不可能是光功率的值（真机中兴那台就报了私有的 385 / 16687），
+		// 这里给 -25.0 / -26.0 之类，才和真机读数是一回事。
 		if s.fttrOptical {
-			set(ap+"X_HW_RxPower", fmt.Sprintf("-%.1f", 18.0+float64(i)), "string")
+			set(ap+"X_HW_RxPower", fmt.Sprintf("-%.1f", 25.0+float64(i)), "string")
 			set(ap+"X_HW_TxPower", "2.5", "string")
 		}
 
