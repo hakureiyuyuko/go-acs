@@ -10,7 +10,7 @@
 # 起不来就自动回滚到旧二进制。
 set -euo pipefail
 
-REPO=${ACS_REPO:-hakureiyuyuko/go-acs}
+REPO=${ACS_REPO:-qwe3017/go-acs}
 API=${ACS_API:-https://api.github.com}
 SERVICE=${ACS_SERVICE_NAME:-acs}
 BIN_DIR=${ACS_BIN_DIR:-/usr/local/bin}

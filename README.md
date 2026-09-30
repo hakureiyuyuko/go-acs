@@ -5,7 +5,7 @@
 单二进制、零外部中间件的 TR-069/CWMP ACS（Go + SQLite），用来管一批光猫 / FTTR 主机：
 **纳管 → 看信息 → 改配置 → 诊断 → 子设备与终端管理**。
 
-![CI](https://github.com/hakureiyuyuko/go-acs/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/qwe3017/go-acs/actions/workflows/ci.yml/badge.svg)
 ![Go](https://img.shields.io/badge/Go-1.27-00ADD8)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -56,7 +56,7 @@ FTTR 子设备与网络诊断：子设备的型号、组网模式、光功率与
 
 ## 安装（Release 包）
 
-从 [Releases](https://github.com/hakureiyuyuko/go-acs/releases) 下对应架构的包，解压后一条命令装成 systemd 服务：
+从 [Releases](https://github.com/qwe3017/go-acs/releases) 下对应架构的包，解压后一条命令装成 systemd 服务：
 
 ```bash
 VERSION=1.2.2                                   # 换成你下载的那个版本

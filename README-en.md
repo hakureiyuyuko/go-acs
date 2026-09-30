@@ -5,7 +5,7 @@
 A single-binary, zero-external-dependency TR-069/CWMP ACS (Go + SQLite) for managing a fleet of ONTs / FTTR
 gateways: **onboard → inspect → configure → diagnose → manage sub-devices and clients**.
 
-![CI](https://github.com/hakureiyuyuko/go-acs/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/qwe3017/go-acs/actions/workflows/ci.yml/badge.svg)
 ![Go](https://img.shields.io/badge/Go-1.27-00ADD8)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -68,7 +68,7 @@ Settings: listen addresses for the ACS and the panel, plus the panel login crede
 ## Install (release package)
 
 Download the package for your architecture from
-[Releases](https://github.com/hakureiyuyuko/go-acs/releases), extract it, and install it as a systemd service
+[Releases](https://github.com/qwe3017/go-acs/releases), extract it, and install it as a systemd service
 with one command:
 
 ```bash
