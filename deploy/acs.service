@@ -11,6 +11,8 @@ Group=@GROUP@
 WorkingDirectory=@DATA@
 EnvironmentFile=-@ENVFILE@
 ExecStart=@BIN@ -db @DATA@/acs.db
+# Restart=always 不只是抗崩溃：面板上「设置 → 改监听地址 → 立即重启服务」
+# 在这条路的实现就是「进程干净退出，交给 systemd 拉起来」，去掉这一行那个按钮就不灵了。
 Restart=always
 RestartSec=3
 # 想要 1024 以下的端口（比如 :80）时，把下面两行的注释去掉

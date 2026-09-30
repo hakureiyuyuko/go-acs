@@ -71,7 +71,22 @@ type Options struct {
 	Runtime RuntimeSettings
 	// Log 用来记面板登录等安全事件（nil = 不记）。
 	Log *slog.Logger
+	// Restart 由 cmd/acs 注入：让面板上「立即重启服务」能真把服务重启起来。
+	// nil = 没有这个能力（比如测试里），界面上会退回「自己去命令行重启」的说法。
+	// 进程这一侧的事（换进程、systemd 托管、回滚）都在 cmd/acs 里，web 只管界面。
+	Restart func() (RestartMode, error)
 }
+
+// RestartMode 说明这次重启是用哪种方式完成的 —— 影响界面上怎么告诉用户
+// 「接下来会发生什么」（systemd 拉起要等它几秒，自己起的新进程则是已经就绪）。
+type RestartMode string
+
+const (
+	// RestartSystemd：进程干净退出，等 systemd（Restart=always）把它拉起来。
+	RestartSystemd RestartMode = "systemd"
+	// RestartSelf：自己起了新进程，新地址已经确认能访问。
+	RestartSelf RestartMode = "self"
+)
 
 // Register 把面板路由挂到 mux 上。
 func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options) error {
@@ -134,6 +149,8 @@ func Register(mux *http.ServeMux, st *store.Store, ctrl Controller, opt Options)
 	mux.HandleFunc("GET /{$}", guard(s.handleIndex))
 	mux.HandleFunc("GET /settings", guard(s.handleSettings))
 	mux.HandleFunc("POST /settings", guard(s.handleSettingsSave))
+	// 改完监听地址后「立即重启服务」：确认过才走这里（改端口必须重启才生效）
+	mux.HandleFunc("POST /settings/restart", guard(s.handleSettingsRestart))
 	mux.HandleFunc("GET /devices/{id}", guard(s.handleDevice))
 	mux.HandleFunc("POST /devices/{id}/refresh", guard(s.handleRefresh))
 	mux.HandleFunc("POST /devices/{id}/note", guard(s.handleDeviceNote))

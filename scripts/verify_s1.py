@@ -1359,6 +1359,16 @@ def main():
         st, h = get("/settings")
         check("设置页提示监听地址改动需重启后生效", "重启服务后生效" in h, st)
 
+        # 待重启时该给出「立即重启服务」按钮（改端口不用再去命令行）
+        check("待重启时给出「立即重启服务」按钮",
+              'action="/settings/restart"' in h and "立即重启服务" in h, st)
+        check("重启按钮带二次确认", "确定现在重启服务吗" in h, "")
+        check("重启说明里写明失败会自动回退", "自动退回旧地址" in h, "")
+        check("重启接口只认 POST（GET 405）", get_code("/settings/restart") == 405,
+              get_code("/settings/restart"))
+        st2, h2 = get("/settings")
+        check("只给按钮、没有拃自重启", st2 == 200 and "重启服务后生效" in h2, st2)
+
         # 非法输入要被拦下
         st, loc = post_form("/settings", {"acs_listen": "abc", "web_listen": "",
                                           "auth": "1", "web_user": user})

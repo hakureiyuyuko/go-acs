@@ -56,6 +56,7 @@ do_start() {
   setsid env \
     ACS_LISTEN=":$PORT" \
     ACS_DB="$DB" \
+    ACS_PIDFILE="$PIDFILE" \
     ACS_LOG_LEVEL="$LEVEL" \
     ACS_LOG_SOAP="${ACS_LOG_SOAP:-0}" \
     ACS_USER="${ACS_USER:-}" \

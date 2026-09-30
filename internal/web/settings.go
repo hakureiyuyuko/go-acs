@@ -55,6 +55,8 @@ type settingsView struct {
 	HasPassword bool
 	// PendingPorts 表示监听地址改过、还没重启
 	PendingPorts bool
+	// CanRestart 表示这个运行方式支持「立即重启服务」（cmd/acs 注入了重启能力）
+	CanRestart bool
 
 	Notice    string
 	NoticeErr bool
@@ -93,6 +95,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	v.PendingPorts = v.StoredListen != v.Runtime.ACSListen ||
 		v.StoredWebListen != v.Runtime.WebListen
+	v.CanRestart = s.opt.Restart != nil
 	v.AuthOn = s.authEnabled()
 	lang := s.langOf(w, r)
 	common := s.pageCommon(lang)

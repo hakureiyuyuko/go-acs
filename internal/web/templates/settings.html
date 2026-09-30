@@ -59,7 +59,19 @@
     </tbody>
   </table>
   {{if .PendingPorts}}
-  <div class="notice" style="margin-top:12px">{{T "监听地址已保存，重启服务后生效。"}}</div>
+  <div class="notice" style="margin-top:12px">
+    <div>{{T "监听地址已保存，重启服务后生效。"}}</div>
+    <div class="hint" style="margin:6px 0">{{T "重启只断几秒；新端口起不来会自动退回旧地址。设备侧配的 ACS 地址若也改了，记得同步改。"}}</div>
+    {{if .CanRestart}}
+    <form method="post" action="/settings/restart" style="margin-top:8px"
+          data-confirm='{{T "确定现在重启服务吗？重启期间面板会短暂断开。"}}'>
+      <button type="submit">{{T "立即重启服务"}}</button>
+      <span class="hint">{{T "也可以稍后自己重启。"}}</span>
+    </form>
+    {{else}}
+    <div class="hint" style="margin-top:8px">{{T "重启用你自己平时的办法：systemctl restart acs 或脚本里的 restart。"}}</div>
+    {{end}}
+  </div>
   {{end}}
 
   <form method="post" action="/settings" class="wform" style="margin-top:22px">

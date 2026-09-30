@@ -17,6 +17,7 @@ function t(key) {
 //   4. 破坏性操作（重启设备等）的二次确认
 //   5. 终端弹窗：data-modal 打开、点遮罩或 ✕ 或 Esc 关闭
 //   6. 首页的 5 秒自动刷新开关（状态记在 localStorage）
+//   7. 重启页：面板换了端口，倒计时后自动跳到新地址
 document.addEventListener("DOMContentLoaded", function () {
   var pagers = setupPagers(document);
   wireParamFilter(pagers);
@@ -25,7 +26,34 @@ document.addEventListener("DOMContentLoaded", function () {
   wireAutoRefresh();
   wireConfirms();
   wireModals();
+  wireRestartRedirect();
 });
+
+// ---------- 重启页：面板换了端口，倒计时后自己走过去 ----------
+//
+// 重启响应是**旧进程**发出来的，它马上就会退出，所以不能靠服务端 302
+//（连接一断，浏览器可能根本收不到跳转），只能让浏览器自己走。
+// 留 3 秒倒计时比瞬间跳走让人安心。
+function wireRestartRedirect() {
+  var box = document.getElementById("restart-box");
+  if (!box) return;
+  var url = box.getAttribute("data-restart-url");
+  if (!url) return;
+  var left = parseInt(box.getAttribute("data-restart-seconds") || "3", 10);
+  if (!(left > 0)) left = 3;
+  var out = box.querySelector("[data-restart-count]");
+  function tick() {
+    if (out) out.textContent = String(left);
+    if (left <= 0) {
+      // replace：别让「后退」又回到那个已经关掉的旧地址
+      window.location.replace(url);
+      return;
+    }
+    left--;
+    window.setTimeout(tick, 1000);
+  }
+  tick();
+}
 
 // ---------- 5 秒自动刷新（设备列表页 + 设备详情页，开关状态全局共享）----------
 //

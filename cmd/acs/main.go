@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/hakureiyuyuko/go-acs/internal/config"
 	"github.com/hakureiyuyuko/go-acs/internal/cwmp"
+	"github.com/hakureiyuyuko/go-acs/internal/restart"
 	"github.com/hakureiyuyuko/go-acs/internal/store"
 	"github.com/hakureiyuyuko/go-acs/internal/web"
 )
@@ -40,6 +42,9 @@ func run(args []string) error {
 		return err
 	}
 	defer st.Close()
+
+	// 自动重启会换进程，pid 文件得由**新进程**自己写才准（见 writePidFile）
+	defer writePidFile()()
 
 	// 上次进程被杀时留下的 running 任务，启动时退回待办（NFR-6）
 	// ConnectionRequest 的密码：没配置就生成一个**存进库**。
@@ -134,6 +139,43 @@ func run(args []string) error {
 	}
 	secret, _ := hex.DecodeString(secretHex)
 	creds := web.NewCreds(authUser, authHash, secret)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// 监听句柄在这里就建出来（而不是丢给 ListenAndServe 以后再说）：
+	// 面板上「立即重启服务」要把这些 socket **交给新进程**——老进程还攥着没变的
+	// 端口，新进程去重绑必然 address already in use。
+	inherit := restart.DecodeInherit(os.Getenv(restart.InheritEnv))
+	lnFor := func(addr string) (net.Listener, error) {
+		if fd, ok := inherit[addr]; ok {
+			if ln, err := restart.Adopt(fd); err == nil {
+				log.Info("接管了上一个进程递过来的监听句柄", "addr", addr, "fd", fd)
+				return ln, nil
+			}
+			log.Warn("接管监听句柄失败，改为自己绑", "addr", addr, "fd", fd)
+		}
+		return net.Listen("tcp", addr)
+	}
+	acsLn, err := lnFor(acsAddr)
+	if err != nil {
+		return fmt.Errorf("监听 %s 失败: %w", acsAddr, err)
+	}
+	defer acsLn.Close()
+	var panelLn net.Listener
+	if webAddr != "" && webAddr != acsAddr {
+		panelLn, err = lnFor(webAddr)
+		if err != nil {
+			return fmt.Errorf("面板监听 %s 失败: %w", webAddr, err)
+		}
+		defer panelLn.Close()
+	}
+
+	// 当前进程手里活着的监听句柄：重启时把它们交出去（没变的端口靠它零断点接管）
+	liveListeners := map[string]net.Listener{acsAddr: acsLn}
+	if panelLn != nil {
+		liveListeners[webAddr] = panelLn
+	}
+
 	webOpts := web.Options{
 		Auth: creds,
 		Log:  log,
@@ -142,10 +184,9 @@ func run(args []string) error {
 			WebListen: webAddr,
 			Path:      cfg.Path,
 		},
+		// 面板上改完监听地址可以「立即重启服务」，不用再去命令行
+		Restart: restartService(st, log, acsAddr, webAddr, liveListeners, stop),
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	srv.StartJanitor(ctx)
 
 	// CWMP 那套路由（设备侧）。
@@ -171,14 +212,13 @@ func run(args []string) error {
 	}
 
 	var acsSrv, panelSrv *http.Server
-	if webAddr == "" || webAddr == acsAddr {
+	if panelLn == nil {
 		// 默认：一个端口既接设备上报、又开面板（一套路由两用）
 		mux := cwmpMux(false)
 		if err := web.Register(mux, st, srv, webOpts); err != nil {
 			return err
 		}
 		acsSrv = &http.Server{
-			Addr:              acsAddr,
 			Handler:           requestLogger(log, mux),
 			ReadHeaderTimeout: 15 * time.Second,
 		}
@@ -188,12 +228,10 @@ func run(args []string) error {
 			return err
 		}
 		acsSrv = &http.Server{
-			Addr:              acsAddr,
 			Handler:           requestLogger(log, cwmpMux(true)),
 			ReadHeaderTimeout: 15 * time.Second,
 		}
 		panelSrv = &http.Server{
-			Addr:              webAddr,
 			Handler:           requestLogger(log, panelMux),
 			ReadHeaderTimeout: 15 * time.Second,
 		}
@@ -227,7 +265,7 @@ func run(args []string) error {
 		log.Info("面板单独监听一个端口", "panel_listen", webAddr)
 		log.Info("ACS 端口独享：设备向任何路径提交都会受理", "listen", acsAddr)
 		go func() {
-			if err := panelSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := panelSrv.Serve(panelLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				// 面板端口起不来要让人看见（多半是端口被占或被面板设置写错了）
 				log.Error("面板监听失败", "addr", webAddr, "err", err)
 				stop()
@@ -235,7 +273,7 @@ func run(args []string) error {
 		}()
 	}
 
-	if err := acsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := acsSrv.Serve(acsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	log.Info("ACS 已退出")

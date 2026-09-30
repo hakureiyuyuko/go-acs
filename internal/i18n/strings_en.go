@@ -386,5 +386,28 @@ func init() {
 		"每页 %d 条":              "%d / page",
 		"共 %d 条 · 第 %d / %d 页": "%d rows · page %d / %d",
 		"共 %d 条":               "%d rows",
+
+		// ---- 设置页：改完监听地址后的「立即重启服务」----
+		"重启中 · 轻量 TR-069 ACS": "Restarting · Lightweight TR-069 ACS",
+		"正在重启服务":              "Restarting the service",
+		"重启只断几秒；新端口起不来会自动退回旧地址。设备侧配的 ACS 地址若也改了，记得同步改。": "The restart only takes a few seconds, and the old address is restored automatically if the new port fails to come up. If you changed the ACS address on the devices too, remember to update it there.",
+		"确定现在重启服务吗？重启期间面板会短暂断开。":                        "Restart the service now? The panel will be briefly offline during the restart.",
+		"立即重启服务":     "Restart the service now",
+		"也可以稍后自己重启。": "You can also restart it yourself later.",
+		"重启用你自己平时的办法：systemctl restart acs 或脚本里的 restart。": "Restart it the way you usually do: systemctl restart acs, or the restart command in your script.",
+		"回到设备列表": "Back to the device list",
+		"服务已重启，面板地址没有变化，直接刷新即可。": "The service has restarted and the panel address is unchanged — just refresh.",
+		"服务已重启，面板已迁到新地址：":        "The service has restarted; the panel has moved to:",
+		"秒后自动跳转；没跳的话点上面那个地址。":    "seconds until the automatic redirect; click the address above if it doesn't happen.",
+		"若新地址一时打不开，稍等几秒再刷新一次。":   "If the new address doesn't open at once, wait a few seconds and refresh.",
+		"现在就过去": "Go there now",
+		"新进程已经起来，新地址可以访问了。":           "The new process is up and the new address is reachable.",
+		"服务已退出，正在由 systemd 拉起（通常几秒）。": "The process has exited; systemd is starting it again (usually a few seconds).",
+
+		// ---- 自动重启失败时的提示（后端拼出来的，走 TSmart）----
+		"这个运行方式不支持自动重启，请手动重启服务": "This run mode doesn't support automatic restart; please restart the service manually",
+		"重启失败：%s，服务仍在原地址运行":     "Restart failed: %s; the service is still running on the old address",
+		"%s 用不了：%s": "%s can't be used: %s",
+		"起新进程失败：%s": "Couldn't start the new process: %s",
 	})
 }

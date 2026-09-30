@@ -27,6 +27,9 @@ gateways: **onboard → inspect → configure → diagnose → manage sub-device
   when all probes fail (a powered-off device sends no TR-069 notification, so this is the only way to confirm)
 - **Operable**: persistent task queue, one-click device wake-up, reboot / delete device, a dedicated panel login
   page (session cookie, with logout), and retention limits for task and inform history
+- **No command line needed to change listen ports**: after editing the addresses on the settings page, click
+  “Restart the service now” and the process swaps itself (unchanged ports hand their sockets to the new
+  process, so device informs never drop; a port that won't come up is rolled back on the spot)
 
 ## Screenshots
 
@@ -54,7 +57,8 @@ Client list: grouped by host / sub-gateway, each client showing signal strength,
 ![Client list](docs/images/clients.png)
 
 Settings: listen addresses for the ACS and the panel, plus the panel login credentials
-(port changes take effect after restart, credentials take effect immediately)
+(port changes take effect after restart, credentials take effect immediately); after changing an address you
+can click “Restart the service now” instead of going back to the command line
 
 ![Settings](docs/images/settings.png)
 

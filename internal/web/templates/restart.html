@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{T "重启中 · 轻量 TR-069 ACS"}}</title>
+<link rel="stylesheet" href="/static/style.css">
+<script>
+  // 在样式生效之前把主题定下来，避免刷新时先闪一下暗色
+  (function () {
+    try {
+      var t = localStorage.getItem("theme");
+      if (t !== "light" && t !== "dark") {
+        t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches)
+          ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
+</head>
+<body>
+<main>
+  <h2>{{T "正在重启服务"}}</h2>
+
+  <div class="notice ok" id="restart-box"
+       {{if not .SameAddress}}data-restart-url="{{.NewURL}}" data-restart-seconds="{{.AutoSeconds}}"{{end}}>
+    {{if .SameAddress}}
+    <div>{{T "服务已重启，面板地址没有变化，直接刷新即可。"}}</div>
+    {{else}}
+    <div>{{T "服务已重启，面板已迁到新地址："}} <a class="mono" href="{{.NewURL}}">{{.NewURL}}</a></div>
+    <div class="hint" style="margin-top:6px">
+      <span data-restart-count>{{.AutoSeconds}}</span> {{T "秒后自动跳转；没跳的话点上面那个地址。"}}
+    </div>
+    {{end}}
+    <div class="hint" style="margin-top:6px">{{TS .Note}}</div>
+    <div class="hint" style="margin-top:6px">{{T "若新地址一时打不开，稍等几秒再刷新一次。"}}</div>
+  </div>
+
+  <p>
+    {{if .SameAddress}}
+    <a class="btn" href="/">{{T "回到设备列表"}}</a>
+    {{else}}
+    <a class="btn" href="{{.NewURL}}">{{T "现在就过去"}}</a>
+    {{end}}
+  </p>
+</main>
+<script>window.I18N = {{.I18NJSON}};</script>
+<script src="/static/app.js"></script>
+</body>
+</html>
