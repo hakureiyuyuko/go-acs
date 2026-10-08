@@ -1678,6 +1678,82 @@ def main():
                 proc3.kill()
             f3.close()
 
+    print("== 37g. 以太网口：也随周期自动刷新（网线插拔/协商速率会变）==")
+    if not (os.path.exists(acs_bin2) and os.path.exists(sim_bin2)):
+        skip("以太网口定期刷新", "没找到 $WORK/acs 或 $WORK/cpesim")
+    else:
+        import sqlite3
+        port6 = 17588
+        base6 = "http://127.0.0.1:%d" % port6
+        db6 = os.path.join(workdir, "lanethrefresh.db")
+        env6 = dict(os.environ)
+        env6.update({
+            "ACS_LISTEN": ":%d" % port6,
+            "ACS_DB": db6,
+            "ACS_LOG_LEVEL": "debug",
+            "ACS_AUTO_REFRESH_WIFI": "2s",   # 与无线/FTTR 共用这个间隔，验收压到秒级
+        })
+        env6.pop("ACS_WEB_USER", None)
+        env6.pop("ACS_WEB_PASS", None)
+        log6 = os.path.join(workdir, "lanethrefresh.log")
+        f6 = open(log6, "w")
+        proc6 = subprocess.Popen([acs_bin2], env=env6, stdout=f6, stderr=subprocess.STDOUT)
+        cpe6 = None
+        try:
+            ready = False
+            for _ in range(60):
+                try:
+                    with urllib.request.urlopen(base6 + "/", timeout=2) as r:
+                        if r.status == 200:
+                            ready = True
+                            break
+                except Exception:
+                    time.sleep(0.2)
+            if not ready:
+                skip("以太网口定期刷新", "临时实例没起来")
+            else:
+                cpe6 = subprocess.Popen([sim_bin2, "-acs", base6 + "/acs", "-serial", "LANETHREF",
+                                         "-interval", "2s", "-lan-eth", "4"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                def laneth_stamp():
+                    """读库里网口参数的最近写入时间 —— 就是详情页「以太网口」的采集时间。"""
+                    try:
+                        con = sqlite3.connect(db6)
+                        row = con.execute(
+                            "SELECT COALESCE(MAX(updated_at), '') FROM device_params "
+                            "WHERE lower(name) LIKE '%lanethernetinterfaceconfig%'").fetchone()
+                        con.close()
+                        return row[0] or ""
+                    except Exception:
+                        return ""
+
+                first = ""
+                for _ in range(100):          # 等首采完成
+                    first = laneth_stamp()
+                    if first:
+                        break
+                    time.sleep(0.3)
+                check("首次纳管会自动采集以太网口", bool(first), first)
+                # 什么都不点，等两个刷新间隔
+                time.sleep(8)
+                second = laneth_stamp()
+                check("以太网口到期后自动重新采集（采集时间自己往前走）",
+                      bool(second) and second > first, "首采 %s → 现在 %s" % (first, second))
+                f6.flush()
+                logtxt6 = open(log6, encoding="utf-8", errors="replace").read()
+                check("日志里能看到「以太网口概况到期，已安排刷新」",
+                      "以太网口概况到期" in logtxt6, "")
+        finally:
+            if cpe6:
+                cpe6.terminate()
+            proc6.terminate()
+            try:
+                proc6.wait(timeout=5)
+            except Exception:
+                proc6.kill()
+            f6.close()
+
     print("== 39. 任务派发：有任务排队就主动唤醒设备（不等周期上报）==")
     if not (os.path.exists(acs_bin2) and os.path.exists(sim_bin2)):
         skip("任务派发", "没找到 $WORK/acs 或 $WORK/cpesim")
