@@ -60,7 +60,7 @@ func (s *Server) DispatchPendingTasks(ctx context.Context) {
 			continue
 		}
 		s.log.Info("有任务排队，主动唤醒设备",
-			"device_id", id, "serial", d.SerialNumber, "pending_check", "ok")
+			"device_id", id, "serial", d.SerialNumber, "url", d.ConnRequestURL)
 	}
 }
 
