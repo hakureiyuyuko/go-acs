@@ -122,6 +122,13 @@
   </table>
   {{end}}
 
+  <h2>{{T "基本信息"}}</h2>
+  <div class="kvs">
+    {{range .Basic}}
+    <div class="row"><div class="k">{{TS .K}}</div><div class="v mono">{{TS .V}}</div></div>
+    {{end}}
+  </div>
+
   {{if .HasLanEth}}
   <h2>{{T "以太网口"}}</h2>
   <div class="hint" style="margin-bottom:8px">
@@ -150,13 +157,6 @@
     </tbody>
   </table>
   {{end}}
-
-  <h2>{{T "基本信息"}}</h2>
-  <div class="kvs">
-    {{range .Basic}}
-    <div class="row"><div class="k">{{TS .K}}</div><div class="v mono">{{TS .V}}</div></div>
-    {{end}}
-  </div>
 
   {{if .HasFttr}}
   <h2>FTTR {{T "子设备"}}</h2>

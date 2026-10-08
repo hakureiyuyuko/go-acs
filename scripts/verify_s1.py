@@ -1564,6 +1564,12 @@ def main():
         st, lh = get("/devices/%d" % dl[0]["ID"])
         check("详情页显示了「以太网口」区块", "以太网口" in lh, "")
         check("表头有「共 N 个口，已连接 M 个」", "已连接 2 个" in lh, "")
+        # 区块顺序：基本信息 → 以太网口 → FTTR 子设备（用户要求网口贴着基本信息放）
+        i_basic, i_eth, i_fttr = lh.find("基本信息"), lh.find("以太网口"), lh.find("子设备")
+        check("「以太网口」排在「基本信息」下方",
+              i_basic >= 0 and i_eth > i_basic, "%d/%d" % (i_basic, i_eth))
+        check("「以太网口」排在 FTTR 子设备上方（若有）",
+              i_fttr < 0 or i_eth < i_fttr, "%d/%d" % (i_eth, i_fttr))
         check("认出了各个口与协商速率",
               "eth0:1" in lh and "2.5 Gbps" in lh and "100 Mbps" in lh, "")
         check("流量换算成人话（32.9 GB / 186.2 GB）", "32.9 GB" in lh and "186.2 GB" in lh, "")
