@@ -488,7 +488,7 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 	}
 	// 顺手主动唤醒一次：商用 ACS 就是这么做到“点完几秒出结果”的。
 	// 唤醒失败也不影响正事（任务仍然会在下一次周期上报时下发），所以只把它当提示。
-	msg := "诊断已入队，会在设备下次上报时下发"
+	msg := "诊断已入队，正在主动唤醒设备让任务立刻下发"
 	if wakeMsg, werr := s.ctrl.WakeDevice(id); werr == nil {
 		msg = "诊断已入队。" + wakeMsg
 	} else {
@@ -518,7 +518,7 @@ func (s *Server) handleReboot(w http.ResponseWriter, r *http.Request) {
 	}
 	// 跟诊断一样：顺手主动唤醒一次。设备在周期上报的话等最多 120 秒，
 	// 唤醒一下就能立刻下发。（唤醒失败不影响正事，只当提示）
-	msg := "重启指令已入队，会在设备下次上报时下发"
+	msg := "重启指令已入队，正在主动唤醒设备让任务立刻下发"
 	if wakeMsg, werr := s.ctrl.WakeDevice(id); werr == nil {
 		msg = "重启指令已入队。" + wakeMsg + "；设备会断开重连，几分钟后回来"
 	} else {
@@ -642,6 +642,8 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 
 	// FTTR 子设备：**探测不到就整块不显示**（不是显示一个空区块）
 	fttr, hasFttr := FttrOverview(params)
+	// 以太网口（详情页「以太网口」区块）：设备不报这类对象就整块不显示
+	lanEth, hasLanEth := LanEthOverview(params)
 	// WAN 连接：同样，没这类参数就不渲染
 	wan, hasWan := WanOverview(params)
 
@@ -659,6 +661,9 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 
 	data := map[string]any{
 		"Device":             d,
+		"LanEth":             lanEth,
+		"HasLanEth":          hasLanEth,
+		"LanEthUp":           lanEthUpCount(lanEth),
 		"Fttr":               fttr,
 		"HasFttr":            hasFttr,
 		"FttrOnline":         fttrOnlineCount(fttr),
@@ -870,7 +875,7 @@ func (s *Server) apiWifi(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"queued": true,
-		"note":   "任务会在设备下次 Inform 时下发；只采集 SSID/开关/信道/标准/加密/终端数等摘要字段",
+		"note":   "任务已入队，会主动唤醒设备让它在几秒内下发；只采集 SSID/开关/信道/标准/加密/终端数等摘要字段",
 	})
 }
 
@@ -933,7 +938,7 @@ func (s *Server) apiFetchNames(w http.ResponseWriter, r *http.Request) {
 		"queued":     true,
 		"path":       req.Path,
 		"next_level": req.NextLevel,
-		"note":       "只枚举名字不取值；任务会在设备下次 Inform 时下发",
+		"note":       "只枚举名字不取值；任务已入队，会主动唤醒设备让它在几秒内下发",
 	})
 }
 
@@ -972,7 +977,7 @@ func (s *Server) apiFetch(w http.ResponseWriter, r *http.Request) {
 		"path":    req.Path,
 		"exclude": req.Exclude,
 		"max":     req.Max,
-		"note":    "任务会在设备下次 Inform 时下发；枚举和取值在同一个会话里连着做",
+		"note":    "任务已入队，会主动唤醒设备让它在几秒内下发；枚举和取值在同一个会话里连着做",
 	})
 }
 

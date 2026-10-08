@@ -145,6 +145,12 @@ func TestEnglishPagesHaveNoChinese(t *testing.T) {
 		// 有光功率读数，才会渲染那两行
 		{Name: "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.RXPower", Value: "-15"},
 		{Name: "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.TXPower", Value: "2"},
+		// 有网口才渲染「以太网口」区块（速率/双工是人话字符串，最容易漏翻）
+		{Name: "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.Name", Value: "eth0:1"},
+		{Name: "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.Status", Value: "Up"},
+		{Name: "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.MaxBitRate", Value: "2500"},
+		{Name: "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.X_HW_DuplexMode", Value: "Auto_Full"},
+		{Name: "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.Stats.BytesSent", Value: "35376428045"},
 	}, "getvalues"); err != nil {
 		t.Fatal(err)
 	}

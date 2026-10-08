@@ -91,6 +91,7 @@ func run(args []string) error {
 		AutoFetchDeviceInfo:  cfg.AutoFetchInfo,
 		AutoFetchWiFi:        cfg.AutoFetchWiFi,
 		WiFiRefreshInterval:  cfg.AutoRefreshWiFi,
+		TaskWakeInterval:     cfg.TaskWakeInterval,
 		ProbeCapabilities:    cfg.ProbeCapabilities,
 		ConnReqEnabled:       cfg.ConnReqEnabled,
 		ConnReqUser:          cfg.ConnReqUser,

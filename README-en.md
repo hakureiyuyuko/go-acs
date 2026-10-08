@@ -47,7 +47,7 @@ online / probing / offline — and a 5-second auto-refresh toggle in the top-rig
 ![Overview](docs/images/overview.png)
 
 Basic information (including optical module readings: Rx / Tx power, temperature, voltage, bias current),
-WAN connections, operations (wake / reboot / delete), notes; the same 5-second auto-refresh
+WAN connections, Ethernet ports, operations (wake / reboot / delete), notes; the same 5-second auto-refresh
 toggle (shared with the list page) is in the top-right
 
 ![Device detail](docs/images/device.png)
@@ -144,6 +144,7 @@ uppercased, hyphens replaced with underscores).
 | `-offline-probe-max` | `ACS_OFFLINE_PROBE_MAX` | `0` | Upper bound for `interval × factor` (`0` = none; useful when a device reports a very large interval) |
 | `-offline-check-interval` | `ACS_OFFLINE_CHECK_INTERVAL` | `30s` | How often the background checker sweeps online status |
 | `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | Automatically collect wireless overview and host list on onboarding |
+| `-task-wake-interval` | `ACS_TASK_WAKE_INTERVAL` | `10s` | How often to send a Connection Request when tasks are queued (`0` = off: wait for periodic reports) |
 | `-auto-refresh-wifi` | `ACS_AUTO_REFRESH_WIFI` | `10m` | Auto-refresh interval for the wireless / client overview **and FTTR sub-devices** (the "collected at" time on the panel moves accordingly; `0` = collect only once at onboarding) |
 | `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | Run capability probing once on onboarding (decides UI blocks) |
 | `-log-level` | `ACS_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |

@@ -81,6 +81,9 @@ type simulator struct {
 
 	// optical：给主机加上 PON 光功率参数（模拟光猫自己上报收/发光）。
 	optical bool
+	// lanEth：给主机加以太网口（LAN 口）参数。>0 时前两个口插着线（Up），其余未插线；
+	// 真机上华为还会额外给 X_HW_Speed/X_HW_DuplexMode 表示协商结果。
+	lanEth int
 	// fttrOptical：给 FTTR 子设备加上光功率参数（模拟光纤组网子机）。
 	fttrOptical bool
 	// fttrWireless / fttrWired：把这些实例（1-based 子设备序号）做成无线 / 有线组网，
@@ -170,6 +173,8 @@ func main() {
 	flag.BoolVar(&fttrOptical, "fttr-optical", false, "给 FTTR 子设备加光功率参数（模拟光纤组网子机）")
 	var optical bool
 	flag.BoolVar(&optical, "optical", false, "给主机加 PON 光功率参数（模拟光猫自己上报收/发光）")
+	var lanEth int
+	flag.IntVar(&lanEth, "lan-eth", 0, "主机以太网口数量（前 2 个插着线，其余未插线；模拟 LAN 口状态/速率/流量）")
 	flag.StringVar(&fttrWireless, "fttr-wifi", "", "把哪些 FTTR 子设备做成无线组网（子设备序号，逗号分隔，如 1,3）")
 	flag.StringVar(&fttrWired, "fttr-eth", "", "把哪些 FTTR 子设备做成有线组网（子设备序号，逗号分隔）")
 	flag.IntVar(&s.fttr, "fttr", 0, "模拟 FTTR 子设备（从光猫）数量，0 表示没有")
@@ -184,6 +189,7 @@ func main() {
 	s.pingNeedIface = pingNeedIface
 	s.fttrOptical = fttrOptical
 	s.optical = optical
+	s.lanEth = lanEth
 	s.fttrWireless = parseIntSet(fttrWireless)
 	s.fttrWired = parseIntSet(fttrWired)
 	s.noWAN = noWAN
@@ -486,6 +492,50 @@ func (s *simulator) buildParams(root, specVersion string) {
 		set(tr+"Temperature", "11008", "int")
 		set(tr+"Vcc", "32260", "int")
 		set(tr+"TXBias", "14500", "int")
+	}
+
+	// 主机以太网口（LAN 口）。字段名与真机（华为 HN8145X6N / V271-20）一致：
+	// Name / Status / Enable / MACAddress / MaxBitRate / DuplexMode，
+	// 外加华为私有的 X_HW_Speed（Auto_NNNN = 自动协商到多少）与 X_HW_DuplexMode。
+	// 前两个口插着线（Up，带有流量），其余未插线（NoLink）—— 真机也是这样。
+	if s.lanEth > 0 {
+		eth := root + "LANDevice.1.LANEthernetInterfaceConfig."
+		for i := 1; i <= s.lanEth; i++ {
+			p := eth + strconv.Itoa(i) + "."
+			up := i <= 2
+			name := "eth0:" + strconv.Itoa(i)
+			set(p+"Name", name, "string")
+			set(p+"Enable", "1", "boolean")
+			set(p+"MACAddress", "7C:39:85:83:B2:FA", "string")
+			if up {
+				// 口 1 是 2.5G，口 2 是百兆（跟真机一样能看出区别）
+				if i == 1 {
+					set(p+"Status", "Up", "string")
+					set(p+"MaxBitRate", "2500", "unsignedInt")
+					set(p+"X_HW_Speed", "Auto_2500", "string")
+					set(p+"X_HW_DuplexMode", "Auto_Full", "string")
+					set(p+"DuplexMode", "Auto", "string")
+					set(p+"Stats.BytesSent", "35376428045", "unsignedLong")      // ↑ 32.9 GB
+					set(p+"Stats.BytesReceived", "199926599617", "unsignedLong") // ↓ 186.2 GB
+				} else {
+					set(p+"Status", "Up", "string")
+					set(p+"MaxBitRate", "100", "unsignedInt")
+					set(p+"X_HW_Speed", "Auto_100", "string")
+					set(p+"X_HW_DuplexMode", "Auto_Full", "string")
+					set(p+"DuplexMode", "Auto", "string")
+					set(p+"Stats.BytesSent", "459967043695", "unsignedLong")
+					set(p+"Stats.BytesReceived", "19034584207", "unsignedLong")
+				}
+			} else {
+				set(p+"Status", "NoLink", "string")
+				set(p+"MaxBitRate", "Auto", "string")
+				set(p+"X_HW_Speed", "Auto_10", "string")
+				set(p+"X_HW_DuplexMode", "Auto_Half", "string")
+				set(p+"DuplexMode", "Auto", "string")
+				set(p+"Stats.BytesSent", "0", "unsignedLong")
+				set(p+"Stats.BytesReceived", "0", "unsignedLong")
+			}
+		}
 	}
 
 	// 无线参数。

@@ -58,7 +58,9 @@ type Config struct {
 	// AutoRefreshWiFi 是无线/终端概况的自动刷新间隔。
 	// 面板上那个「采集」时间只有真的去读一次设备参数才会动，所以除了首次纳管，
 	// 再按这个间隔自动来一次。0 = 只在首次纳管 / BOOTSTRAP 时采一次。
-	AutoRefreshWiFi   time.Duration
+	AutoRefreshWiFi time.Duration
+	// TaskWakeInterval 是「有任务排队就主动唤醒设备」的检查间隔（0 = 关掉这条路）。
+	TaskWakeInterval  time.Duration
 	ProbeCapabilities bool
 
 	// 主动唤醒（Connection Request）：给设备发一个 HTTP GET，让它立刻回连开一次会话，
@@ -111,6 +113,7 @@ func Load(args []string) (*Config, error) {
 		AutoFetchInfo:        true,
 		AutoFetchWiFi:        true,
 		AutoRefreshWiFi:      10 * time.Minute,
+		TaskWakeInterval:     10 * time.Second,
 		ProbeCapabilities:    true,
 		ConnReqEnabled:       true,
 		ConnReqUser:          "acs",
@@ -154,6 +157,8 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&c.LogRawSOAP, "log-soap", c.LogRawSOAP, "是否记录原始 SOAP 报文")
 	fs.BoolVar(&c.AutoFetchInfo, "auto-fetch-info", c.AutoFetchInfo, "Inform 后自动取设备基本信息")
 	fs.BoolVar(&c.AutoFetchWiFi, "auto-fetch-wifi", c.AutoFetchWiFi, "首次纳管/BOOTSTRAP 时自动采集无线概况（看板用）")
+	fs.DurationVar(&c.TaskWakeInterval, "task-wake-interval", c.TaskWakeInterval,
+		"有任务排队时主动发 Connection Request 叫设备的检查间隔（0 = 关闭，只等设备周期性上报）")
 	fs.DurationVar(&c.AutoRefreshWiFi, "auto-refresh-wifi", c.AutoRefreshWiFi,
 		"无线/终端概况自动刷新间隔（面板「采集」时间跟着动；0 = 只在首次纳管时采一次）")
 	fs.BoolVar(&c.ProbeCapabilities, "probe-capabilities", c.ProbeCapabilities, "首次纳管时探测设备能力（如有没有 FTTR 子设备）")
@@ -234,6 +239,11 @@ func fromEnv(c *Config) {
 	if v := os.Getenv("ACS_AUTO_REFRESH_WIFI"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.AutoRefreshWiFi = d
+		}
+	}
+	if v := os.Getenv("ACS_TASK_WAKE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.TaskWakeInterval = d
 		}
 	}
 	if v := os.Getenv("ACS_PROBE_CAPABILITIES"); v != "" {

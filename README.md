@@ -39,7 +39,7 @@
 
 ![概览](docs/images/overview.png)
 
-基本信息（含光模块读数：收光 / 发光 / 光模块温度 / 电压 / 偏流）、WAN 连接、操作（唤醒 / 重启 / 删除）、备注；右上角同样有 5 秒自动刷新开关（与列表页共享）
+基本信息（含光模块读数：收光 / 发光 / 光模块温度 / 电压 / 偏流）、WAN 连接、以太网口、操作（唤醒 / 重启 / 删除）、备注；右上角同样有 5 秒自动刷新开关（与列表页共享）
 
 ![设备详情](docs/images/device.png)
 
@@ -125,6 +125,7 @@ go build -o cpesim ./test/cpesim
 | `-offline-probe-max` | `ACS_OFFLINE_PROBE_MAX` | `0` | `周期×倍数` 的上限（`0` = 不设；设备上报的周期很大时用得上）|
 | `-offline-check-interval` | `ACS_OFFLINE_CHECK_INTERVAL` | `30s` | 后台多久巡检一次在线状态 |
 | `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | 纳管时自动采集无线概况与主机列表 |
+| `-task-wake-interval` | `ACS_TASK_WAKE_INTERVAL` | `10s` | 有任务排队就主动发 Connection Request 叫设备的检查间隔（`0` = 关闭，只等设备周期性上报）|
 | `-auto-refresh-wifi` | `ACS_AUTO_REFRESH_WIFI` | `10m` | 无线 / 终端概况 + **FTTR 子设备**的自动刷新间隔（面板上的「采集」时间跟着动；`0` = 只在首次纳管时采一次）|
 | `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | 纳管时做一次能力探测（决定界面区块）|
 | `-log-level` | `ACS_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |

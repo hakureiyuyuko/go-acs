@@ -71,7 +71,7 @@
     </div>
   </div>
   <div class="hint" style="margin:-8px 0 4px">
-    {{if .Device.Online}}{{T "任务在设备下次上报时下发（离线时会排队等待）。"}}
+    {{if .Device.Online}}{{T "任务会主动唤醒设备、几秒内下发（离线时会排队等待）。"}}
     {{else}}{{T "设备当前离线，需要它配合的操作都不可用；它恢复上报后按钮会自动恢复。删除设备只是删本地记录，随时可用。"}}{{end}}
   </div>
 
@@ -115,6 +115,35 @@
         <td>{{if .Service}}{{.Service}}{{else}}-{{end}}</td>
         <td class="mono">{{if .VLAN}}{{.VLAN}}{{else}}-{{end}}</td>
         <td class="mono">{{if .Uptime}}{{.Uptime}}{{else}}-{{end}}</td>
+        <td class="mono hint">{{fmtTimeShort .Updated}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+
+  {{if .HasLanEth}}
+  <h2>{{T "以太网口"}}</h2>
+  <div class="hint" style="margin-bottom:8px">
+    {{T "共 %d 个口，已连接 %d 个。" (len .LanEth) .LanEthUp}}
+  </div>
+  <table>
+    <thead>
+      <tr><th>{{T "端口"}}</th><th>{{T "状态"}}</th><th>{{T "速率"}}</th><th>{{T "双工"}}</th><th>MAC</th>
+          <th>{{T "收发流量"}}</th><th>{{T "采集"}}</th></tr>
+    </thead>
+    <tbody>
+      {{range .LanEth}}
+      <tr>
+        <td class="mono">{{if .Name}}{{.Name}}{{else}}#{{.Instance}}{{end}}</td>
+        <td>
+          {{if .Status}}<span class="badge {{if .Up}}on{{else}}off{{end}}">{{.Status}}</span>
+          {{else}}<span class="hint">-</span>{{end}}
+        </td>
+        <td class="mono" {{if .RateRaw}}title="{{.RateRaw}}"{{end}}>{{if .Rate}}{{TS .Rate}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td {{if .DuplexRaw}}title="{{.DuplexRaw}}"{{end}}>{{if .Duplex}}{{TS .Duplex}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td class="mono">{{if .MAC}}{{.MAC}}{{else}}<span class="hint">-</span>{{end}}</td>
+        <td class="mono">{{if .Tx}}↑ {{.Tx}}{{end}} {{if .Rx}}↓ {{.Rx}}{{end}}{{if not (or .Tx .Rx)}}<span class="hint">-</span>{{end}}</td>
         <td class="mono hint">{{fmtTimeShort .Updated}}</td>
       </tr>
       {{end}}

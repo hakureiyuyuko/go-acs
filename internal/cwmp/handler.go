@@ -127,9 +127,12 @@ type Config struct {
 	AutoFetchDeviceInfo bool          // Inform 后是否自动去取设备基本信息
 	AutoFetchWiFi       bool          // 首次纳管/BOOTSTRAP 时是否自动采集无线概况（看板用）
 	WiFiRefreshInterval time.Duration // 无线/终端概况自动刷新间隔（0 = 只在首次纳管时采一次）
-	ProbeCapabilities   bool          // 首次纳管时是否探测设备能力（如有没有 FTTR 子设备）
-	MaxBodyBytes        int64
-	LogRawSOAP          bool
+	// TaskWakeInterval 是「有任务排队就主动唤醒设备」的检查间隔（0 = 关掉）。
+	// 见 DispatchPendingTasks：我们发起的动作不该干等设备周期性上报。
+	TaskWakeInterval  time.Duration
+	ProbeCapabilities bool // 首次纳管时是否探测设备能力（如有没有 FTTR 子设备）
+	MaxBodyBytes      int64
+	LogRawSOAP        bool
 
 	// 离线判定（见 offline.go）：
 	//   设备没上报周期信息时用 OfflineAfter 兜底；
@@ -179,6 +182,14 @@ type Server struct {
 	connReqDone map[int64]bool
 	// connReqRetry 是写 CR 凭据失败后的重试间隔（0 = 用 connReqTaskRetry；测试里调小）
 	connReqRetry time.Duration
+
+	// 任务派发的两个时间窗（NewServer 里给默认值，测试里直接改）：
+	//   wakeIdle：设备刚上报过就别叫它 —— 它正在会话里，任务这次就下发了
+	//   wakeCooldown：同一台设备两次主动唤醒之间至少隔这么久，别把设备叫得停不下来
+	wakeIdle     time.Duration
+	wakeCooldown time.Duration
+	wakeMu       sync.Mutex
+	wakeAt       map[int64]time.Time
 }
 
 // NewServer 构造 CWMP 服务端。
@@ -215,12 +226,35 @@ func NewServer(st *store.Store, cfg Config, log *slog.Logger) *Server {
 		cfg:   cfg,
 		log:   log,
 		sess:  newSessionManager(cfg.SessionTimeout),
+		// 派发默认值：刚上报过 5 秒内不叫（让这次会话有机会把任务取走），
+		// 同一台设备 30 秒内只叫一次（人工点、离线探测、派发三路共用这个冷却）
+		wakeIdle:     5 * time.Second,
+		wakeCooldown: 30 * time.Second,
+		wakeAt:       map[int64]time.Time{},
 	}
 }
 
 // StartJanitor 起后台清理：超时会话、离线判定。
 func (s *Server) StartJanitor(ctx context.Context) {
 	go s.sess.janitor(ctx, 30*time.Second)
+
+	// 任务派发：凡是我们这边发起的动作（采集、下发、诊断、重启…），
+	// 都主动走 Connection Request 把设备叫起来干活，而不是干等它周期性上报。
+	// 被动等上报只适用于设备自己发起的上报（那时任务顺手就带下去了）。
+	if s.cfg.TaskWakeInterval > 0 {
+		go func() {
+			t := time.NewTicker(s.cfg.TaskWakeInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					s.DispatchPendingTasks(ctx)
+				}
+			}
+		}()
+	}
 	go func() {
 		t := time.NewTicker(s.cfg.OfflineCheckInterval)
 		defer t.Stop()
@@ -819,6 +853,91 @@ func (s *Server) EnqueueFetchWiFi(deviceID int64) (int64, error) {
 	})
 }
 
+// lanEthSubtreePath 返回以太网口对象所在子树的路径。
+//
+// TR-098 是 LANDevice.{i}.LANEthernetInterfaceConfig.{j}.，TR-181 是 Device.Ethernet.Interface.{i}.。
+// 为什么枚举整棵 LANDevice 而不是写死 LANDevice.1.：LAN 可能有多个实例，
+// 多扫点名字不花钱（取值那边有 include 白名单筛）。
+func lanEthSubtreePath(root string) string {
+	if strings.HasPrefix(root, "Device.") {
+		return "Device.Ethernet."
+	}
+	return root + "LANDevice."
+}
+
+// lanEthSuffixes 是「以太网口」那块表要的字段（TR-098 与 TR-181 两套命名都列上）。
+//
+// 只取状态类字段：真机上有 4 个口 × 32 个字段（含一大摞 Stats 计数器），
+// 全拉回来既没必要也刷屏。收发字节数留着，界面上能看出哪个口在扛流量。
+var lanEthSuffixes = []string{
+	".Name",
+	".Status",
+	".Enable",
+	".MACAddress",
+	".MaxBitRate",
+	".DuplexMode",
+	".X_HW_Speed",
+	".X_HW_DuplexMode",
+	".Stats.BytesSent",
+	".Stats.BytesReceived",
+}
+
+// lanEthGatePatterns 用来判断「这台设备有没有以太网口对象」——
+// 位置不固定（LANDevice 实例号多少都有），所以用中间匹配而不是前缀。
+var lanEthGatePatterns = []string{
+	"%lanethernetinterfaceconfig.%",
+	"device.ethernet.interface.%",
+}
+
+// EnqueueFetchLanEth 入队一条「采集以太网口概况」的任务。
+func (s *Server) EnqueueFetchLanEth(deviceID int64) (int64, error) {
+	d, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return s.enqueueSubtree(deviceID, gpnPayload{
+		Path:      lanEthSubtreePath(d.DataModelRoot),
+		ThenFetch: true,
+		Include:   lanEthSuffixes,
+		SkipStore: true,
+	})
+}
+
+// refreshLanEthIfDue 到点刷新以太网口概况。
+//
+// 为什么值得定期刷：网口插没插线、协商到多少速率是会变的（用户把网线换到另一个口上），
+// 而数据只采一次的话界面上永远是旧状态。跟无线概况共用同一个间隔。
+func (s *Server) refreshLanEthIfDue(deviceID int64) {
+	if s.cfg.WiFiRefreshInterval <= 0 {
+		return
+	}
+	// 先看这台设备到底有没有网口对象（没有就别发任务了）
+	_, last, ok := s.store.LastParamLike(deviceID, lanEthGatePatterns)
+	if !ok {
+		// 库里没见过网口对象 —— 两种可能：这台设备确实没有；或者它在**这个功能上线前**
+		// 就纳管了，从来没人采过（设备不会主动上报这些参数，不去枚举就永远看不到）。
+		// 给后者补试一次：任务历史里查不到这类枚举就发一条，查得到就再也不发。
+		if s.store.HasTaskPayload(deviceID, `"`+lanEthSubtreePath("InternetGatewayDevice.")+`"`) ||
+			s.store.HasTaskPayload(deviceID, `"Device.Ethernet."`) {
+			return
+		}
+		if _, err := s.EnqueueFetchLanEth(deviceID); err != nil {
+			s.log.Warn("入队采集以太网口失败", "device_id", deviceID, "err", err)
+			return
+		}
+		s.log.Info("这台设备还没采过以太网口，补采一次", "device_id", deviceID)
+		return
+	}
+	if time.Since(last) < s.cfg.WiFiRefreshInterval {
+		return
+	}
+	if _, err := s.EnqueueFetchLanEth(deviceID); err != nil {
+		s.log.Warn("入队刷新以太网口失败", "device_id", deviceID, "err", err)
+		return
+	}
+	s.log.Info("以太网口概况到期，已安排刷新", "device_id", deviceID)
+}
+
 // EnqueueFetchHosts 入队一条「采集设备主机列表」的任务。
 //
 // 这张表（TR-098：LANDevice.1.Hosts.；TR-181：Hosts.）是**唯一**能拿到终端名的
@@ -1230,6 +1349,8 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		// FTTR 子设备（子光猫）也按同一个节奏定期刷
 		// （以前只在纳管那次能力探测时采一次，界面上的「采集」会永远停在那一刻）
 		s.refreshFttrIfDue(deviceID)
+		// 以太网口概况同理：网线插拔/协商速率会变
+		s.refreshLanEthIfDue(deviceID)
 	}
 
 	if s.cfg.AutoFetchWiFi && (created || inf.HasEvent("0 BOOTSTRAP")) {
@@ -1239,6 +1360,10 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		// WAN 连接概况（详情页的「WAN 连接」区块），同样只取十几个摘要字段
 		if _, err := s.EnqueueFetchWAN(deviceID); err != nil {
 			s.log.Warn("入队采集 WAN 概况失败", "device_id", deviceID, "err", err)
+		}
+		// 以太网口概况（详情页的「以太网口」区块）
+		if _, err := s.EnqueueFetchLanEth(deviceID); err != nil {
+			s.log.Warn("入队采集以太网口失败", "device_id", deviceID, "err", err)
 		}
 	}
 

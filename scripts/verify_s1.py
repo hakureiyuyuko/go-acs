@@ -1543,12 +1543,35 @@ def main():
 
     # 动作提示语是后端拼的字符串、通过 ?msg= 回显，走的也是「显示时翻译」
     for zh, en in (("已保存。", "Saved."),
-                   ("诊断已入队，会在设备下次上报时下发", "Diagnostics queued")):
+                   ("诊断已入队，正在主动唤醒设备让任务立刻下发", "Diagnostics queued"),
+                   ("重启指令已入队，正在主动唤醒设备让任务立刻下发", "Reboot queued"),
+                   ("已主动唤醒设备，它应该马上回连（几秒内任务就会下发）", "Woke the device"),
+                   ("诊断已入队。已主动唤醒设备，它应该马上回连（几秒内任务就会下发）",
+                    "Diagnostics queued. Woke the device")):
         with lang_get("/?lang=en&msg=" + urllib.parse.quote(zh)) as r:
             page = r.read().decode("utf-8", "replace")
         m = re.search(r'class="notice[^"]*">\s*(.*?)\s*</div>', page, re.S)
         notice = m.group(1) if m else ""
         check("动作提示语在英文界面上是英文：%s" % en, en in notice, notice[:60])
+
+    print("== 12b. 以太网口：详情页显示 LAN 口状态/速率/流量 ==")
+    ok, out = run_sim(workdir, "-serial", "VERIFY-LANETH", "-oui", "001122", "-once",
+                      "-event", "0 BOOTSTRAP", "-lan-eth", "4")
+    check("带网口的设备注册会话成功", ok, out[-200:])
+    dl = [d for d in api_devices() if d["SerialNumber"] == "VERIFY-LANETH"]
+    check("带网口的设备已纳管", len(dl) == 1, len(dl))
+    if dl:
+        st, lh = get("/devices/%d" % dl[0]["ID"])
+        check("详情页显示了「以太网口」区块", "以太网口" in lh, "")
+        check("表头有「共 N 个口，已连接 M 个」", "已连接 2 个" in lh, "")
+        check("认出了各个口与协商速率",
+              "eth0:1" in lh and "2.5 Gbps" in lh and "100 Mbps" in lh, "")
+        check("流量换算成人话（32.9 GB / 186.2 GB）", "32.9 GB" in lh and "186.2 GB" in lh, "")
+        check("未插线的口如实显示 NoLink", lh.count("NoLink") >= 2, lh.count("NoLink"))
+        # 没有网口对象的设备不该出现这块（不摆空表）
+        if d98:
+            st2, oh = get("/devices/%d" % d98[0]["ID"])
+            check("没有网口对象的设备不显示「以太网口」区块", "以太网口" not in oh, "")
 
     print("== 37c. 渲染结果里不许出现 Go 的格式化错误标记 ==")
     # 起因：模板里把 int 值喂给 %s，中文界面直接显示成「主机 %!s(int=5) 台」。
@@ -1648,6 +1671,109 @@ def main():
             except Exception:
                 proc3.kill()
             f3.close()
+
+    print("== 39. 任务派发：有任务排队就主动唤醒设备（不等周期上报）==")
+    if not (os.path.exists(acs_bin2) and os.path.exists(sim_bin2)):
+        skip("任务派发", "没找到 $WORK/acs 或 $WORK/cpesim")
+    else:
+        import sqlite3
+        port5 = 17586
+        base5 = "http://127.0.0.1:%d" % port5
+        db5 = os.path.join(workdir, "dispatch.db")
+        env5 = dict(os.environ)
+        env5.update({
+            "ACS_LISTEN": ":%d" % port5,
+            "ACS_DB": db5,
+            "ACS_LOG_LEVEL": "debug",
+            "ACS_TASK_WAKE_INTERVAL": "1s",   # 派发检查压到秒级
+        })
+        env5.pop("ACS_WEB_USER", None)        # 关掉面板鉴权，方便直接发 API 请求
+        env5.pop("ACS_WEB_PASS", None)
+        log5 = os.path.join(workdir, "dispatch.log")
+        f5 = open(log5, "w")
+        proc5 = subprocess.Popen([acs_bin2], env=env5, stdout=f5, stderr=subprocess.STDOUT)
+        cpe5 = None
+        try:
+            ready = False
+            for _ in range(60):
+                try:
+                    with urllib.request.urlopen(base5 + "/", timeout=2) as r:
+                        if r.status == 200:
+                            ready = True
+                            break
+                except Exception:
+                    time.sleep(0.2)
+            if not ready:
+                skip("任务派发", "临时实例没起来")
+            else:
+                # 模拟器**300 秒才周期上报一次**：任务若在几秒内被执行，只可能是被 CR 叫起来的
+                cpe5 = subprocess.Popen([sim_bin2, "-acs", base5 + "/acs", "-serial", "DISPATCH1",
+                                         "-interval", "300s", "-lan-eth", "4"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                def tasks_of(serial):
+                    try:
+                        con = sqlite3.connect(db5)
+                        row = con.execute(
+                            "SELECT d.id FROM devices d WHERE d.serial_number = ?", (serial,)).fetchone()
+                        if not row:
+                            con.close()
+                            return None, []
+                        rows = con.execute(
+                            "SELECT id, kind, status FROM tasks WHERE device_id = ? ORDER BY id",
+                            (row[0],)).fetchall()
+                        con.close()
+                        return row[0], rows
+                    except Exception:
+                        return None, []
+
+                did = None
+                for _ in range(120):          # 等首次纳管（含它那一批采集任务）
+                    did, rows = tasks_of("DISPATCH1")
+                    if did and rows and all(t[2] in ("done", "failed") for t in rows):
+                        break
+                    time.sleep(0.3)
+                check("纳管完成（首轮任务都已收尾）", bool(did), did)
+
+                before = len(rows) if rows else 0
+                # 刚上报完那几秒里排任务，属于「会话可能还没结束」，派发器会先等一等；
+                # 这里等一下再排，模拟「设备闲着的时候界面点了个采集」。
+                time.sleep(6)
+                # 排一条新任务：让 ACS 去枚举 WAN 子树
+                req = urllib.request.Request(
+                    base5 + "/api/devices/%d/fetch" % did,
+                    data=json.dumps({"path": "InternetGatewayDevice.WANDevice."}).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+                try:
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        ok_post = r.status == 200
+                except Exception as e:
+                    ok_post = False
+                    check("排任务（POST /api/devices/{id}/fetch）", False, e)
+                if ok_post:
+                    # 设备周期 300 秒 —— 几秒内做完就说明是主动唤醒的
+                    woke = False
+                    for _ in range(40):       # 最多等 12 秒
+                        time.sleep(0.3)
+                        _, rows2 = tasks_of("DISPATCH1")
+                        if len(rows2) > before and rows2[-1][2] in ("done", "failed"):
+                            woke = True
+                            break
+                    check("排队的任务几秒内被执行（说明设备是被主动唤醒的，不是等 300 秒周期）",
+                          woke, "任务数 %d → %d" % (before, len(rows2)))
+                    f5.flush()
+                    logtxt5 = open(log5, encoding="utf-8", errors="replace").read()
+                    check("日志里能看到「有任务排队，主动唤醒设备」",
+                          "有任务排队，主动唤醒设备" in logtxt5, "")
+        finally:
+            if cpe5:
+                cpe5.terminate()
+            proc5.terminate()
+            try:
+                proc5.wait(timeout=5)
+            except Exception:
+                proc5.kill()
+            f5.close()
 
     print("== 37f. FTTR 子设备：也定期自动刷新（不只在纳管时采一次）==")
     if not (os.path.exists(acs_bin2) and os.path.exists(sim_bin2)):

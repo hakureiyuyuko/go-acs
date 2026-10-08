@@ -285,15 +285,33 @@ func (s *Store) FindDeviceBySerial(serial string) (*Device, error) {
 // 前缀比对必须转小写（拼法不统一），所以用不上索引 —— 但有 device_id 兜着，
 // 只扫这台设备自己的行，够用。没这类参数时返回 ok = false。
 func (s *Store) LastSubtreeAt(deviceID int64, prefixes []string) (sample string, last time.Time, ok bool) {
-	conds := make([]string, 0, len(prefixes))
-	args := []any{deviceID}
+	patterns := make([]string, 0, len(prefixes))
 	for _, p := range prefixes {
 		p = strings.ToLower(strings.TrimSpace(p))
 		if p == "" {
 			continue
 		}
+		patterns = append(patterns, p+"%")
+	}
+	return s.LastParamLike(deviceID, patterns)
+}
+
+// LastParamLike 和 LastSubtreeAt 一样，只是匹配条件由调用方给**SQL LIKE 模式**
+// （都是拿 lower(name) 去比，模式自己写小写）。
+//
+// 为什么需要它：有些对象的位置不固定 —— 比如以太网口是
+// `LANDevice.{i}.LANEthernetInterfaceConfig.{j}.`，实例号多少都有，
+// 用前缀写不干净，用 `%lanethernetinterfaceconfig.%` 这种中间匹配就直接命中。
+func (s *Store) LastParamLike(deviceID int64, patterns []string) (sample string, last time.Time, ok bool) {
+	conds := make([]string, 0, len(patterns))
+	args := []any{deviceID}
+	for _, p := range patterns {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
 		conds = append(conds, "lower(name) LIKE ?")
-		args = append(args, p+"%")
+		args = append(args, p)
 	}
 	if len(conds) == 0 {
 		return "", time.Time{}, false

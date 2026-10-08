@@ -260,6 +260,9 @@ func (s *Server) connectionRequest(d *store.Device) error {
 	if !s.cfg.ConnReqEnabled {
 		return fmt.Errorf("主动唤醒功能已关闭（用 -connection-request 打开）")
 	}
+	// 记一次唤醒尝试（成功失败都记）：任务派发器的冷却靠它，
+	// 免得同一台设备被人工点、离线探测、派发三路反复叫。
+	s.noteWake(d.ID, time.Now())
 	// 设备上报的 URL 落在 devices 表里；库里没有就从已采集参数里再找一次
 	// （有些设备把 ConnectionRequestURL 放在 Inform 的参数列表里带上来）
 	target := d.ConnRequestURL
@@ -280,14 +283,6 @@ func (s *Server) connectionRequest(d *store.Device) error {
 		user, pass = lookupMgmt(params, pConnReqUser), lookupMgmt(params, pConnReqPass)
 	}
 	return SendConnectionRequest(target, user, pass, s.cfg.ConnReqTimeout)
-}
-
-// WakeDeviceQuiet 是给「顺手试一下唤醒」的场景用的：不关心结果，只记日志。
-func (s *Server) WakeDeviceQuiet(deviceID int64) {
-	if _, err := s.WakeDevice(deviceID); err != nil {
-		s.log.Info("顺手唤醒没成功（不影响正事，任务仍会按周期上报下发）",
-			"device_id", deviceID, "reason", err)
-	}
 }
 
 // FetchWAN 给外部（Web/REST）用：采集 WAN 连接概况。

@@ -215,6 +215,50 @@ func (s *Store) RequeueTask(id int64, maxRetries int, reason string) error {
 	return err
 }
 
+// HasRunningTask 判断这台设备现在有没有任务正在执行。
+//
+// 派发器用它判断「设备是不是正处在一次会话里」—— 正在跑任务就别再发
+// Connection Request 了，那次会话本来就会把后续任务接着下发。
+func (s *Store) HasRunningTask(deviceID int64) bool {
+	var one int
+	err := s.db.QueryRow(
+		`SELECT 1 FROM tasks WHERE device_id = ? AND status = 'running' LIMIT 1`, deviceID).Scan(&one)
+	return err == nil && one == 1
+}
+
+// DevicesWithPendingTasks 列出「还有任务排队」的设备 id。
+//
+// 给任务派发器用（见 cwmp.DispatchPendingTasks）：我们发起的动作不该干等设备周期上报，
+// 有任务排队就该主动把它叫起来。
+func (s *Store) DevicesWithPendingTasks() ([]int64, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT device_id FROM tasks WHERE status = 'pending' ORDER BY device_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// HasTaskPayload 判断这台设备历史上有没有入队过「负载里含某段文本」的任务。
+//
+// 用途：区分「这台设备没有某种对象」和「从来没人采过」—— 库里没有数据时这两件事
+// 看起来一样，只能翻任务历史。给老设备补采一次就靠它（见 cwmp.refreshLanEthIfDue）。
+func (s *Store) HasTaskPayload(deviceID int64, contains string) bool {
+	var one int
+	err := s.db.QueryRow(
+		`SELECT 1 FROM tasks WHERE device_id = ? AND payload LIKE ? LIMIT 1`,
+		deviceID, "%"+contains+"%").Scan(&one)
+	return err == nil && one == 1
+}
+
 // ListTasks 列出某设备的任务（新的在前）。
 func (s *Store) ListTasks(deviceID int64, limit int) ([]*Task, error) {
 	if limit <= 0 {
