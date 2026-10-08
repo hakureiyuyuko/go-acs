@@ -1649,6 +1649,83 @@ def main():
                 proc3.kill()
             f3.close()
 
+    print("== 37f. FTTR 子设备：也定期自动刷新（不只在纳管时采一次）==")
+    if not (os.path.exists(acs_bin2) and os.path.exists(sim_bin2)):
+        skip("FTTR 定期刷新", "没找到 $WORK/acs 或 $WORK/cpesim")
+    else:
+        import sqlite3
+        port4 = 17584
+        base4 = "http://127.0.0.1:%d" % port4
+        db4 = os.path.join(workdir, "fttrrefresh.db")
+        env4 = dict(os.environ)
+        env4.update({
+            "ACS_LISTEN": ":%d" % port4,
+            "ACS_DB": db4,
+            "ACS_LOG_LEVEL": "debug",
+            "ACS_AUTO_REFRESH_WIFI": "2s",   # 跟无线概况共用一个间隔，验收压到秒级
+        })
+        env4.pop("ACS_WEB_USER", None)
+        env4.pop("ACS_WEB_PASS", None)
+        log4 = os.path.join(workdir, "fttrrefresh.log")
+        f4 = open(log4, "w")
+        proc4 = subprocess.Popen([acs_bin2], env=env4, stdout=f4, stderr=subprocess.STDOUT)
+        cpe4 = None
+        try:
+            ready = False
+            for _ in range(60):
+                try:
+                    with urllib.request.urlopen(base4 + "/", timeout=2) as r:
+                        if r.status == 200:
+                            ready = True
+                            break
+                except Exception:
+                    time.sleep(0.2)
+            if not ready:
+                skip("FTTR 定期刷新", "临时实例没起来")
+            else:
+                cpe4 = subprocess.Popen([sim_bin2,
+                                         "-acs", base4 + "/acs", "-serial", "FTTRREF1",
+                                         "-interval", "2s", "-fttr", "2"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                def fttr_stamp():
+                    """读库里子设备参数的最近写入时间 —— 界面上那列「采集」。"""
+                    try:
+                        con = sqlite3.connect(db4)
+                        row = con.execute(
+                            "SELECT COALESCE(MAX(updated_at), '') FROM device_params "
+                            "WHERE LOWER(name) LIKE 'internetgatewaydevice.x_hw_apdevice.%'").fetchone()
+                        con.close()
+                        return row[0] or ""
+                    except Exception:
+                        return ""
+
+                first = ""
+                for _ in range(120):          # 等纳管时那次子树采集完成
+                    first = fttr_stamp()
+                    if first:
+                        break
+                    time.sleep(0.3)
+                check("纳管时采集了 FTTR 子设备", bool(first), first)
+                # 什么都不点，等两个刷新间隔
+                time.sleep(8)
+                second = fttr_stamp()
+                check("子设备到期后自动重新采集（采集时间自己往前走）",
+                      bool(second) and second > first, "首采 %s → 现在 %s" % (first, second))
+                f4.flush()
+                logtxt4 = open(log4, encoding="utf-8", errors="replace").read()
+                check("日志里能看到「FTTR 子设备到期，已安排刷新」",
+                      "FTTR 子设备到期" in logtxt4, "")
+        finally:
+            if cpe4:
+                cpe4.terminate()
+            proc4.terminate()
+            try:
+                proc4.wait(timeout=5)
+            except Exception:
+                proc4.kill()
+            f4.close()
+
     print("== 37. 离线判定：超期先主动探测，探不通才判离线 ==")
     acs_bin = os.path.join(workdir, "acs")
     sim_bin = os.path.join(workdir, "cpesim")

@@ -52,7 +52,8 @@ toggle (shared with the list page) is in the top-right
 
 ![Device detail](docs/images/device.png)
 
-FTTR sub-devices and network diagnostics: model, networking mode, optical power, and client counts per sub-device;
+FTTR sub-devices and network diagnostics: model, networking mode, optical power, and client counts per sub-device
+(refreshed periodically, on the same cadence as the wireless overview);
 diagnostics are ICMP sent by the device itself
 
 ![FTTR and diagnostics](docs/images/fttr.png)
@@ -143,7 +144,7 @@ uppercased, hyphens replaced with underscores).
 | `-offline-probe-max` | `ACS_OFFLINE_PROBE_MAX` | `0` | Upper bound for `interval × factor` (`0` = none; useful when a device reports a very large interval) |
 | `-offline-check-interval` | `ACS_OFFLINE_CHECK_INTERVAL` | `30s` | How often the background checker sweeps online status |
 | `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | Automatically collect wireless overview and host list on onboarding |
-| `-auto-refresh-wifi` | `ACS_AUTO_REFRESH_WIFI` | `10m` | Auto-refresh interval for the wireless / client overview (the "collected at" time on the panel moves accordingly; `0` = collect only once at onboarding) |
+| `-auto-refresh-wifi` | `ACS_AUTO_REFRESH_WIFI` | `10m` | Auto-refresh interval for the wireless / client overview **and FTTR sub-devices** (the "collected at" time on the panel moves accordingly; `0` = collect only once at onboarding) |
 | `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | Run capability probing once on onboarding (decides UI blocks) |
 | `-log-level` | `ACS_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `-log-soap` | `ACS_LOG_SOAP` | `false` | Print raw SOAP messages (for troubleshooting) |

@@ -43,7 +43,7 @@
 
 ![设备详情](docs/images/device.png)
 
-FTTR 子设备与网络诊断：子设备的型号、组网模式、光功率与各自带了多少终端；诊断由设备自己发 ICMP
+FTTR 子设备与网络诊断：子设备的型号、组网模式、光功率与各自带了多少终端（子设备概况与无线概况同一节奏定期刷新）；诊断由设备自己发 ICMP
 
 ![FTTR 与诊断](docs/images/fttr.png)
 
@@ -125,7 +125,7 @@ go build -o cpesim ./test/cpesim
 | `-offline-probe-max` | `ACS_OFFLINE_PROBE_MAX` | `0` | `周期×倍数` 的上限（`0` = 不设；设备上报的周期很大时用得上）|
 | `-offline-check-interval` | `ACS_OFFLINE_CHECK_INTERVAL` | `30s` | 后台多久巡检一次在线状态 |
 | `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | 纳管时自动采集无线概况与主机列表 |
-| `-auto-refresh-wifi` | `ACS_AUTO_REFRESH_WIFI` | `10m` | 无线 / 终端概况的自动刷新间隔（面板上的「采集」时间跟着动；`0` = 只在首次纳管时采一次）|
+| `-auto-refresh-wifi` | `ACS_AUTO_REFRESH_WIFI` | `10m` | 无线 / 终端概况 + **FTTR 子设备**的自动刷新间隔（面板上的「采集」时间跟着动；`0` = 只在首次纳管时采一次）|
 | `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | 纳管时做一次能力探测（决定界面区块）|
 | `-log-level` | `ACS_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `-log-soap` | `ACS_LOG_SOAP` | `false` | 打印原始 SOAP 报文（排障用）|

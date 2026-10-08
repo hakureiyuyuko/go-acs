@@ -593,6 +593,41 @@ func detectFTTRPrefix(names []string) (string, bool) {
 	return "", false
 }
 
+// refreshFttrIfDue 到点就刷新这台设备的 FTTR / 子设备子树。
+//
+// 为什么要有它：子设备子树以前**只在纳管那次能力探测时采一次**，于是界面上的
+// 「采集」时间永远停在纳管那一刻 —— 子光猫的在线状态 / 终端数 / 信号是几天前的
+// 数据却还挂在页面上，看着像实时的。现在跟无线概况一个节奏定期刷。
+//
+// 两道闸，免得白跑：
+//  1. 只有**真的有**这类对象的设备才刷 —— 这类子树的枚举很重（真机 V271 的 AP 子树
+//     就是四千多个参数），没有 FTTR 的设备一次查询就结束、不发任务；
+//  2. 按间隔来（跟无线概况共用 WiFiRefreshInterval），不是每次 Inform 都刷。
+func (s *Server) refreshFttrIfDue(deviceID int64) {
+	if s.cfg.WiFiRefreshInterval <= 0 {
+		return
+	}
+	// 一次查询两件事：这台设备有没有这类对象、上次是什么时候采的
+	sample, last, ok := s.store.LastSubtreeAt(deviceID, fttrProbeCandidates)
+	if !ok {
+		return
+	}
+	if time.Since(last) < s.cfg.WiFiRefreshInterval {
+		return
+	}
+	// 用库里那个样本名还原**设备自己的拼法**（真机上出现过 InternetGateWayDevice.）
+	prefix, found := detectFTTRPrefix([]string{sample})
+	if !found {
+		return
+	}
+	if _, err := s.EnqueueFetchSubtree(deviceID, prefix, nil, 0); err != nil {
+		s.log.Warn("入队刷新 FTTR 子设备失败", "device_id", deviceID, "err", err)
+		return
+	}
+	s.log.Info("FTTR 子设备到期，已安排刷新",
+		"device_id", deviceID, "prefix", prefix, "last", last)
+}
+
 // EnqueueProbeCapabilities 入队一条「看看设备有什么能力」的探测任务。
 // 只枚举顶层对象，不改参数、不下发任何东西。
 func (s *Server) EnqueueProbeCapabilities(deviceID int64, root string) (int64, error) {
@@ -1192,6 +1227,9 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 				s.log.Debug("无线概况到期，已安排刷新", "device_id", deviceID, "last", last)
 			}
 		}
+		// FTTR 子设备（子光猫）也按同一个节奏定期刷
+		// （以前只在纳管那次能力探测时采一次，界面上的「采集」会永远停在那一刻）
+		s.refreshFttrIfDue(deviceID)
 	}
 
 	if s.cfg.AutoFetchWiFi && (created || inf.HasEvent("0 BOOTSTRAP")) {

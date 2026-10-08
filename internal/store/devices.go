@@ -277,6 +277,42 @@ func (s *Store) FindDeviceBySerial(serial string) (*Device, error) {
 	return scanDevice(row)
 }
 
+// LastSubtreeAt 返回「以 prefixes 之一开头的参数」最近一次被写入的时间，
+// 并给出一个样本参数名 —— 用它能还原**设备自己的拼法**（真机上出现过
+// `InternetGateWayDevice.` 这种大小写写错的情况）。
+//
+// 用途：定期刷新前判断「这台设备有没有这类对象」+「上次是什么时候采的」，一次查询两件事。
+// 前缀比对必须转小写（拼法不统一），所以用不上索引 —— 但有 device_id 兜着，
+// 只扫这台设备自己的行，够用。没这类参数时返回 ok = false。
+func (s *Store) LastSubtreeAt(deviceID int64, prefixes []string) (sample string, last time.Time, ok bool) {
+	conds := make([]string, 0, len(prefixes))
+	args := []any{deviceID}
+	for _, p := range prefixes {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		conds = append(conds, "lower(name) LIKE ?")
+		args = append(args, p+"%")
+	}
+	if len(conds) == 0 {
+		return "", time.Time{}, false
+	}
+	var raw string
+	err := s.db.QueryRow(
+		`SELECT name, COALESCE(updated_at, '') FROM device_params
+		 WHERE device_id = ? AND (`+strings.Join(conds, " OR ")+`)
+		 ORDER BY updated_at DESC LIMIT 1`, args...).Scan(&sample, &raw)
+	if err != nil || raw == "" {
+		return "", time.Time{}, false
+	}
+	t := parseTS(raw)
+	if t.IsZero() {
+		return "", time.Time{}, false
+	}
+	return sample, t, true
+}
+
 // LastWifiSummaryAt 返回该设备**无线概况参数**最近一次被写入的时间。
 //
 // 面板上每个频段/终端分组旁边那个「采集 23:13:12」就是它 —— 只有真的去读一次设备参数
