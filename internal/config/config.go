@@ -55,10 +55,13 @@ type Config struct {
 	LogRawSOAP           bool
 	AutoFetchInfo        bool
 	AutoFetchWiFi        bool
-	// AutoRefreshWiFi 是无线/终端概况的自动刷新间隔。
-	// 面板上那个「采集」时间只有真的去读一次设备参数才会动，所以除了首次纳管，
-	// 再按这个间隔自动来一次。0 = 只在首次纳管 / BOOTSTRAP 时采一次。
+	// AutoRefreshWiFi 是概览数据（无线/终端概况、以太网口、FTTR 子设备）的**兜底**刷新间隔：
+	// 除了设备自己的周期上报会顺手刷新，再过这么久也强制来一次（面板上那个「采集」
+	// 时间只有真的去读一次设备参数才会动）。0 = 只在首次纳管 / BOOTSTRAP 时采一次。
 	AutoRefreshWiFi time.Duration
+	// AutoRefreshFloor 是「设备主动周期上报时顺手刷新概览」这条路径的最短重采间隔。
+	// 设备上报太密时（几十秒一次）不至于每个会话都去枚举一遍。默认 30 秒，0 = 不设下限。
+	AutoRefreshFloor time.Duration
 	// TaskWakeInterval 是「有任务排队就主动唤醒设备」的检查间隔（0 = 关掉这条路）。
 	TaskWakeInterval  time.Duration
 	ProbeCapabilities bool
@@ -113,6 +116,7 @@ func Load(args []string) (*Config, error) {
 		AutoFetchInfo:        true,
 		AutoFetchWiFi:        true,
 		AutoRefreshWiFi:      10 * time.Minute,
+		AutoRefreshFloor:     30 * time.Second,
 		TaskWakeInterval:     10 * time.Second,
 		ProbeCapabilities:    true,
 		ConnReqEnabled:       true,
@@ -160,7 +164,9 @@ func Load(args []string) (*Config, error) {
 	fs.DurationVar(&c.TaskWakeInterval, "task-wake-interval", c.TaskWakeInterval,
 		"有任务排队时主动发 Connection Request 叫设备的检查间隔（0 = 关闭，只等设备周期性上报）")
 	fs.DurationVar(&c.AutoRefreshWiFi, "auto-refresh-wifi", c.AutoRefreshWiFi,
-		"无线/终端概况自动刷新间隔（面板「采集」时间跟着动；0 = 只在首次纳管时采一次）")
+		"概览数据（无线/以太网口/FTTR）兜底刷新间隔（0 = 只在首次纳管时采一次）")
+	fs.DurationVar(&c.AutoRefreshFloor, "overview-refresh-min", c.AutoRefreshFloor,
+		"设备主动周期上报时顺手刷新概览的最短间隔（0 = 不设下限）")
 	fs.BoolVar(&c.ProbeCapabilities, "probe-capabilities", c.ProbeCapabilities, "首次纳管时探测设备能力（如有没有 FTTR 子设备）")
 	fs.BoolVar(&c.ConnReqEnabled, "connection-request", c.ConnReqEnabled, "允许主动唤醒设备（发 Connection Request）")
 	fs.StringVar(&c.ConnReqUser, "connreq-user", c.ConnReqUser, "主动唤醒的用户名（会写进设备的 ConnectionRequestUsername）")
@@ -239,6 +245,11 @@ func fromEnv(c *Config) {
 	if v := os.Getenv("ACS_AUTO_REFRESH_WIFI"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.AutoRefreshWiFi = d
+		}
+	}
+	if v := os.Getenv("ACS_OVERVIEW_REFRESH_MIN"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.AutoRefreshFloor = d
 		}
 	}
 	if v := os.Getenv("ACS_TASK_WAKE_INTERVAL"); v != "" {

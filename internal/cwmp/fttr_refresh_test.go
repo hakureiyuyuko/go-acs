@@ -33,7 +33,7 @@ func TestRefreshFttrIfDue(t *testing.T) {
 
 	t.Run("没有子设备对象的设备不发任务", func(t *testing.T) {
 		srv, st, id := newTestServer(t, Config{WiFiRefreshInterval: time.Nanosecond})
-		srv.refreshFttrIfDue(id)
+		srv.refreshFttrIfDue(id, false)
 		if ts := fttrTask(t, st, id); len(ts) != 0 {
 			t.Fatalf("没有 FTTR 对象的设备不该发任务，却发了 %d 条", len(ts))
 		}
@@ -42,7 +42,7 @@ func TestRefreshFttrIfDue(t *testing.T) {
 	t.Run("刚采过不刷", func(t *testing.T) {
 		srv, st, id := newTestServer(t, Config{WiFiRefreshInterval: time.Hour})
 		seedFttr(t, st, id, "InternetGatewayDevice.X_HW_APDevice.1.DeviceType")
-		srv.refreshFttrIfDue(id)
+		srv.refreshFttrIfDue(id, false)
 		if ts := fttrTask(t, st, id); len(ts) != 0 {
 			t.Fatalf("刚采过不该刷，却发了 %d 条", len(ts))
 		}
@@ -51,7 +51,7 @@ func TestRefreshFttrIfDue(t *testing.T) {
 	t.Run("到期就刷：整棵子树枚举 + 顺手取值", func(t *testing.T) {
 		srv, st, id := newTestServer(t, Config{WiFiRefreshInterval: time.Nanosecond})
 		seedFttr(t, st, id, "InternetGatewayDevice.X_HW_APDevice.1.DeviceType")
-		srv.refreshFttrIfDue(id)
+		srv.refreshFttrIfDue(id, false)
 		ts := fttrTask(t, st, id)
 		if len(ts) != 1 {
 			t.Fatalf("到期后该入队一条子设备枚举任务，得到 %d 条", len(ts))
@@ -75,7 +75,7 @@ func TestRefreshFttrIfDue(t *testing.T) {
 		// 真机上出现过 InternetGateWayDevice. 这种大小写写错，照着我们的拼法去枚举会失败
 		srv, st, id := newTestServer(t, Config{WiFiRefreshInterval: time.Nanosecond})
 		seedFttr(t, st, id, "InternetGateWayDevice.X_HW_APDevice.1.DeviceType")
-		srv.refreshFttrIfDue(id)
+		srv.refreshFttrIfDue(id, false)
 		ts := fttrTask(t, st, id)
 		if len(ts) != 1 {
 			t.Fatalf("该入队一条，得到 %d 条", len(ts))
@@ -92,9 +92,28 @@ func TestRefreshFttrIfDue(t *testing.T) {
 	t.Run("间隔为 0（只在纳管时采一次）时不刷", func(t *testing.T) {
 		srv, st, id := newTestServer(t, Config{WiFiRefreshInterval: 0})
 		seedFttr(t, st, id, "InternetGatewayDevice.X_HW_APDevice.1.DeviceType")
-		srv.refreshFttrIfDue(id)
+		srv.refreshFttrIfDue(id, false)
 		if ts := fttrTask(t, st, id); len(ts) != 0 {
 			t.Errorf("间隔为 0 时不该定期刷，得到 %d 条任务", len(ts))
+		}
+	})
+
+	t.Run("设备自己的周期上报就顺手刷（兜底间隔还没到也刷）", func(t *testing.T) {
+		// 兜底间隔 1 小时（没到），但设备本次是它自己的周期上报（2 PERIODIC）
+		srv, st, id := newTestServer(t, Config{WiFiRefreshInterval: time.Hour, OverviewRefreshFloor: 0})
+		seedFttr(t, st, id, "InternetGatewayDevice.X_HW_APDevice.1.DeviceType")
+		srv.refreshFttrIfDue(id, true)
+		if ts := fttrTask(t, st, id); len(ts) != 1 {
+			t.Fatalf("设备周期上报时该顺手刷一次，得到 %d 条", len(ts))
+		}
+	})
+
+	t.Run("周期上报但还没到下限，先不刷（防上报过密的设备刷屏）", func(t *testing.T) {
+		srv, st, id := newTestServer(t, Config{WiFiRefreshInterval: time.Hour, OverviewRefreshFloor: time.Hour})
+		seedFttr(t, st, id, "InternetGatewayDevice.X_HW_APDevice.1.DeviceType")
+		srv.refreshFttrIfDue(id, true)
+		if ts := fttrTask(t, st, id); len(ts) != 0 {
+			t.Fatalf("没到下限不该刷，得到 %d 条", len(ts))
 		}
 	})
 }

@@ -1754,6 +1754,83 @@ def main():
                 proc6.kill()
             f6.close()
 
+    print("== 37h. 概览数据：设备自己的周期上报就顺手刷（不靠兜底间隔）==")
+    if not (os.path.exists(acs_bin2) and os.path.exists(sim_bin2)):
+        skip("周期上报顺手刷", "没找到 $WORK/acs 或 $WORK/cpesim")
+    else:
+        import sqlite3
+        port7 = 17590
+        base7 = "http://127.0.0.1:%d" % port7
+        db7 = os.path.join(workdir, "periodicrefresh.db")
+        env7 = dict(os.environ)
+        env7.update({
+            "ACS_LISTEN": ":%d" % port7,
+            "ACS_DB": db7,
+            "ACS_LOG_LEVEL": "debug",
+            # 兜底间隔设成 1 小时（验收期间基本不可能到），所以只要刷了就只可能是「周期上报」触发的
+            "ACS_AUTO_REFRESH_WIFI": "1h",
+            "ACS_OVERVIEW_REFRESH_MIN": "0",
+        })
+        env7.pop("ACS_WEB_USER", None)
+        env7.pop("ACS_WEB_PASS", None)
+        log7 = os.path.join(workdir, "periodicrefresh.log")
+        f7 = open(log7, "w")
+        proc7 = subprocess.Popen([acs_bin2], env=env7, stdout=f7, stderr=subprocess.STDOUT)
+        cpe7 = None
+        try:
+            ready = False
+            for _ in range(60):
+                try:
+                    with urllib.request.urlopen(base7 + "/", timeout=2) as r:
+                        if r.status == 200:
+                            ready = True
+                            break
+                except Exception:
+                    time.sleep(0.2)
+            if not ready:
+                skip("周期上报顺手刷", "临时实例没起来")
+            else:
+                # 设备每 2 秒自己上报一次（事件 2 PERIODIC）
+                cpe7 = subprocess.Popen([sim_bin2, "-acs", base7 + "/acs", "-serial", "PERIODIC1",
+                                         "-interval", "2s", "-lan-eth", "4"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                def stamp7():
+                    try:
+                        con = sqlite3.connect(db7)
+                        row = con.execute(
+                            "SELECT COALESCE(MAX(updated_at), '') FROM device_params "
+                            "WHERE lower(name) LIKE '%lanethernetinterfaceconfig%'").fetchone()
+                        con.close()
+                        return row[0] or ""
+                    except Exception:
+                        return ""
+
+                first = ""
+                for _ in range(100):
+                    first = stamp7()
+                    if first:
+                        break
+                    time.sleep(0.3)
+                check("首次纳管会自动采集以太网口", bool(first), first)
+                time.sleep(8)
+                second = stamp7()
+                check("兜底间隔没到，但设备周期上报后概览也刷新了",
+                      bool(second) and second > first, "首采 %s → 现在 %s" % (first, second))
+                f7.flush()
+                logtxt7 = open(log7, encoding="utf-8", errors="replace").read()
+                check("日志里能看到「以太网口概况到期，已安排刷新」",
+                      "以太网口概况到期" in logtxt7, "")
+        finally:
+            if cpe7:
+                cpe7.terminate()
+            proc7.terminate()
+            try:
+                proc7.wait(timeout=5)
+            except Exception:
+                proc7.kill()
+            f7.close()
+
     print("== 39. 任务派发：有任务排队就主动唤醒设备（不等周期上报）==")
     if not (os.path.exists(acs_bin2) and os.path.exists(sim_bin2)):
         skip("任务派发", "没找到 $WORK/acs 或 $WORK/cpesim")

@@ -145,7 +145,8 @@ uppercased, hyphens replaced with underscores).
 | `-offline-check-interval` | `ACS_OFFLINE_CHECK_INTERVAL` | `30s` | How often the background checker sweeps online status |
 | `-auto-fetch-wifi` | `ACS_AUTO_FETCH_WIFI` | `true` | Automatically collect wireless overview and host list on onboarding |
 | `-task-wake-interval` | `ACS_TASK_WAKE_INTERVAL` | `10s` | How often to send a Connection Request when tasks are queued (`0` = off: wait for periodic reports) |
-| `-auto-refresh-wifi` | `ACS_AUTO_REFRESH_WIFI` | `10m` | Auto-refresh interval for the wireless / client overview **and FTTR sub-devices** (the "collected at" time on the panel moves accordingly; `0` = collect only once at onboarding) |
+| `-auto-refresh-wifi` | `ACS_AUTO_REFRESH_WIFI` | `10m` | Fallback refresh interval for the overview data (wireless / client overview + **Ethernet ports** + **FTTR sub-devices**) (`0` = collect only once at onboarding) |
+| `-overview-refresh-min` | `ACS_OVERVIEW_REFRESH_MIN` | `30s` | Minimum interval between overview refreshes triggered by the device's **own periodic report** (`0` = no floor) |
 | `-probe-capabilities` | `ACS_PROBE_CAPABILITIES` | `true` | Run capability probing once on onboarding (decides UI blocks) |
 | `-log-level` | `ACS_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `-log-soap` | `ACS_LOG_SOAP` | `false` | Print raw SOAP messages (for troubleshooting) |

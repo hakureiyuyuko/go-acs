@@ -126,7 +126,10 @@ type Config struct {
 	LockWait            time.Duration // 同一会话并发请求最多等多久
 	AutoFetchDeviceInfo bool          // Inform 后是否自动去取设备基本信息
 	AutoFetchWiFi       bool          // 首次纳管/BOOTSTRAP 时是否自动采集无线概况（看板用）
-	WiFiRefreshInterval time.Duration // 无线/终端概况自动刷新间隔（0 = 只在首次纳管时采一次）
+	WiFiRefreshInterval time.Duration // 概览数据（无线/以太网口/FTTR）兜底刷新间隔（0 = 只在首次纳管时采一次）
+	// OverviewRefreshFloor 是「设备主动上报时顺手刷概览」这条路径的最短重采间隔。
+	// 有的设备上报很密（几十秒一次），没有下限就会每个会话都去枚举一遍。
+	OverviewRefreshFloor time.Duration
 	// TaskWakeInterval 是「有任务排队就主动唤醒设备」的检查间隔（0 = 关掉）。
 	// 见 DispatchPendingTasks：我们发起的动作不该干等设备周期性上报。
 	TaskWakeInterval  time.Duration
@@ -627,17 +630,34 @@ func detectFTTRPrefix(names []string) (string, bool) {
 	return "", false
 }
 
+// overviewDue 判断「概览类数据」（无线概况 / 以太网口 / FTTR 子设备）是不是该重采了。
+//
+// 两条路径：
+//   - periodic：设备本次是**它自己的周期上报**（2 PERIODIC）—— 面板上的「上报周期」
+//     是多少，概览数据就按那个节奏更新，这就是「随周期更新」。但仍要过
+//     -overview-refresh-min（默认 30 秒）这个下限，上报太密的设备不至于每个会话都枚举一遍；
+//   - 兜底：距上次采集超过 -auto-refresh-wifi（默认 10 分钟）。有些设备不报 2 PERIODIC，
+//     不兜底的话数据会永远停在纳管那一刻。
+func (s *Server) overviewDue(last time.Time, periodic bool) bool {
+	since := time.Since(last)
+	if periodic && since >= s.cfg.OverviewRefreshFloor { // 下限设 0 表示不设下限
+		return true
+	}
+	return since >= s.cfg.WiFiRefreshInterval
+}
+
 // refreshFttrIfDue 到点就刷新这台设备的 FTTR / 子设备子树。
 //
 // 为什么要有它：子设备子树以前**只在纳管那次能力探测时采一次**，于是界面上的
 // 「采集」时间永远停在纳管那一刻 —— 子光猫的在线状态 / 终端数 / 信号是几天前的
 // 数据却还挂在页面上，看着像实时的。现在跟无线概况一个节奏定期刷。
 //
-// 两道闸，免得白跑：
+// 三道闸，免得白跑：
 //  1. 只有**真的有**这类对象的设备才刷 —— 这类子树的枚举很重（真机 V271 的 AP 子树
 //     就是四千多个参数），没有 FTTR 的设备一次查询就结束、不发任务；
-//  2. 按间隔来（跟无线概况共用 WiFiRefreshInterval），不是每次 Inform 都刷。
-func (s *Server) refreshFttrIfDue(deviceID int64) {
+//  2. 设备自己的周期上报（periodic=true）时顺手刷；
+//  3. 否则至少等到 -auto-refresh-wifi（兜底）。两条都由 overviewDue 把关。
+func (s *Server) refreshFttrIfDue(deviceID int64, periodic bool) {
 	if s.cfg.WiFiRefreshInterval <= 0 {
 		return
 	}
@@ -646,7 +666,7 @@ func (s *Server) refreshFttrIfDue(deviceID int64) {
 	if !ok {
 		return
 	}
-	if time.Since(last) < s.cfg.WiFiRefreshInterval {
+	if !s.overviewDue(last, periodic) {
 		return
 	}
 	// 用库里那个样本名还原**设备自己的拼法**（真机上出现过 InternetGateWayDevice.）
@@ -906,8 +926,8 @@ func (s *Server) EnqueueFetchLanEth(deviceID int64) (int64, error) {
 // refreshLanEthIfDue 到点刷新以太网口概况。
 //
 // 为什么值得定期刷：网口插没插线、协商到多少速率是会变的（用户把网线换到另一个口上），
-// 而数据只采一次的话界面上永远是旧状态。跟无线概况共用同一个间隔。
-func (s *Server) refreshLanEthIfDue(deviceID int64) {
+// 而数据只采一次的话界面上永远是旧状态。
+func (s *Server) refreshLanEthIfDue(deviceID int64, periodic bool) {
 	if s.cfg.WiFiRefreshInterval <= 0 {
 		return
 	}
@@ -928,7 +948,7 @@ func (s *Server) refreshLanEthIfDue(deviceID int64) {
 		s.log.Info("这台设备还没采过以太网口，补采一次", "device_id", deviceID)
 		return
 	}
-	if time.Since(last) < s.cfg.WiFiRefreshInterval {
+	if !s.overviewDue(last, periodic) {
 		return
 	}
 	if _, err := s.EnqueueFetchLanEth(deviceID); err != nil {
@@ -1338,8 +1358,15 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 	// 四百多个 WLAN 参数全拉回来，所以对设备负担很小。
 	// 另外按间隔自动刷新一次：面板上的「采集」时间只有真的读了参数才会动，
 	// 不刷新的话它会一直停在首次纳管那一刻（用户会以为「只有手动点才更新」）。
+	// 概览数据（无线概况 / 以太网口 / FTTR 子设备）的刷新时机：
+	//   - 设备**自己的周期上报**（事件 2 PERIODIC）：这就是「随周期更新」的本意 ——
+	//     设备多久报一次，界面上的概览就多久新一次；
+	//   - 兜底：距上次采集超过 -auto-refresh-wifi（默认 10 分钟）也刷一次，
+	//     有些设备不报 2 PERIODIC（或上报的是我们主动唤醒开的会话），只靠前者数据会不动。
+	// 两条都要过 s.overviewDue，其中「设备主动上报」那条还有一个下限（-overview-refresh-min）。
 	if s.cfg.WiFiRefreshInterval > 0 && !created && !inf.HasEvent("0 BOOTSTRAP") {
-		if last, ok := s.store.LastWifiSummaryAt(deviceID); !ok || time.Since(last) >= s.cfg.WiFiRefreshInterval {
+		periodic := inf.HasEvent("2 PERIODIC")
+		if last, ok := s.store.LastWifiSummaryAt(deviceID); !ok || s.overviewDue(last, periodic) {
 			if _, err := s.EnqueueFetchWiFi(deviceID); err != nil {
 				s.log.Warn("入队刷新无线概况失败", "device_id", deviceID, "err", err)
 			} else {
@@ -1348,9 +1375,9 @@ func (s *Server) onInform(w http.ResponseWriter, r *http.Request, sess *Session,
 		}
 		// FTTR 子设备（子光猫）也按同一个节奏定期刷
 		// （以前只在纳管那次能力探测时采一次，界面上的「采集」会永远停在那一刻）
-		s.refreshFttrIfDue(deviceID)
+		s.refreshFttrIfDue(deviceID, periodic)
 		// 以太网口概况同理：网线插拔/协商速率会变
-		s.refreshLanEthIfDue(deviceID)
+		s.refreshLanEthIfDue(deviceID, periodic)
 	}
 
 	if s.cfg.AutoFetchWiFi && (created || inf.HasEvent("0 BOOTSTRAP")) {
