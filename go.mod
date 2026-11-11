@@ -2,6 +2,8 @@ module github.com/hakureiyuyuko/go-acs
 
 go 1.27
 
+toolchain go1.27.4
+
 require modernc.org/sqlite v1.59.0
 
 require (

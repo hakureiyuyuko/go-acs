@@ -6,7 +6,9 @@
 ## 环境
 
 - 开发机：LMDE 7 (Debian 13)，内核 6.12，x86_64，4 核 / 3.8G 内存。
-- Go 1.27.1（官方 tarball 装在 `~/.local/go`；`apt` 里的 `golang-go` 也可用，但那需要 sudo）。
+- Go 1.27.4（官方 tarball 装在 `~/.local/go`；`apt` 里的 `golang-go` 也可用，但那需要 sudo）。
+  `go.mod` 里钉了 `toolchain go1.27.4` —— 1.27.1 的标准库有 15 个已披露问题（见文末
+  「依赖漏洞扫描」），钉住是为了避免以后用回有洞的工具链编译。
 - SQLite 驱动：`modernc.org/sqlite`（纯 Go，`CGO_ENABLED=0` 也能编译 ⇐ 这是选它的唯一理由：
   要保住「单静态二进制 + 交叉编译」这条底线）。
 - **本机实测**：`acs` 二进制 20.4 MiB、`cpesim` 15.7 MiB（`CGO_ENABLED=0`，未 strip）。
@@ -1775,3 +1777,30 @@ LANDevice 子树 —— 之前没采过，界面上一直没有以太网口，�
   **300 秒**的模拟器，排一条任务后断言「几秒内被执行」+「日志里有主动唤醒」→ 390/0；
 - 页面文案同步改成「任务会主动唤醒设备、几秒内下发（离线时会排队等待）」，
   动作提示语改成「…正在主动唤醒设备让任务立刻下发」（英文页残留中文的检查也覆盖了这几句）。
+
+## 依赖漏洞扫描（govulncheck，2026-11-11）
+
+发版前用 `govulncheck` 查了一遍已知漏洞（v1.9.0，漏洞库 2026-11-11）。
+
+**结果：在 go1.27.1 下 14 项影响项目代码**（**全部来自 Go 标准库**，不用改第三方依赖），
+另有 1 项（`os.Root` 的 Windows junction）在导入包里但不可达。
+
+| 影响面 | 内容 | 修复版本 |
+| --- | --- | --- |
+| `net/http` / 内置 HTTP/2 | 请求走私（HTTP/1 CONNECT 拒绝后、2xx CONNECT 后不同步）、Trailer 头导致内存耗尽、Range 头无长度限制、反复 initial window 更新耗 CPU、HTTP/2 流量控制重复退款、HPACK 编码器竞态导致崩溃、恶意 framing 头被接受、`MaxBytesReader` 头竞态导致崩溃 | 1.27.2（`MaxBytesReader` 那个要 **1.27.4**）|
+| `html/template` | 连续模板表达式不重置上下文追踪；`yield` 没被识别为 regexp 前置关键字（模板注入） | 1.27.2 |
+| `crypto/x509` | 不信任被攻陷的中间证书 | **1.27.3** |
+| `crypto/tls` | ECH 外层扩展引用校验 | 1.27.2 |
+| `net/textproto` / `mime/multipart` | MIME 头解析绕过内存限制 | 1.27.2 |
+| `os` | Windows 上 `Root.Mkdir(All)` 可跟随 junction 逃出根目录（**本项不可达**） | 1.27.2 |
+
+对 ACS 来说最要紧的是 `html/template` 那两个、`net/http` 那一组和 `crypto/x509`：
+面板把设备上报的字符串（型号、SerialNumber、参数值）直接喂进模板，而 CWMP 端口和面板端口
+都对设备/局域网开放 —— 所以不是“跑在反代后面就没事”。
+
+**处理**：工具链升到 **go1.27.4**（13 个修在 1.27.2、x509 在 1.27.3、MaxBytesReader 在 1.27.4），
+并在 `go.mod` 里钉 `toolchain go1.27.4`，之后用别的（更旧的）Go 构建会自动拉这个版本。
+重跑 `govulncheck ./...` → **No vulnerabilities found**；`go vet`、`go test ./...` 全过。
+
+**遗留**：已发布的 **v1.2.4 发布包（amd64/arm64）是用 go1.27.1 编的**，同样受这批问题影响。
+下次发版用 1.27.4 重新打包即可；是否提前重发 v1.2.4 由用户定（发版要用户发话）。

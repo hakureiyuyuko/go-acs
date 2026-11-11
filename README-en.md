@@ -97,7 +97,7 @@ service `acs`. The `README.md` inside the package documents all options and dire
 ## Quick start (from source)
 
 ```bash
-go build -o acs ./cmd/acs        # Go 1.27+; CGO_ENABLED=0 for a static binary
+go build -o acs ./cmd/acs        # Go 1.27.4+ (pinned via go.mod toolchain); CGO_ENABLED=0 for a static binary
 ./acs -listen :9090 -db acs.db   # panel http://<IP>:9090/ , CWMP http://<IP>:9090/acs
 ```
 

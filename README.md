@@ -81,7 +81,7 @@ sudo ./uninstall.sh      # 卸载：默认保留数据库与配置，--purge 连
 ## 快速开始（源码）
 
 ```bash
-go build -o acs ./cmd/acs        # Go 1.27+；CGO_ENABLED=0 可得到静态二进制
+go build -o acs ./cmd/acs        # Go 1.27.4+（go.mod 已钉 toolchain）；CGO_ENABLED=0 可得到静态二进制
 ./acs -listen :9090 -db acs.db   # 面板 http://<IP>:9090/ ，CWMP http://<IP>:9090/acs
 ```
 
